@@ -1,9 +1,8 @@
 {
-  "_comment": "Fill in and rename to protocol.json, then freeze. chain_hash/chain_public_key are the real drand quicknet values as of 2026-09-09, verified against https://api.drand.sh/<chain_hash>/info; re-confirm at freeze time. Use tools/pick-round.js --in 72h --write to set target_round and submission_cutoff_utc together, so they cannot disagree. chain_public_key is NOT listed in PROTOCOL.md §4 but is required: drand-client verifies a chain only when the hash AND the public key are both pinned - see docs/IMPLEMENTATION_NOTES.md.",
+  "_comment": "The FROZEN parameters and nothing else — PROTOCOL.md §4. Fill in, rename to protocol.json, commit and git-tag it. Operational settings (drand endpoint, Pantheon base URLs, timeouts) belong in runtime.json and are deliberately not frozen; putting one of them here is rejected at startup. chain_hash and chain_public_key are the real drand quicknet values as of 2026-09-09, verified against https://api.drand.sh/<chain_hash>/info — re-confirm both at freeze time. Use tools/pick-round.js --in 72h --write to set target_round and submission_cutoff_utc together, so they cannot disagree.",
   "drand_chain": "quicknet",
   "chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
   "chain_public_key": "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
-  "drand_api": "https://api.drand.sh",
   "target_round": 0,
   "submission_cutoff_utc": "2026-01-01T00:00:00Z",
   "quorum": 8,
@@ -13,9 +12,6 @@
   "schedule_template_ref": "data/schedule_template.json@frozen-v1",
   "generate_script_ref": "generate.js@frozen-v1",
   "pantheon": {
-    "frey_base_url": "http://localhost:4001",
-    "mimir_base_url": "http://localhost:4002",
-    "wind_shuffle_mode": "WIND_SHUFFLE_MODE_PRESCRIPTED",
-    "_comment": "Base URLs are examples — take the real ones from the local Pantheon deployment. wind_shuffle_mode must stay PRESCRIPTED."
+    "wind_shuffle_mode": "WIND_SHUFFLE_MODE_PRESCRIPTED"
   }
 }

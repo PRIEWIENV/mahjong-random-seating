@@ -83,13 +83,13 @@ Each line is one table, written East-South-West-North.
 
 The event itself must be marked prescripted (`is_prescripted` on the event; set at creation or via `UpdateEvent`) so that manual and automatic seating are disabled for it.
 
-Calls that modify event configuration require an administrator account, so the backend needs its own Pantheon admin credentials for the sync step — kept in the server's environment, never in the repository, and never mixed with the player sign-in path above.
+Calls that modify event configuration require an administrator account, so the backend needs its own Pantheon admin credentials for the sync step — kept in the server's environment, never in the repository, and never mixed with the player sign-in path above. The non-secret half of the Pantheon configuration (base URLs, the Twirp path template, service names) lives in `runtime.json` and is deliberately outside the freeze: where Pantheon sits on the host cannot affect the draw. What the sync is allowed to write does affect it, so `wind_shuffle_mode` stays in the frozen `protocol.json` (`PROTOCOL.md` §4.1).
 
 ## 4. Sync failure handling
 
 The sync happens after the draw is already final and published, so a failure there is an operational nuisance, not a fairness problem — the seat plan in `results.json` is authoritative and reproducible from public data whatever Pantheon says.
 
-Record the sync outcome in `results.json` (`pantheon_sync`), retry a few times with backoff, and if it still fails, surface it in the admin view and fall back to pasting the prescript into Pantheon's own admin UI by hand. Do **not** regenerate or re-draw anything in response to a sync failure.
+Record the sync outcome in `events/sync.json` (**not** in `results.json`, which is written once and must stay byte-for-byte reproducible — `PROTOCOL.md` §4.3), retry a few times with backoff, and if it still fails, surface it in the admin view and fall back to pasting the prescript into Pantheon's own admin UI by hand. Do **not** regenerate or re-draw anything in response to a sync failure.
 
 ## 5. Method reference
 

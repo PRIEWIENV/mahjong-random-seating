@@ -37,6 +37,13 @@ PORT=8080
 HOST=127.0.0.1
 NODE_ENV=production
 
+# Optional overrides for operational settings (PROTOCOL.md §4.2). The same values can
+# go in data/runtime.json; neither is frozen, and changing either needs no re-tag.
+# DRAND_API=https://api2.drand.sh
+# PANTHEON_FREY_URL=http://localhost:4001
+# PANTHEON_MIMIR_URL=http://localhost:4002
+PANTHEON_MODE=twirp                  # the default; "stub" is for local runs only
+
 # Mirroring: ciphertexts become public, timestamped by a third party, as they arrive.
 MIRROR_REPO=youruser/mahjong-random-seating
 MIRROR_BRANCH=main
@@ -51,6 +58,11 @@ PANTHEON_ADMIN_TOKEN=...
 `NODE_ENV=production` matters for more than logging: it marks the session cookie
 `Secure` and makes `/api/dev-authorize` return 404. That endpoint is the development
 stand-in for Frey; it must not exist here.
+
+`data/runtime.json` is the file counterpart of those overrides and is optional in the
+same way. It is gitignored on purpose: nothing in it can change the outcome, and keeping
+it out of the tree makes it obvious that it was never covered by the freeze. If a drand
+mirror dies during the submission window, this is the file you edit — not a tagged one.
 
 Narrow the GitHub PAT to this repository and to contents:write only. Per §10, write
 access to `main` should be restricted to that token, so the ciphertext history is
@@ -67,9 +79,20 @@ systemctl enable --now mahjong-finalise.timer
 ```
 
 The finalise timer runs every five minutes and is a no-op until the cutoff. That cadence
-is also the recovery path: if drand is unreachable at the target time (§8 — a delay, not
-a failure), the job leaves the phase at `awaiting_round` and the next tick tries again.
-The snapshot was frozen at the cutoff, so the delay cannot change the outcome.
+is also the recovery path, for three different failures:
+
+- **drand unreachable at the target time** (§8 — a delay, not a failure). The job leaves
+  the phase at `awaiting_round` and the next tick tries again. The snapshot was frozen at
+  the cutoff, so the delay cannot change the outcome.
+- **The process died between publishing the result and syncing to Pantheon.** If no sync
+  outcome was ever recorded, the next tick completes it. `results.json` is written once
+  and is not touched by this.
+- **`var/` was lost after a completed draw.** The job reads `results.json`, reconciles the
+  database and stops. It will not re-draw, and it will not declare a published round void.
+
+Once a sync *failure* has been recorded, the job stops retrying: that path has a manual
+remedy (RUNBOOK step 15) and a timer hammering Pantheon every five minutes would only
+bury it.
 
 ## 4. Caddy
 
@@ -93,6 +116,11 @@ curl -s https://your.domain/api/status | jq     # 12 slots, submitted_count 0, p
 curl -s https://your.domain/protocol.json | jq  # the frozen parameters, as tagged
 curl -s https://your.domain/api/dev-authorize -X POST -d '{}'   # must be 404
 ```
+
+In that status payload, `drand.chain_hash` and `drand.chain_public_key` must match the
+tagged `protocol.json` exactly — they are what the browser pins the chain with, and the
+draw is only bound to the beacon everyone was promised if both are right. `drand.api`
+need not match anything: it is where that chain is currently reached (§4.2).
 
 Then sign in yourself with a real Pantheon account that is registered to the event, and
 with one that is not. Both answers must be right, and they must read differently

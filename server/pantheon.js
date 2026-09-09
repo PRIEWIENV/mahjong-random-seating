@@ -207,10 +207,18 @@ class StubPantheon {
   }
 }
 
+/**
+ * Where Pantheon lives is operational (§4.2) — runtime.json, never the freeze. What the
+ * sync is allowed to write is not: wind_shuffle_mode stays in the frozen protocol.json,
+ * because any other value silently discards most of what the template guarantees.
+ */
 function createPantheon(cfg, env = process.env, opts = {}) {
-  const mode = env.PANTHEON_MODE || (cfg?.protocol?.pantheon ? 'twirp' : 'stub');
+  // Defaults to the real client. The stub has to be asked for explicitly, so a
+  // misconfigured deployment fails to reach Pantheon rather than quietly authorising
+  // everybody against an in-process fake.
+  const mode = env.PANTHEON_MODE || 'twirp';
   if (mode === 'stub') return new StubPantheon({ roster: cfg?.roster, ...opts });
-  return new TwirpPantheon(cfg?.protocol?.pantheon || {}, env, opts);
+  return new TwirpPantheon(cfg?.runtime?.pantheon || {}, env, opts);
 }
 
 module.exports = { TwirpPantheon, StubPantheon, PantheonError, createPantheon, DEFAULT_TWIRP_PATH };

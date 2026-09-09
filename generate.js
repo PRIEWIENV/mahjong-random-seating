@@ -49,13 +49,21 @@
  *
  * CLI:
  *   node generate.js --decrypted <file> --signature <hex> [--round <n>]
+ *                    [--excluded <file>]
  *                    [--roster data/roster.json] [--protocol data/protocol.json]
  *                    [--template data/schedule_template.json] [--out results.json]
  *
  *   node generate.js --verify results.json      # recompute from the file's own
  *                                               # revealed payloads, diff byte for byte
+ *                    [--snapshot events/snapshot.json]
  *
  * --decrypted takes [{local_id, user_input, client_nonce, client_timestamp}, ...].
+ * --excluded takes [{local_id, reason}, ...] — submissions that would not open.
+ *
+ * --verify compares the WHOLE file. There is no carve-out: every field results.json
+ * contains is produced here and is therefore reproducible. Anything that is not (the
+ * Pantheon sync outcome, the derived statistics) lives in its own file instead, so that
+ * "reproduces byte for byte" needs no footnote.
  */
 
 'use strict';
@@ -68,6 +76,19 @@ const SEP = 0x1f;
 const SEAT_ORDER = ['E', 'S', 'W', 'N'];
 const NONCE_BYTES = 16;
 const HASH_BYTES = 32;
+
+// The bounds the byte encoding above imposes, in the one file that defines the
+// encoding. local_id and user_input are each a single unsigned byte, so 255 is not a
+// tunable maximum — it is what fits. config.js validates roster.json and protocol.json
+// against these rather than repeating the literals, so a change to the encoding cannot
+// leave a stale bound behind in a validator.
+const ENCODING_LIMITS = Object.freeze({
+  local_id_min: 1,
+  local_id_max: 255,
+  user_input_min: 0,
+  user_input_max: 255,
+  nonce_bytes: NONCE_BYTES,
+});
 
 // Strict ISO-8601 with milliseconds optional and a mandatory Z. Deliberately narrow:
 // the timestamp is attacker-chosen (§3 — "it need not be trustworthy"), and a narrow
@@ -127,10 +148,13 @@ function signatureBytes(sig) {
 /** §7 step 2: one player's 256-bit contribution. */
 function contribution(entry, domain, userInputMax) {
   const { local_id, user_input } = entry;
-  if (!Number.isInteger(local_id) || local_id < 1 || local_id > 255) {
-    throw new Error(`local_id must be an integer in 1..255, got ${JSON.stringify(local_id)}`);
+  const L = ENCODING_LIMITS;
+  if (!Number.isInteger(local_id) || local_id < L.local_id_min || local_id > L.local_id_max) {
+    throw new Error(
+      `local_id must be an integer in ${L.local_id_min}..${L.local_id_max}, got ${JSON.stringify(local_id)}`
+    );
   }
-  if (!Number.isInteger(user_input) || user_input < 0 || user_input > userInputMax) {
+  if (!Number.isInteger(user_input) || user_input < L.user_input_min || user_input > userInputMax) {
     throw new Error(`local_id ${local_id}: user_input must be an integer in 0..${userInputMax}, got ${JSON.stringify(user_input)}`);
   }
   return crypto
@@ -242,6 +266,46 @@ function permute(localIds, seed) {
   return a;
 }
 
+/**
+ * The roll-call of submissions that were taken at the cutoff but would not open.
+ *
+ * §8's rule (IMPLEMENTATION_NOTES 5) is that such a submission is not a contribution:
+ * it is left out of R and the quorum is re-checked against what actually opened. That
+ * makes the exclusion list part of the answer to "who took part", which is why it is
+ * generated here and compared byte for byte like everything else, rather than being
+ * annotated onto the file afterwards.
+ *
+ * What it cannot do on its own is prove that nobody was quietly dropped: a file that
+ * omits a player from BOTH revealed and excluded_local_ids is still self-consistent.
+ * The published events/snapshot.json is what closes that gap, and `--verify` checks
+ * the two against each other.
+ */
+function normaliseExcluded(excluded, participating, roster) {
+  if (excluded === undefined || excluded === null) return [];
+  if (!Array.isArray(excluded)) throw new Error('excluded must be an array of {local_id, reason}');
+  const known = new Set(roster.players.map((p) => p.local_id));
+  const taking = new Set(participating);
+  const seen = new Set();
+  const out = [];
+  for (const e of excluded) {
+    const id = e?.local_id;
+    if (!Number.isInteger(id) || !known.has(id)) {
+      throw new Error(`excluded names local_id ${JSON.stringify(id)}, which is not in roster.json`);
+    }
+    if (seen.has(id)) throw new Error(`excluded names local_id ${id} twice`);
+    // A local_id cannot both have contributed and have failed to open. If it could,
+    // the two lists would stop being a partition and the roll-call check below would
+    // be comparing against a set that does not add up.
+    if (taking.has(id)) throw new Error(`local_id ${id} is both a participant and excluded`);
+    if (typeof e.reason !== 'string' || e.reason.trim() === '') {
+      throw new Error(`excluded local_id ${id} has no reason — an unexplained exclusion is not publishable`);
+    }
+    seen.add(id);
+    out.push({ local_id: id, reason: e.reason });
+  }
+  return out.sort((a, b) => a.local_id - b.local_id);
+}
+
 // ---------------------------------------------------------------------------
 // §7 steps 6-8 — seat plan and prescript
 // ---------------------------------------------------------------------------
@@ -294,7 +358,7 @@ function buildPrescript(seating) {
 // ---------------------------------------------------------------------------
 // the whole of §7, as one pure function
 // ---------------------------------------------------------------------------
-function generate({ decrypted, roster, protocol, template, signature, round }) {
+function generate({ decrypted, excluded, roster, protocol, template, signature, round }) {
   const players = roster.players;
   if (!Array.isArray(players) || players.length !== protocol.total_slots) {
     throw new Error(`roster.json holds ${players?.length} players, protocol says ${protocol.total_slots}`);
@@ -324,6 +388,7 @@ function generate({ decrypted, roster, protocol, template, signature, round }) {
   }
 
   const participating = sorted.map((e) => e.local_id);
+  const excludedList = normaliseExcluded(excluded, participating, roster);
   const seed = deriveSeed(R, signature, participating, domain);
   const localIds = players.map((p) => p.local_id).sort((a, b) => a - b);
   const permutation = permute(localIds, seed);
@@ -342,6 +407,9 @@ function generate({ decrypted, roster, protocol, template, signature, round }) {
     round_used: Number.isInteger(round) ? round : protocol.target_round,
     drand_signature: signature,
     participating_local_ids: participating,
+    // Always emitted, empty list included. A conditional key would mean "no exclusions"
+    // and "the field was dropped" look identical in the published file.
+    excluded_local_ids: excludedList,
     revealed,
     contributions,
     R: R.toString('hex'),
@@ -367,27 +435,53 @@ function serialise(results) {
 }
 
 /**
- * Fields that §4 puts in results.json but that generate.js does not produce.
+ * The roll-call check: results.json against the published snapshot.
  *
- * They are written afterwards by the finalisation job and are NOT reproducible:
- * `pantheon_sync` records the outcome of a network call and carries a wall-clock
- * timestamp; `excluded_local_ids` describes submissions that never decrypted, so
- * nothing in the file can regenerate them.
+ * The byte comparison proves the seat plan follows from the payloads the file lists.
+ * It cannot prove that list is complete, because it recomputes FROM that list — drop a
+ * player from both `revealed` and `excluded_local_ids` and the file is still perfectly
+ * self-consistent.
  *
- * They belong in the file — §4 lists pantheon_sync, and an exclusion must be visible —
- * but they cannot be part of the byte-for-byte claim. So `--verify` checks the
- * reproducible core and states plainly which fields it set aside, rather than either
- * failing on them or quietly pretending they were verified.
+ * events/snapshot.json is what makes that detectable. It is written at the cutoff,
+ * before the beacon exists and therefore before anyone can know which omission would
+ * help, and it is mirrored publicly alongside the ciphertexts themselves. Every id in
+ * it must appear in exactly one of the two lists.
+ *
+ * @returns {{ok: boolean, lines: string[]}}
  */
-const ANNOTATIONS = ['pantheon_sync', 'excluded_local_ids'];
-
-function splitAnnotations(published) {
-  const core = { ...published };
-  const found = [];
-  for (const k of ANNOTATIONS) {
-    if (k in core) { found.push(k); delete core[k]; }
+function rollCall(parsed, snapshot, protocol) {
+  const lines = [];
+  if (snapshot.cutoff_utc && protocol.submission_cutoff_utc &&
+      snapshot.cutoff_utc !== protocol.submission_cutoff_utc) {
+    return { ok: false, lines: [
+      `snapshot is for cutoff ${snapshot.cutoff_utc}, protocol.json says ${protocol.submission_cutoff_utc}`,
+    ] };
   }
-  return { core, found };
+  const submitted = snapshot.local_ids;
+  if (!Array.isArray(submitted)) return { ok: false, lines: ['snapshot has no local_ids array'] };
+  if (new Set(submitted).size !== submitted.length) {
+    return { ok: false, lines: ['snapshot lists the same local_id twice'] };
+  }
+
+  const took = new Set(parsed.participating_local_ids || []);
+  const out = new Set((parsed.excluded_local_ids || []).map((e) => e.local_id));
+  const accounted = new Set([...took, ...out]);
+
+  const missing = submitted.filter((id) => !accounted.has(id));
+  const invented = [...accounted].filter((id) => !submitted.includes(id));
+  if (missing.length) {
+    lines.push(`submitted at the cutoff but accounted for nowhere: ${missing.join(', ')}`);
+    lines.push('  a submission that is neither a participant nor a published exclusion has been dropped');
+  }
+  if (invented.length) {
+    lines.push(`in results.json but not in the snapshot: ${invented.join(', ')}`);
+  }
+  if (missing.length || invented.length) return { ok: false, lines };
+
+  lines.push(
+    `${submitted.length} submitted at the cutoff = ${took.size} participating + ${out.size} excluded`
+  );
+  return { ok: true, lines };
 }
 
 // ---------------------------------------------------------------------------
@@ -434,8 +528,7 @@ function main(argv) {
       }
     }
 
-    const { core, found } = splitAnnotations(parsed);
-    const published = serialise(core);
+    const published = serialise(parsed);
     const decrypted = Object.entries(parsed.revealed).map(([local_id, v]) => ({
       local_id: Number(local_id),
       user_input: v.user_input,
@@ -444,43 +537,67 @@ function main(argv) {
     }));
     const recomputed = serialise(
       generate({
-        decrypted, roster, protocol, template,
+        decrypted,
+        // Fed back from the file, so this alone proves only that the list is
+        // well-formed and canonically placed. The roll-call below is what tests
+        // whether it is true.
+        excluded: parsed.excluded_local_ids,
+        roster, protocol, template,
         signature: parsed.drand_signature,
         round: parsed.round_used,
       })
     );
-    if (recomputed === published) {
-      process.stdout.write(`  OK    ${args.verify} reproduces byte for byte from its own revealed payloads\n`);
-      if (found.length) {
-        process.stdout.write(
-          `        (not covered, and not reproducible by design: ${found.join(', ')} — ` +
-            `written after the draw by the finalisation job)\n`
-        );
+    if (recomputed !== published) {
+      process.stderr.write(`  FAIL  ${args.verify} does NOT reproduce\n`);
+      const a = published.split('\n');
+      const b = recomputed.split('\n');
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        if (a[i] !== b[i]) {
+          process.stderr.write(`  line ${i + 1}\n    published:  ${a[i]}\n    recomputed: ${b[i]}\n`);
+          break;
+        }
       }
+      return 1;
+    }
+    process.stdout.write(`  OK    ${args.verify} reproduces byte for byte — the whole file, no fields set aside\n`);
+
+    // The roll-call needs one more published file. Look beside results.json for it.
+    const snapPath = typeof args.snapshot === 'string'
+      ? args.snapshot
+      : path.join(path.dirname(path.resolve(args.verify)), 'events', 'snapshot.json');
+    if (!fs.existsSync(snapPath)) {
+      const claimed = (parsed.excluded_local_ids || []).length;
+      process.stdout.write(
+        `  NOTE  roll-call NOT checked: no snapshot at ${snapPath}\n` +
+          '        The seat plan follows from the payloads this file lists, but nothing here\n' +
+          '        shows that list is complete. Fetch events/snapshot.json from the published\n' +
+          '        repository and pass --snapshot to close that gap' +
+          (claimed ? `, which matters here: the file claims ${claimed} exclusion(s).\n` : '.\n')
+      );
       return 0;
     }
-    process.stderr.write(`  FAIL  ${args.verify} does NOT reproduce\n`);
-    const a = published.split('\n');
-    const b = recomputed.split('\n');
-    for (let i = 0; i < Math.max(a.length, b.length); i++) {
-      if (a[i] !== b[i]) {
-        process.stderr.write(`  line ${i + 1}\n    published:  ${a[i]}\n    recomputed: ${b[i]}\n`);
-        break;
-      }
+    const rc = rollCall(parsed, readJson(snapPath), protocol);
+    if (!rc.ok) {
+      process.stderr.write(`  FAIL  roll-call against ${snapPath}\n`);
+      for (const l of rc.lines) process.stderr.write(`        ${l}\n`);
+      return 1;
     }
-    return 1;
+    for (const l of rc.lines) process.stdout.write(`  OK    ${l}\n`);
+    return 0;
   }
 
   if (typeof args.decrypted !== 'string' || typeof args.signature !== 'string') {
     process.stderr.write(
-      'usage: node generate.js --decrypted <file> --signature <hex> [--round <n>] [--out results.json]\n' +
-        '       node generate.js --verify results.json\n'
+      'usage: node generate.js --decrypted <file> --signature <hex> [--round <n>]\n' +
+        '                               [--excluded <file>] [--out results.json]\n' +
+        '       node generate.js --verify results.json [--snapshot events/snapshot.json]\n'
     );
     return 2;
   }
 
   const results = generate({
     decrypted: readJson(args.decrypted),
+    excluded: typeof args.excluded === 'string' ? readJson(args.excluded) : [],
     roster, protocol, template,
     signature: args.signature,
     round: typeof args.round === 'string' ? Number(args.round) : undefined,
@@ -499,7 +616,7 @@ function main(argv) {
 module.exports = {
   generate, serialise, combine, contribution, deriveSeed, permute,
   buildSeating, buildPrescript, Sha256CounterStream, SEAT_ORDER,
-  ANNOTATIONS, splitAnnotations,
+  normaliseExcluded, rollCall, ENCODING_LIMITS,
 };
 
 if (require.main === module) {

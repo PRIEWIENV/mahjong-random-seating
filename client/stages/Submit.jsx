@@ -20,7 +20,10 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
   const inputRef = useRef(null);
   const rollTimer = useRef(null);
 
-  const max = status?.user_input_max ?? 255;
+  // No fallback. Every frozen number the UI shows comes from /api/status, which is
+  // served straight out of the tagged protocol.json; inventing one here would let the
+  // page state a bound the draw does not actually use.
+  const max = status?.user_input_max;
   const busy = phase === 'sealing' || phase === 'posting';
 
   useEffect(() => {
@@ -28,11 +31,11 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
     return () => clearInterval(rollTimer.current);
   }, []);
 
-  const valid = /^\d+$/.test(value) && Number(value) >= 0 && Number(value) <= max;
+  const valid = Number.isInteger(max) && /^\d+$/.test(value) && Number(value) >= 0 && Number(value) <= max;
 
   /** "Roll for me" — digits settle into place rather than snapping (UI-SPEC §4). */
   function roll() {
-    if (busy) return;
+    if (busy || !Number.isInteger(max)) return;
     clearInterval(rollTimer.current);
     const target = rollNumber(max);
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
@@ -60,7 +63,10 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
     // Sealing is a real computation; §4 asks that it not look instant if it isn't.
     setPhase('sealing');
     try {
-      const { ciphertext } = await sealSubmission(Number(value), protocol);
+      // The chain is pinned by the frozen protocol.json; the endpoint it is reached
+      // through comes from /api/status, because that one is not frozen (§4.2).
+      const chain = { ...protocol, api: status?.drand?.api };
+      const { ciphertext } = await sealSubmission(Number(value), chain, max);
       setPhase('posting');
       await api.postSubmit(ciphertext);
       onSubmitted();

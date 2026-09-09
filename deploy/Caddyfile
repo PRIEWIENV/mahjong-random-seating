@@ -25,6 +25,11 @@ example.com {
 		# connect-src also needs the Frey base URL, because PANTHEON-INTEGRATION.md §2
 		# has the BROWSER authenticate against Pantheon directly — add it explicitly:
 		#   connect-src 'self' https://your-pantheon.example https://api.drand.sh ...
+		#
+		# The drand hosts listed below must be a superset of runtime.json's drand.api and
+		# drand.mirrors. Switching mirrors mid-window (PROTOCOL.md §4.2) means editing
+		# both: a mirror missing from this list is blocked in the browser, and the
+		# submission stage fails with nothing in the server log to explain it.
 		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.drand.sh https://api2.drand.sh https://api3.drand.sh https://drand.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"

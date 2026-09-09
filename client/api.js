@@ -57,22 +57,41 @@ export async function authorize({ email, password, personId, authMode, freyBaseU
 /**
  * SSE with a polling fallback (§6, UI-SPEC §5).
  *
- * "If the stream drops, fall back to polling /api/status every 15 s and show a
- * subdued reconnecting note." Both run through one callback so the UI never has to
- * care which is feeding it.
+ * "If the stream drops, fall back to polling /api/status and show a subdued
+ * reconnecting note." Both run through one callback so the UI never has to care which
+ * is feeding it.
+ *
+ * The cadence is served in /api/status (`status_poll_interval_ms`, runtime.json §4.2)
+ * rather than compiled in here, so changing it is a config change on the server and not
+ * a rebuild of a bundle that is committed and hash-pinned. Until the first status
+ * arrives there is nothing to poll *for*, so the documented default only has to cover
+ * the case where the very first request is what failed.
  */
+const DEFAULT_POLL_MS = 15_000; // UI-SPEC §5; overridden by the first status received
+
 export function subscribeStatus(onStatus, onConnection) {
   let es = null;
   let poll = null;
   let stopped = false;
+  let pollMs = DEFAULT_POLL_MS;
 
-  const startPolling = () => {
+  const relay = (s) => {
+    // Adopt the server's cadence, and restart an already-running poll if it changed.
+    const next = Number(s?.status_poll_interval_ms);
+    if (Number.isFinite(next) && next > 0 && next !== pollMs) {
+      pollMs = next;
+      if (poll) { clearInterval(poll); poll = null; startPolling(); }
+    }
+    onStatus(s);
+  };
+
+  function startPolling() {
     if (poll || stopped) return;
     onConnection?.('polling');
     poll = setInterval(async () => {
-      try { onStatus(await getStatus()); } catch { /* next tick retries */ }
-    }, 15_000);
-  };
+      try { relay(await getStatus()); } catch { /* next tick retries */ }
+    }, pollMs);
+  }
   const stopPolling = () => { if (poll) { clearInterval(poll); poll = null; } };
 
   const connect = () => {
@@ -85,7 +104,7 @@ export function subscribeStatus(onStatus, onConnection) {
     }
     es.addEventListener('open', () => { stopPolling(); onConnection?.('live'); });
     es.addEventListener('status', (ev) => {
-      try { onStatus(JSON.parse(ev.data)); } catch { /* ignore a malformed frame */ }
+      try { relay(JSON.parse(ev.data)); } catch { /* ignore a malformed frame */ }
     });
     es.addEventListener('error', () => {
       // EventSource retries on its own; poll meanwhile so the view keeps moving.

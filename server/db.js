@@ -40,13 +40,18 @@ CREATE TABLE IF NOT EXISTS state (
 );
 `;
 
-const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // the submission window can be days long
+const { DEFAULTS } = require('./runtime');
+
+// Operational (§4.2): the submission window can be days long, and how long a cookie
+// outlives it changes nothing about the draw. runtime.json -> server.session_ttl_days.
+const SESSION_TTL_MS = DEFAULTS.server.session_ttl_days * 24 * 3600 * 1000;
 
 /** Sessions are looked up by hash, so a database dump does not yield usable cookies. */
 const hashToken = (token) => crypto.createHash('sha256').update(String(token), 'utf8').digest('hex');
 
 class Store {
-  constructor(file) {
+  constructor(file, opts = {}) {
+    this.sessionTtlMs = opts.sessionTtlMs ?? SESSION_TTL_MS;
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
@@ -90,7 +95,7 @@ class Store {
   }
 
   // ---- sessions ---------------------------------------------------------
-  createSession(localId, personId, nowMs, ttlMs = SESSION_TTL_MS) {
+  createSession(localId, personId, nowMs, ttlMs = this.sessionTtlMs) {
     const token = crypto.randomBytes(32).toString('base64url');
     this.db
       .prepare('INSERT INTO sessions (token_hash, local_id, person_id, created_ms, expires_ms) VALUES (?, ?, ?, ?, ?)')

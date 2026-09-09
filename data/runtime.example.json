@@ -1,0 +1,28 @@
+{
+  "_comment": "Operational settings — PROTOCOL.md §4.2. NOT frozen, NOT part of the git tag, and safe to change mid-window: nothing here can change or steer the outcome. Optional in every sense: the file may be absent, and any key left out falls back to the default in server/runtime.js. Copy to runtime.json only if you need to change something. Pantheon admin credentials do NOT live here — they are environment variables (deploy/README.md §2).",
+  "drand": {
+    "api": "https://api.drand.sh",
+    "mirrors": [
+      "https://api.drand.sh",
+      "https://api2.drand.sh",
+      "https://api3.drand.sh",
+      "https://drand.cloudflare.com"
+    ],
+    "health_poll_ms": 30000
+  },
+  "pantheon": {
+    "frey_base_url": "http://localhost:4001",
+    "mimir_base_url": "http://localhost:4002",
+    "twirp_path_template": "/twirp/{service}/{method}",
+    "frey_service": "frey.Frey",
+    "mimir_service": "mimir.Mimir"
+  },
+  "ui": {
+    "status_poll_interval_ms": 15000
+  },
+  "server": {
+    "sse_heartbeat_ms": 25000,
+    "session_ttl_days": 30,
+    "rate_limit_per_minute": 30
+  }
+}

@@ -113,10 +113,10 @@ function createServer(opts = {}) {
   const store = opts.store || new Store(opts.dbFile || path.join(cfg.root, 'var', 'state.sqlite'));
   const mirror = opts.mirror || new Mirror(process.env, log);
   const pantheon = opts.pantheon || createPantheon(cfg, process.env);
-  const drand = opts.drand || new Drand(cfg.protocol.chain_hash, [cfg.protocol.drand_api]);
-  const hub = opts.hub || new EventHub();
+  const drand = opts.drand || new Drand(cfg.protocol.chain_hash, cfg.runtime.drand.mirrors);
+  const hub = opts.hub || new EventHub({ heartbeatMs: cfg.runtime.server.sse_heartbeat_ms });
   const publicDir = opts.publicDir || path.join(cfg.root, 'public');
-  const limiter = new RateLimiter(opts.rateLimit ?? 30, opts.rateWindowMs ?? 60_000);
+  const limiter = new RateLimiter(opts.rateLimit ?? cfg.runtime.server.rate_limit_per_minute, opts.rateWindowMs ?? 60_000);
   const nowFn = opts.now || (() => Date.now());
   const secureCookie = opts.secureCookie ?? process.env.NODE_ENV === 'production';
   const isStub = pantheon.constructor?.name === 'StubPantheon';
@@ -140,7 +140,7 @@ function createServer(opts = {}) {
   }
   if (opts.drandPollMs !== 0) {
     refreshDrand();
-    healthTimer = setInterval(refreshDrand, opts.drandPollMs ?? 30_000);
+    healthTimer = setInterval(refreshDrand, opts.drandPollMs ?? cfg.runtime.drand.health_poll_ms);
     healthTimer.unref?.();
   }
 
@@ -159,9 +159,11 @@ function createServer(opts = {}) {
       target_round: cfg.protocol.target_round,
       user_input_max: cfg.userInputMax,
       drand: {
+        // The two frozen fields pin the chain; api is merely where it is reached right
+        // now (§4.2). The browser needs all three to seal against the right chain.
         chain_hash: cfg.protocol.chain_hash,
         chain_public_key: cfg.protocol.chain_public_key,
-        api: cfg.protocol.drand_api,
+        api: cfg.runtime.drand.api,
         latest_round: drandHealth.latest_round,
         expected_round_at_cutoff: cfg.protocol.target_round,
         healthy: drandHealth.healthy,
@@ -170,7 +172,10 @@ function createServer(opts = {}) {
       // Tells the sign-in stage which path to use. "stub" means no real Frey is
       // reachable and the dev stand-in is in play; it can never be true in production.
       auth_mode: isStub ? 'stub' : 'pantheon',
-      frey_base_url: cfg.protocol.pantheon?.frey_base_url || null,
+      frey_base_url: cfg.runtime.pantheon.frey_base_url,
+      // UI-SPEC §5's fallback cadence, served rather than compiled into the bundle, so
+      // it can be changed without a rebuild and without touching anything frozen.
+      status_poll_interval_ms: cfg.runtime.ui.status_poll_interval_ms,
       // UI-SPEC §5: the countdown is driven by this, so it never drifts.
       server_time_utc: new Date(nowFn()).toISOString(),
     };
@@ -302,16 +307,38 @@ function createServer(opts = {}) {
   }
 
   // ---- GET /api/result ----------------------------------------------------
+  //
+  // A composed VIEW, not the artefact. results.json holds exactly what generate.js
+  // produces, so that it reproduces byte for byte with no carve-out (§4.3); the derived
+  // statistics and the Pantheon sync outcome are computed or recorded elsewhere and
+  // joined on here, because the UI wants all three in one payload. Anyone verifying the
+  // draw should use the files, not this.
+  function syncOutcome() {
+    const stored = store.get(KEY_SYNC);
+    if (stored) return stored;
+    // Restored onto a fresh database after a completed draw: fall back to the published
+    // file, the same way phaseOf trusts results.json over the table.
+    const f = path.join(cfg.root, 'events', 'sync.json');
+    if (fs.existsSync(f)) {
+      try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* report as unknown */ }
+    }
+    return null;
+  }
+
   function result(res) {
     const stored = store.get(KEY_RESULT);
     if (stored) {
       const stats = stored.stats || computeStats(stored.seating, cfg.roster.players);
-      return sendJson(res, 200, { ...stored, stats, pantheon_sync: stored.pantheon_sync ?? store.get(KEY_SYNC) });
+      return sendJson(res, 200, { ...stored, stats, pantheon_sync: syncOutcome() });
     }
     const p = path.join(cfg.root, 'results.json');
     if (fs.existsSync(p)) {
       const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
-      return sendJson(res, 200, { ...parsed, stats: computeStats(parsed.seating, cfg.roster.players) });
+      return sendJson(res, 200, {
+        ...parsed,
+        stats: computeStats(parsed.seating, cfg.roster.players),
+        pantheon_sync: syncOutcome(),
+      });
     }
     return sendJson(res, 404, { error: 'not_yet', phase: phaseOf(cfg, store, nowFn()) });
   }

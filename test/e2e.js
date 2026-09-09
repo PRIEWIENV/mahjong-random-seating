@@ -37,14 +37,17 @@ const { StubPantheon } = require('../server/pantheon');
 const { makeRoster, QUICKNET_HASH, QUICKNET_PK, ROOT } = require('./helpers');
 
 const QUIET = { info() {}, warn() {}, error() {} };
+const DRAND_API = 'https://api.drand.sh'; // operational (§4.2), not part of the freeze
+
 const log = (...a) => console.log(...a);
 const step = (s) => console.log(`\n\x1b[1m${s}\x1b[0m`);
 
-function scenarioDir(name, protocol, roster) {
+function scenarioDir(name, protocol, roster, runtime) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `mjs-e2e-${name}-`));
   fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'data', 'roster.json'), JSON.stringify(roster, null, 2));
   fs.writeFileSync(path.join(dir, 'data', 'protocol.json'), JSON.stringify(protocol, null, 2));
+  fs.writeFileSync(path.join(dir, 'data', 'runtime.json'), JSON.stringify(runtime, null, 2));
   fs.copyFileSync(path.join(ROOT, 'data', 'schedule_template.json'), path.join(dir, 'data', 'schedule_template.json'));
   return dir;
 }
@@ -77,8 +80,8 @@ async function signIn(sc, personId, token) {
 }
 
 /** Seal in the browser's place, then POST exactly what the page would POST. */
-async function submitAs(sc, cookie, payload, protocol) {
-  const ciphertext = await encryptPayload(payload, protocol.target_round, protocol);
+async function submitAs(sc, cookie, payload, cfg) {
+  const ciphertext = await encryptPayload(payload, cfg.protocol.target_round, cfg);
   const res = await fetch(sc.base + '/api/submit', {
     method: 'POST', headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify({ ciphertext }),
@@ -91,7 +94,7 @@ async function main() {
   const windowSec = wIdx > -1 ? Number(process.argv[wIdx + 1]) : 150;
 
   step('Setting up: a real drand quicknet round, minutes away');
-  const drand = new Drand(QUICKNET_HASH, ['https://api.drand.sh']);
+  const drand = new Drand(QUICKNET_HASH, [DRAND_API]);
   const info = await drand.info();
   const targetRound = Math.floor((Math.ceil((Date.now() + windowSec * 1000) / 1000) - info.genesis_time) / info.period) + 2;
   const cutoffMs = await drand.roundTimeMs(targetRound);
@@ -100,13 +103,19 @@ async function main() {
   log(`  target_round ${targetRound}`);
   log(`  cutoff       ${cutoff}  (${((cutoffMs - Date.now()) / 1000).toFixed(0)}s away)`);
 
+  // The frozen half (§4.1) and nothing else — config.js refuses to load it otherwise.
   const protocol = {
     drand_chain: 'quicknet', chain_hash: QUICKNET_HASH, chain_public_key: QUICKNET_PK,
-    drand_api: 'https://api.drand.sh', target_round: targetRound, submission_cutoff_utc: cutoff,
+    target_round: targetRound, submission_cutoff_utc: cutoff,
     quorum: 8, total_slots: 12, user_input_max: 255,
     seed_domain_separation: 'mahjong-seating-v1',
     schedule_template_ref: 'data/schedule_template.json@e2e', generate_script_ref: 'generate.js@e2e',
-    pantheon: { frey_base_url: 'http://127.0.0.1:1', mimir_base_url: 'http://127.0.0.1:1', wind_shuffle_mode: 'WIND_SHUFFLE_MODE_PRESCRIPTED' },
+    pantheon: { wind_shuffle_mode: 'WIND_SHUFFLE_MODE_PRESCRIPTED' },
+  };
+  // The operational half (§4.2), which is not tagged and may change mid-window.
+  const runtime = {
+    drand: { api: DRAND_API },
+    pantheon: { frey_base_url: 'http://127.0.0.1:1', mimir_base_url: 'http://127.0.0.1:1' },
   };
   const roster = makeRoster(12);
   const VALUES = [17, 200, 3, 99, 255, 0, 42, 128, 7, 63, 191, 88];
@@ -124,7 +133,7 @@ async function main() {
 
   // ---- A3: the sign-in gate, both ways ---------------------------------
   step('A3: the sign-in gate must work in both directions');
-  cases[0].dir = scenarioDir('twelve', protocol, roster);
+  cases[0].dir = scenarioDir('twelve', protocol, roster, runtime);
   cases[0].sc = await boot(cases[0].dir, roster);
   const inGate = await signIn(cases[0].sc, roster.players[0].person_id);
   assert.equal(inGate.status, 200, 'a registered account must get in');
@@ -140,12 +149,12 @@ async function main() {
   // ---- A2/A4: submissions ----------------------------------------------
   step('A2/A4: submitting, with real tlock sealing in place of the browser');
   for (const c of cases) {
-    if (!c.dir) { c.dir = scenarioDir(c.name, protocol, roster); c.sc = await boot(c.dir, roster); }
+    if (!c.dir) { c.dir = scenarioDir(c.name, protocol, roster, runtime); c.sc = await boot(c.dir, roster); }
     const t0 = Date.now();
     for (let i = 0; i < c.n; i++) {
       const { cookie, status } = await signIn(c.sc, roster.players[i].person_id);
       assert.equal(status, 200);
-      const r = await submitAs(c.sc, cookie, payloadFor(i), protocol);
+      const r = await submitAs(c.sc, cookie, payloadFor(i), c.sc.cfg);
       assert.equal(r.status, 201, `[${c.name}] player ${i + 1} → ${r.status} ${JSON.stringify(r.body)}`);
     }
     const st = await fetch(c.sc.base + '/api/status').then((r) => r.json());
@@ -229,7 +238,12 @@ async function main() {
       '--protocol', path.join(c.dir, 'data', 'protocol.json'),
       '--template', path.join(c.dir, 'data', 'schedule_template.json'),
     ], { encoding: 'utf8' });
-    assert.match(verify, /reproduces byte for byte/, `[${c.name}] A7 failed`);
+    assert.match(verify, /the whole file, no fields set aside/, `[${c.name}] A7 failed`);
+    // The roll-call is a different claim from the byte comparison, and e2e must not
+    // pass on a run where generate.js quietly skipped it for want of a snapshot.
+    assert.match(verify, /submitted at the cutoff = \d+ participating \+ \d+ excluded/,
+      `[${c.name}] the roll-call against events/snapshot.json did not run`);
+    assert.doesNotMatch(verify, /NOT checked/, `[${c.name}] the snapshot was not found`);
     log(`  A7: ${verify.trim()}`);
 
     // A5's real teeth: a SECOND implementation, in another language, from the
@@ -259,6 +273,15 @@ async function main() {
   assert.equal(res.stats.totals.perfect_pairs, 55);
   assert.equal(res.stats.totals.imbalanced_players.length, 3);
   assert.equal(res.pantheon_sync.status, 'ok');
+  // §4.3: the sync outcome is served in the API view but must NOT be in the artefact.
+  for (const c of cases.filter((x) => x.expect === 'done')) {
+    const onDisk = JSON.parse(fs.readFileSync(path.join(c.dir, 'results.json'), 'utf8'));
+    assert.equal(onDisk.pantheon_sync, undefined, `[${c.name}] pantheon_sync leaked into results.json`);
+    assert.ok(Array.isArray(onDisk.excluded_local_ids), `[${c.name}] excluded_local_ids must always be present`);
+    const sync = JSON.parse(fs.readFileSync(path.join(c.dir, 'events', 'sync.json'), 'utf8'));
+    assert.equal(sync.status, 'ok', `[${c.name}] events/sync.json`);
+  }
+  log('  results.json holds only what generate.js computes; sync recorded in events/sync.json');
   log(`  /api/result: 66 pairs, ${res.stats.totals.perfect_pairs} perfect, ` +
       `${res.stats.totals.imbalanced_players.length} players on 5-3-3, sync ${res.pantheon_sync.status}`);
 

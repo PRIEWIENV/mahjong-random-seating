@@ -36,7 +36,6 @@ function makeProtocol(over = {}) {
     drand_chain: 'quicknet',
     chain_hash: QUICKNET_HASH,
     chain_public_key: QUICKNET_PK,
-    drand_api: 'https://api.drand.sh',
     target_round: 1_000_000,
     submission_cutoff_utc: new Date(Date.now() + 3_600_000).toISOString(),
     quorum: 8,
@@ -45,10 +44,19 @@ function makeProtocol(over = {}) {
     seed_domain_separation: 'mahjong-seating-v1',
     schedule_template_ref: 'data/schedule_template.json@test',
     generate_script_ref: 'generate.js@test',
+    // Only the frozen half (§4.1). Base URLs are operational and live in runtime.json.
+    pantheon: { wind_shuffle_mode: 'WIND_SHUFFLE_MODE_PRESCRIPTED' },
+    ...over,
+  };
+}
+
+/** The operational half (§4.2) — deliberately not frozen, and pointed at dead ports. */
+function makeRuntime(over = {}) {
+  return {
+    drand: { api: 'https://api.drand.sh' },
     pantheon: {
       frey_base_url: 'http://127.0.0.1:14001',
       mimir_base_url: 'http://127.0.0.1:14002',
-      wind_shuffle_mode: 'WIND_SHUFFLE_MODE_PRESCRIPTED',
     },
     ...over,
   };
@@ -81,19 +89,21 @@ function fakeCiphertext(round = 1_000_000, chainHash = QUICKNET_HASH) {
   return `-----BEGIN AGE ENCRYPTED FILE-----\n${b64}\n-----END AGE ENCRYPTED FILE-----`;
 }
 
-/** A throwaway data/ directory with roster.json, protocol.json and the real template. */
+/** A throwaway data/ dir with roster.json, protocol.json, runtime.json and the template. */
 function makeDataDir(opts = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mahjong-test-'));
   const roster = makeRoster(opts.n ?? 12, opts.eventId ?? 42);
   const protocol = makeProtocol(opts.protocol);
+  const runtime = makeRuntime(opts.runtime);
   fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'data', 'roster.json'), JSON.stringify(roster, null, 2));
   fs.writeFileSync(path.join(dir, 'data', 'protocol.json'), JSON.stringify(protocol, null, 2));
+  fs.writeFileSync(path.join(dir, 'data', 'runtime.json'), JSON.stringify(runtime, null, 2));
   fs.copyFileSync(
     path.join(ROOT, 'data', 'schedule_template.json'),
     path.join(dir, 'data', 'schedule_template.json')
   );
-  return { dir, dataDir: path.join(dir, 'data'), roster, protocol };
+  return { dir, dataDir: path.join(dir, 'data'), roster, protocol, runtime };
 }
 
 const template = () =>
@@ -103,5 +113,6 @@ const cleanup = (dir) => fs.rmSync(dir, { recursive: true, force: true });
 
 module.exports = {
   ROOT, QUICKNET_HASH, QUICKNET_PK, SAMPLE_SIG, TITLES,
-  makeRoster, makeProtocol, makeDecrypted, fakeCiphertext, makeDataDir, template, cleanup,
+  makeRoster, makeProtocol, makeRuntime, makeDecrypted, fakeCiphertext, makeDataDir,
+  template, cleanup,
 };

@@ -6,6 +6,13 @@ secrets/
 # Note: roster.json and protocol.json MUST be committed and tagged — they are part of the
 # public commitment. Do not add them here.
 
+# The deliberate opposite: operational settings (PROTOCOL.md §4.2). Nothing in here can
+# change or steer the outcome, and it may need to change mid-window — a dead drand
+# mirror, a moved Pantheon. Keeping it out of the tree keeps the boundary physical, so
+# nobody has to work out whether it was covered by the freeze. There are no secrets in
+# it either; those are environment variables (deploy/README.md §2).
+data/runtime.json
+
 # Build and runtime artefacts
 node_modules/
 # SQLite state and scratch output. Losing var/ loses nothing that matters: every

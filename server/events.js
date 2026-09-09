@@ -5,15 +5,19 @@
  *
  * The waiting stage is where most players will actually sit, possibly for days, and
  * UI-SPEC asks that it update itself rather than be refreshed. So status changes are
- * pushed; polling /api/status every 15 s is the documented fallback when the stream
- * drops, not the primary path.
+ * pushed; polling /api/status is the documented fallback when the stream drops, not
+ * the primary path. Both cadences are operational settings in runtime.json (§4.2).
  *
  * Only the public status object is ever broadcast. What anyone submitted is not in it
  * — §9's non-negotiable is "not in an endpoint, not in a payload, not in a debug
  * header", and a broadcast is the easiest of the three to leak by accident.
  */
 
-const HEARTBEAT_MS = 25_000; // under the usual 30 s idle timeout of proxies
+const { DEFAULTS } = require('./runtime');
+
+// Under the usual 30 s idle timeout of proxies. Operational (§4.2) — a deployment
+// behind something stricter changes runtime.json, not anything frozen.
+const HEARTBEAT_MS = DEFAULTS.server.sse_heartbeat_ms;
 
 class EventHub {
   constructor(opts = {}) {

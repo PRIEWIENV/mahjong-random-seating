@@ -57,7 +57,7 @@ export default function Result({ status, me, result }) {
             <li>
               每个人的密文在收到时就已公开（<code>events/submissions/</code>），
               drand 第 <code>{result.round_used}</code> 轮的签名任何人都能取到：
-              <code className="block">{`curl ${status?.drand?.api || 'https://api.drand.sh'}/${status?.drand?.chain_hash || '<chain>'}/public/${result.round_used}`}</code>
+              <code className="block">{`curl ${status?.drand?.api ?? '<drand api>'}/${status?.drand?.chain_hash ?? '<chain>'}/public/${result.round_used}`}</code>
             </li>
             <li>
               每份贡献是 <code>SHA256(域 ‖ "contrib" ‖ local_id ‖ 数字 ‖ nonce ‖ 时间)</code>，

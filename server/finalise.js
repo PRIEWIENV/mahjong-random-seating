@@ -34,19 +34,40 @@ const KEY_PHASE = 'phase';
 const KEY_RESULT = 'result';
 const KEY_SYNC = 'pantheon_sync';
 
+const resultsPath = (cfg) => path.join(cfg.root, 'results.json');
+const voidPath = (cfg) => path.join(cfg.root, 'events', 'void.json');
+const syncPath = (cfg) => path.join(cfg.root, 'events', 'sync.json');
+
+/** The published result, when the database no longer has it. */
+function readPublishedResults(cfg) {
+  try {
+    return JSON.parse(fs.readFileSync(resultsPath(cfg), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Phase as §6 defines it, derived from persisted state plus the clock. */
 function phaseOf(cfg, store, nowMs = Date.now()) {
+  // A published results.json outranks anything the database says — INCLUDING a
+  // persisted phase, which is why this is tested first and not after. RUNBOOK is
+  // explicit that results.json is authoritative and that the SQLite state is
+  // expendable; every ciphertext is also mirrored to the repository.
+  //
+  // Without this, restoring a server onto a fresh database after a completed draw
+  // reports the round as void, because an empty submissions table past the cutoff looks
+  // exactly like a quorum failure. And once something has written 'void' into the
+  // database, checking the persisted value first would keep answering void forever.
+  // Telling players a finished, published draw was void is the worst wrong answer
+  // available here.
+  if (fs.existsSync(resultsPath(cfg))) return 'done';
+  // Same rule for the other terminal state. A void notice is published and mirrored, so
+  // it too survives a lost database, and it too must not be recomputed from an empty
+  // submissions table.
+  if (fs.existsSync(voidPath(cfg))) return 'void';
+
   const persisted = store.get(KEY_PHASE);
   if (persisted === 'done' || persisted === 'void' || persisted === 'revealing') return persisted;
-
-  // A published results.json outranks anything the database says. RUNBOOK is explicit
-  // that results.json is authoritative, and the SQLite state is expendable — every
-  // ciphertext is also mirrored to the repository. Without this, restoring a server
-  // onto a fresh database after a completed draw would report the round as void,
-  // because an empty submissions table past the cutoff looks exactly like a quorum
-  // failure. Telling players a finished, published draw was void is the worst
-  // wrong answer available here.
-  if (fs.existsSync(path.join(cfg.root, 'results.json'))) return 'done';
 
   if (nowMs < cfg.protocol.cutoff_ms) return 'open';
   const snap = store.get(KEY_SNAPSHOT);
@@ -80,7 +101,7 @@ function takeSnapshot(cfg, store, log) {
  * towards the quorum it was provisionally counted in — hence the second quorum check
  * in run(). Every exclusion is published.
  */
-async function decryptSnapshot(snapshot, protocol, log) {
+async function decryptSnapshot(snapshot, cfg, log) {
   const decrypted = [];
   const excluded = [];
   // tlock-js prints the whole beacon on every decrypt; a dozen copies of one line
@@ -90,7 +111,7 @@ async function decryptSnapshot(snapshot, protocol, log) {
   try {
     for (const s of snapshot.submissions) {
       try {
-        const payload = await decryptPayload(s.ciphertext, protocol);
+        const payload = await decryptPayload(s.ciphertext, cfg);
         decrypted.push({ local_id: s.local_id, ...payload });
         log.info?.(`[finalise] local_id ${s.local_id}: decrypted`);
       } catch (err) {
@@ -124,6 +145,20 @@ function publishVoid(cfg, store, mirror, reason, detail, log) {
   store.set(KEY_PHASE, 'void');
   log.error?.(`[finalise] ROUND VOID — ${reason}`);
   return notice;
+}
+
+/**
+ * Record a sync outcome: its own published file, and the mirror (§4.3).
+ *
+ * Deliberately not folded into results.json. It carries a wall-clock timestamp and the
+ * result of a network call made after that file already existed, so a results.json
+ * holding it could never be recomputed.
+ */
+function publishSync(cfg, mirror, sync, roundUsed) {
+  const body = JSON.stringify({ round_used: roundUsed, ...sync }, null, 2) + '\n';
+  writeLocal(cfg.root, 'events/sync.json', body);
+  mirror.enqueue('events/sync.json', body, `pantheon sync ${sync.status} (round ${roundUsed})`);
+  return body;
 }
 
 /**
@@ -172,7 +207,7 @@ async function run(opts = {}) {
   const cfg = opts.cfg || load(opts);
   const store = opts.store || new Store(opts.dbFile || path.join(cfg.root, 'var', 'state.sqlite'));
   const mirror = opts.mirror || new Mirror(process.env, log);
-  const drand = opts.drand || new Drand(cfg.protocol.chain_hash, [cfg.protocol.drand_api]);
+  const drand = opts.drand || new Drand(cfg.protocol.chain_hash, cfg.runtime.drand.mirrors);
   const pantheon = opts.pantheon || createPantheon(cfg, process.env);
   const onPhase = opts.onPhase || (() => {});
   const wait = opts.wait !== false;
@@ -180,11 +215,51 @@ async function run(opts = {}) {
   const maxWaitMs = opts.maxWaitMs ?? 60 * 60 * 1000;
   const now = opts.now ?? Date.now();
 
-  if (store.get(KEY_PHASE) === 'done') {
+  // "Has this round already been settled AND published?" — deliberately not phaseOf,
+  // which also *predicts* a state the job has yet to act on. phaseOf answers 'void' for
+  // a round that is below quorum but whose notice has not been written yet, so guarding
+  // on it would return early and the void would never actually be published.
+  //
+  // What these guards must catch is a terminal state already on disk. Both files are
+  // published and mirrored, so both outrank the database: reading the persisted key
+  // alone meant that restoring onto a fresh var/ after a completed draw made this job
+  // snapshot an empty submissions table, find it below quorum, and publish
+  // events/void.json over a draw that had already happened.
+  const persisted = store.get(KEY_PHASE);
+  const settledDone = persisted === 'done' || fs.existsSync(resultsPath(cfg));
+  const settledVoid = persisted === 'void' || fs.existsSync(voidPath(cfg));
+
+  if (settledDone) {
+    const results = store.get(KEY_RESULT) || readPublishedResults(cfg);
+    store.set(KEY_PHASE, 'done'); // reconcile the database with the published file
+
+    // The sync is the one step that can still be outstanding once the draw is over: it
+    // runs after results.json is published and after the phase is already 'done', so a
+    // crash or a restart in between left it undone with nothing to pick it up. Writing
+    // the prescript and reading it back is idempotent and cannot touch the draw, so the
+    // five-minute timer can simply finish the job.
+    //
+    // Only when NO outcome was ever recorded. A recorded failure is a completed attempt
+    // carrying a documented manual remedy (§8 / RUNBOOK step 15); retrying it every five
+    // minutes forever would bury that remedy under mirror noise and fight an operator
+    // who has already pasted the prescript in by hand.
+    const recorded = store.get(KEY_SYNC);
+    if (results && !recorded && !fs.existsSync(syncPath(cfg))) {
+      log.warn?.('[finalise] draw is done but no Pantheon sync was ever recorded — running it now');
+      const sync = await syncToPantheon(cfg, results, pantheon, log, opts.sync);
+      store.set(KEY_SYNC, sync);
+      publishSync(cfg, mirror, sync, results.round_used);
+      await mirror.drain?.();
+      return { phase: 'done', results, sync, resumed: true };
+    }
     log.info?.('[finalise] already done — nothing to do');
-    return { phase: 'done', results: store.get(KEY_RESULT) };
+    return { phase: 'done', results };
   }
-  if (store.get(KEY_PHASE) === 'void') {
+  if (settledVoid) {
+    // Not re-published. The notice records who had submitted when it was written, and
+    // recomputing that from a database that no longer holds them would replace a true
+    // record with an emptier, wronger one.
+    store.set(KEY_PHASE, 'void');
     log.info?.('[finalise] already void — waiting on a new target_round');
     return { phase: 'void' };
   }
@@ -231,7 +306,7 @@ async function run(opts = {}) {
   }
   log.info?.(`[finalise] round ${cfg.protocol.target_round} landed; confirmed by ${beacon.mirrors.length} mirror(s)`);
 
-  const { decrypted, excluded } = await decryptSnapshot(snapshot, cfg.protocol, log);
+  const { decrypted, excluded } = await decryptSnapshot(snapshot, cfg, log);
   if (decrypted.length < cfg.protocol.quorum) {
     const notice = publishVoid(cfg, store, mirror, 'quorum not met once undecryptable submissions were excluded',
       { snapshot_size: snapshot.local_ids.length, decrypted: decrypted.length, excluded }, log);
@@ -242,25 +317,33 @@ async function run(opts = {}) {
   store.set(KEY_PHASE, 'revealing');
   onPhase('revealing');
 
+  // The exclusions go THROUGH generate.js rather than being attached to its output.
+  // They are part of the answer to "who took part", so they belong inside the file's
+  // byte-for-byte claim; anything bolted on afterwards would have to be carved out of
+  // that claim, and a verification with a footnote is the kind nobody reads.
   const results = generate({
     decrypted,
+    excluded,
     roster: cfg.roster,
     protocol: cfg.protocol,
     template: cfg.template,
     signature: beacon.signature,
     round: beacon.round,
   });
-  if (excluded.length) results.excluded_local_ids = excluded;
 
   // Publish the draw BEFORE syncing. The seat plan is authoritative the moment it is
   // computed; Pantheon is a delivery target, and a delivery problem must never make
   // the result look unsettled.
-  const body = serialise(results);
-  writeLocal(cfg.root, 'results.json', body);
-  mirror.enqueue('results.json', body, `results for drand round ${beacon.round}`);
+  //
+  // The snapshot goes out first. It is what lets a verifier check that results.json
+  // accounts for every submission taken at the cutoff, so a reader should never find a
+  // result published without the file needed to audit its roll-call.
   const snapBody = JSON.stringify(snapshot, null, 2) + '\n';
   writeLocal(cfg.root, 'events/snapshot.json', snapBody);
   mirror.enqueue('events/snapshot.json', snapBody, `snapshot at cutoff (round ${beacon.round})`);
+  const body = serialise(results);
+  writeLocal(cfg.root, 'results.json', body);
+  mirror.enqueue('results.json', body, `results for drand round ${beacon.round}`);
 
   const stats = computeStats(results.seating, cfg.roster.players);
   store.set(KEY_RESULT, { ...results, stats });
@@ -269,20 +352,17 @@ async function run(opts = {}) {
 
   const sync = await syncToPantheon(cfg, results, pantheon, log, opts.sync);
   store.set(KEY_SYNC, sync);
-  // results.json records the sync outcome (§4), so rewrite it once the answer is known.
-  const withSync = serialise({ ...results, pantheon_sync: sync });
-  writeLocal(cfg.root, 'results.json', withSync);
-  mirror.enqueue('results.json', withSync, `results + pantheon sync (round ${beacon.round})`);
-  store.set(KEY_RESULT, { ...results, pantheon_sync: sync, stats });
+  publishSync(cfg, mirror, sync, beacon.round);
+  store.set(KEY_RESULT, { ...results, stats });
 
   await mirror.drain?.();
   log.info?.(`[finalise] DONE — R = ${results.R.slice(0, 16)}…, pi = [${results.permutation.join(', ')}]`);
-  return { phase: 'done', results: { ...results, pantheon_sync: sync }, stats, beacon, sync };
+  return { phase: 'done', results, stats, beacon, sync };
 }
 
 module.exports = {
-  run, phaseOf, takeSnapshot, decryptSnapshot, syncToPantheon,
-  KEY_PHASE, KEY_SNAPSHOT, KEY_RESULT, KEY_SYNC,
+  run, phaseOf, takeSnapshot, decryptSnapshot, syncToPantheon, publishSync,
+  readPublishedResults, KEY_PHASE, KEY_SNAPSHOT, KEY_RESULT, KEY_SYNC,
 };
 
 if (require.main === module) {

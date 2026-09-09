@@ -3,15 +3,21 @@
 Everything the implementation had to decide that the specification does not settle,
 plus the places where following one rule literally would have broken another.
 
-**Read this before the freeze.** Items 1 and 2 change what goes into `protocol.json`
+**Read this before the freeze.** Items 1 and 2 decide what goes into `protocol.json`
 and what is verified, so they have to be settled before RUNBOOK step 11, not after.
 
 ---
 
-## 1. `protocol.json` needs a `chain_public_key` field — a real addition to §4
+## 1. `chain_public_key`, and where the freeze line actually falls
 
-`PROTOCOL.md` §4 lists `chain_hash` but no public key. That turns out not to be enough
-to verify anything. `drand-client` checks the two together:
+**Both halves of this are now in the specification** — `chain_public_key` is listed in
+`PROTOCOL.md` §4, and §4.1/§4.2 draw the frozen/operational boundary. This note records
+why, because the reasoning is not obvious from the field list alone.
+
+### 1a. The hash alone verifies nothing
+
+§4 originally listed `chain_hash` and no public key. That is not enough to verify
+anything. `drand-client` checks the two together:
 
 ```js
 // node_modules/drand-client/http-caching-chain.js
@@ -28,7 +34,8 @@ which silently turns chain verification off. At that point a hostile or merely w
 job would believe it.
 
 So `protocol.json` carries `chain_public_key`, `server/config.js` refuses to start
-without it, and both `server/tlock.js` and `client/seal.js` pin both values. For
+without it (and refuses a 64-character value, which is the shape of a chain hash rather
+than a group key), and both `server/tlock.js` and `client/seal.js` pin both values. For
 quicknet, verified against `https://api.drand.sh/<chain_hash>/info` on 2026-09-09:
 
 ```
@@ -38,30 +45,109 @@ scheme           bls-unchained-g1-rfc9380      period 3s
 ```
 
 `tools/pick-round.js --in 72h --write` fills all of it in, and sets `target_round` and
-`submission_cutoff_utc` together so they cannot disagree.
+`submission_cutoff_utc` together so they cannot disagree. It no longer carries its own
+copy of the quicknet hash: the chain is whatever `protocol.json` is frozen to, and a
+second copy in a tool is a second place for it to be wrong.
 
-## 2. `results.json` cannot be fully reproducible, and pretending otherwise hides a real gap
+### 1b. The same argument says `drand_api` must **not** be frozen
 
-§4 puts `pantheon_sync` inside `results.json`. RUNBOOK step A5 asks that a finished
-draw be recomputed from `results.json` alone and match. Both cannot hold: the sync
-outcome is a network result carrying a wall-clock timestamp, so a file containing it
-can never be reproduced by recomputation.
+Pinning the hash and the key is exactly what makes the endpoint safe to leave loose. A
+swapped or hostile `drand_api` cannot substitute a chain — `isValidInfo` rejects it — so
+it can only fail loudly. Which means it fails the test that decides the freeze:
 
-The e2e test caught this the first time it ran, which is exactly what it is for.
+> Could changing this value, after submissions have opened, change the outcome or let
+> somebody steer it?
 
-**Resolution.** The file keeps the field — §4 asks for it and an operator needs it —
-and `generate.js --verify` checks the *reproducible core*, then states plainly which
-fields it set aside:
+Freezing it anyway would have made the run strictly worse. A drand mirror going down
+mid-window is an ordinary operational event with no bearing on the result, and under a
+frozen `drand_api` the only in-protocol remedy would have been to void the round. Worse,
+the realistic outcome is not a voided round: it is the organiser editing a tagged file
+and telling everyone it was fine — which is the precise habit the freeze exists to
+prevent. A freeze that covers things people have good reason to change teaches everyone
+that frozen files get changed.
+
+**Resolution.** `protocol.json` holds only what could change or steer the outcome.
+Everything else moved to `data/runtime.json` (`server/runtime.js` holds the defaults,
+and the file is optional and gitignored): the drand endpoint and mirror list, the
+Pantheon base URLs and Twirp naming, the SSE heartbeat, the status poll interval, the
+session TTL, the rate limit. `config.js` **refuses to start** if an operational key
+appears in `protocol.json`, and names where it belongs instead — the split is only worth
+anything if it cannot quietly erode.
+
+Two knock-on cleanups follow from the same principle, that a frozen value must exist in
+exactly one place:
+
+- **Nothing frozen is defaulted in the browser bundle.** `Void.jsx` used to render
+  `quorum ?? 8` and `total_slots ?? 12`, `Submit.jsx` and `seal.js` used
+  `user_input_max ?? 255`. Those are placeholder copies of tagged values, free to state
+  a rule the draw was not actually run under. They now come from `/api/status` or the
+  screen does not render.
+- **The one-byte bounds come from `generate.js`.** `local_id` in `1..255` and
+  `user_input_max <= 255` are consequences of the §7 byte encoding, not preferences, so
+  `generate.js` exports `ENCODING_LIMITS` and `config.js` validates against it instead
+  of repeating the literals.
+
+## 2. `results.json` holds only what `generate.js` computes
+
+§4 originally put `pantheon_sync` inside `results.json`, while RUNBOOK step A5 asked
+that a finished draw be recomputed from `results.json` alone and match byte for byte.
+Both cannot hold. The e2e test caught it on its first run, which is exactly what it is
+for.
+
+`pantheon_sync` is unreproducible three times over, and the third reason is the one that
+settles it:
+
+| | why it cannot be recomputed |
+|---|---|
+| `at` | a wall-clock timestamp, and `generate.js` may not read the clock |
+| `status`, `attempts`, `error` | the outcome of a network call to another system |
+| the field itself | it records something that happened **after** `results.json` was written |
+
+A file cannot make a byte-for-byte claim about a value it could not have computed. The
+first version of this implementation carved the field out of the comparison and named it
+in the output, which was honest but left a verification with a footnote — and a footnote
+is the part nobody reads.
+
+**Resolution.** The sync outcome moved to `events/sync.json`. `results.json` is now
+written exactly once, before the sync runs, and `--verify` compares every byte of it with
+nothing set aside. `GET /api/result` joins results, statistics and sync back together for
+the UI, because that is a view rather than an artefact.
+
+`excluded_local_ids` went the other way, and deliberately. A submission that will not
+open is not a contribution (item 5), so *who was excluded* is part of the answer to "who
+took part" and has to be inside the claim, not annotated onto it. `generate.js` now takes
+the list as an input and validates it: every id in the roster, none of them also a
+participant, each with a reason, emitted in canonical order with the empty list written
+out explicitly so that "nobody was excluded" and "the field was dropped" cannot look
+alike.
+
+### 2a. What the byte comparison still cannot see, and what does
+
+`--verify` recomputes **from the payloads the file lists**. So a `results.json` that omits
+a player from both `revealed` and `excluded_local_ids` reproduces perfectly. There is a
+test that constructs exactly that file and confirms it is self-consistent, because the
+limit is worth pinning rather than hoping nobody notices.
+
+`events/snapshot.json` is what closes it. It is written at the cutoff — before the beacon
+exists, so before anyone can know which omission would help — and it is mirrored publicly
+along with the ciphertexts. Every id in it must appear in exactly one of the two lists:
 
 ```
-OK    results.json reproduces byte for byte from its own revealed payloads
-      (not covered, and not reproducible by design: pantheon_sync — written after
-       the draw by the finalisation job)
+OK    results.json reproduces byte for byte — the whole file, no fields set aside
+OK    12 submitted at the cutoff = 10 participating + 2 excluded
 ```
 
-The excluded set is `pantheon_sync` and `excluded_local_ids`, both written after the
-draw by the finalisation job. Naming them is the point: a verifier who is told "this
-reproduces" should know precisely what was and was not covered.
+`--verify` looks for the snapshot beside `results.json` and runs the roll-call
+automatically. When it is not there it says so in terms that cannot be mistaken for a
+pass, and the e2e run asserts that the check actually happened rather than merely that
+the byte comparison did. The finalisation job also mirrors the snapshot **before** the
+result, so a reader never finds a published result without the file needed to audit it.
+
+Two independent claims, then, and they should not be conflated:
+
+- **the draw follows from these payloads** — the byte comparison
+- **these payloads are everyone who submitted** — the roll-call, plus the fact that every
+  ciphertext was published, timestamped by a third party, as it arrived
 
 ## 3. Choices §7 leaves open, now pinned
 
@@ -125,14 +211,42 @@ Counting an unopenable blob towards the quorum would let one person force a draw
 garbage. This rule is deterministic and leaves the organiser no discretion, which is
 the property §8 cares about.
 
-## 6. A published `results.json` outranks the database
+## 6. A published `results.json` outranks the database, everywhere
 
-`phaseOf` consults `results.json` before it consults the submissions table. Without
-that, restoring the server onto a fresh database after a completed draw reports the
-round as **void** — an empty submissions table past the cutoff is indistinguishable
-from a quorum failure. Telling players that a finished, published draw was void is the
-worst wrong answer available, and RUNBOOK is explicit that `results.json` is
-authoritative while the SQLite state is expendable.
+`phaseOf` consults `results.json` before anything else. Without that, restoring the
+server onto a fresh database after a completed draw reports the round as **void** — an
+empty submissions table past the cutoff is indistinguishable from a quorum failure.
+Telling players that a finished, published draw was void is the worst wrong answer
+available, and RUNBOOK is explicit that `results.json` is authoritative while the SQLite
+state is expendable.
+
+Two ways that principle was stated but not actually implemented, both fixed:
+
+- **`phaseOf` checked the persisted phase first.** So the `results.json` guard only
+  applied when the database held *no* phase at all. Once anything had written `void`,
+  the answer stayed void forever, with the published result sitting right there. The
+  file is now checked before the persisted key, which is what the surrounding comment
+  always claimed.
+- **`run()` did not use `phaseOf` at all.** It read the persisted key directly, so on a
+  fresh database the scheduled job walked straight past the guard, snapshotted an empty
+  submissions table, found it below quorum and **published `events/void.json` over a
+  completed draw** — mirroring it to the repository in the process. The systemd timer
+  fires every five minutes, so this needed only one lost `var/` to happen on its own.
+  `run()` now derives its state through `phaseOf` and reconciles the database with the
+  file. `test/resume.test.js` pins it.
+
+## 6a. The sync is the one step allowed to be outstanding after the draw
+
+The sync runs after `results.json` is published and after the phase is already `done`,
+so a crash or a restart in between left it undone with nothing to pick it up. Now that
+the outcome has its own file (item 2), "did it run?" is a question with an answer on
+disk, and the timer resumes it: writing the prescript and reading it back is idempotent
+and cannot touch the draw.
+
+It resumes **only when no outcome was ever recorded**. A recorded failure is a completed
+attempt carrying a documented manual remedy (RUNBOOK step 15); re-running it every five
+minutes forever would bury that remedy under mirror noise and fight an operator who has
+already pasted the prescript in by hand.
 
 ## 7. The Pantheon boundary, and what is *not* verified
 
@@ -150,8 +264,10 @@ Everything the app needs from Pantheon goes through one interface in
 > likely to drift — that instruction is outstanding.
 
 What this means in practice: the Twirp path template, service names and base URLs are
-all configurable (`protocol.json` → `pantheon`), so drift should be a config change
-rather than a code change. But **RUNBOOK steps A2, A3 and A6 are not yet satisfied
+all configurable (`runtime.json` → `pantheon`, since where Pantheon lives cannot affect
+the draw), so drift should be a config change rather than a code change. What the sync
+is allowed to *write* stays frozen: `wind_shuffle_mode` is in `protocol.json`, because
+any other value silently discards most of what the template guarantees. But **RUNBOOK steps A2, A3 and A6 are not yet satisfied
 against real Pantheon**, and A6 — reading the prescript back and confirming the winds
 survive — is the one that document calls most likely to be silently wrong. The
 equivalent checks all pass against the stub, including the read-back and the
@@ -187,7 +303,10 @@ production.
   assigned in its body, because module bodies run after all imports evaluate.
 - **Multiple drand mirrors.** `server/drand.js` queries every configured mirror and
   **refuses to draw** if two disagree about the signature for the target round. One
-  mirror down is fine; two disagreeing is a stop-everything event.
+  mirror down is fine; two disagreeing is a stop-everything event. The list is
+  operational (`runtime.json`), and the loader always folds `drand.api` into it — an
+  agreement check across a different set of endpoints from the one the draw used would
+  be checking the wrong thing.
 - **The snapshot is persisted once**, on the job's first run past the cutoff, and never
   retaken — so re-running after a drand outage cannot pick up a late arrival.
 - **`generate.js` enforces the quorum itself**, with no override flag, so the rule
@@ -207,7 +326,10 @@ production.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 72 across generate, encoding, API, stats, Pantheon | pass |
+| Unit tests (`npm test`) — 115 across generate, encoding, config, roll-call, resume, API, stats, Pantheon | pass |
+| The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
+| A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
+| A finished draw survives a lost database without being declared void | passes |
 | Byte encoding cross-checked by an independent Python implementation | agrees |
 | e2e A2: full journey, sign-in → submit → reveal → result → sync | passes |
 | e2e A3: sign-in gate both ways, with distinguishable refusals | passes |

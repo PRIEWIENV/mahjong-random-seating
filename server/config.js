@@ -6,13 +6,21 @@
  * Every failure here is fatal. A backend that starts against a malformed roster is
  * worse than one that refuses to start, because the players cannot tell the difference
  * until the draw is already wrong.
+ *
+ * This file owns one half of the §4.1 boundary: what is frozen. runtime.js owns the
+ * other. The bounds on local_id and user_input are not repeated here — they come from
+ * generate.js, which is where the byte encoding that imposes them is defined.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { loadRuntime, OPERATIONAL_KEYS } = require('./runtime');
+const { ENCODING_LIMITS } = require('../generate.js');
+
 const ROOT = path.join(__dirname, '..');
 const HEX64 = /^[0-9a-f]{64}$/;
+const HEX_PUBKEY = /^[0-9a-f]{96}$|^[0-9a-f]{192}$/; // G1 or G2 group key
 
 function readJson(p) {
   try {
@@ -39,8 +47,12 @@ function validateRoster(roster, totalSlots) {
   for (const p of roster.players) {
     // RUNBOOK step 8: the seat plan is written back in local ids, so a missing one
     // blocks the sync — and it blocks it after the draw, when nothing can be changed.
-    if (!Number.isInteger(p.local_id) || p.local_id < 1 || p.local_id > 255) {
-      throw new Error(`roster.json: local_id must be an integer in 1..255, got ${JSON.stringify(p.local_id)}`);
+    const { local_id_min: lo, local_id_max: hi } = ENCODING_LIMITS;
+    if (!Number.isInteger(p.local_id) || p.local_id < lo || p.local_id > hi) {
+      throw new Error(
+        `roster.json: local_id must be an integer in ${lo}..${hi} (§7 encodes it as one byte), ` +
+          `got ${JSON.stringify(p.local_id)}`
+      );
     }
     if (localIds.has(p.local_id)) throw new Error(`roster.json: duplicate local_id ${p.local_id}`);
     localIds.add(p.local_id);
@@ -61,10 +73,31 @@ function validateRoster(roster, totalSlots) {
   return roster;
 }
 
+function assertNoOperationalKeys(p) {
+  // §4.1: the split only survives if it is enforced. An operational value that drifts
+  // back into protocol.json gets frozen by accident, and then a routine change to it —
+  // a dead mirror, a moved Pantheon — needs a re-tag or, worse, gets edited under the
+  // tag. Name the offender and say where it goes instead.
+  for (const [key, where] of Object.entries(OPERATIONAL_KEYS)) {
+    const [head, tail] = key.split('.');
+    const present = tail ? p[head] && p[head][tail] !== undefined : p[key] !== undefined;
+    if (present) {
+      throw new Error(
+        `protocol.json: "${key}" is an operational setting and must not be frozen. ` +
+          `Move it to ${where} (PROTOCOL.md §4.1). protocol.json holds only values that ` +
+          `could change or steer the outcome.`
+      );
+    }
+  }
+}
+
 function validateProtocol(p) {
+  assertNoOperationalKeys(p);
+
   const required = [
-    'drand_chain', 'chain_hash', 'drand_api', 'target_round',
-    'submission_cutoff_utc', 'quorum', 'total_slots', 'seed_domain_separation',
+    'drand_chain', 'chain_hash', 'chain_public_key', 'target_round',
+    'submission_cutoff_utc', 'quorum', 'total_slots', 'user_input_max',
+    'seed_domain_separation',
   ];
   for (const k of required) {
     if (p[k] === undefined || p[k] === null || p[k] === '') throw new Error(`protocol.json: missing "${k}"`);
@@ -75,15 +108,14 @@ function validateProtocol(p) {
   if (!HEX64.test(String(p.chain_hash))) {
     throw new Error('protocol.json: chain_hash must be 64 lowercase hex chars — confirm it against the drand API');
   }
-  // Not listed in §4, but required in practice: drand-client verifies a chain only when
-  // BOTH the hash and the public key are pinned (isValidInfo in drand-client checks them
-  // together). Pin the hash alone and verification silently does nothing, because the
-  // comparison against an undefined publicKey fails for every real chain — at which point
-  // the natural "fix" is to drop verification entirely. See docs/IMPLEMENTATION_NOTES.md.
-  if (!/^[0-9a-f]{96}$|^[0-9a-f]{192}$/.test(String(p.chain_public_key || ''))) {
+  // §4: the hash alone is not a pin. drand-client's isValidInfo compares the hash AND
+  // the public key and requires both; pass only the hash and publicKey is undefined,
+  // the comparison fails against every real chain, and the tempting "fix" is to switch
+  // verification off entirely — leaving the client trusting whatever the endpoint claims.
+  if (!HEX_PUBKEY.test(String(p.chain_public_key))) {
     throw new Error(
       'protocol.json: chain_public_key must be the drand chain public key in lowercase hex ' +
-        '(96 or 192 chars). Fetch it from <drand_api>/<chain_hash>/info. Without it the client ' +
+        '(96 or 192 chars). Fetch it from <drand.api>/<chain_hash>/info. Without it the client ' +
         'cannot verify it is talking to the right chain.'
     );
   }
@@ -91,8 +123,21 @@ function validateProtocol(p) {
   if (!Number.isInteger(p.quorum) || p.quorum < 1 || p.quorum > p.total_slots) {
     throw new Error(`protocol.json: quorum must be in 1..${p.total_slots}`);
   }
-  if (p.user_input_max !== undefined && (!Number.isInteger(p.user_input_max) || p.user_input_max < 1 || p.user_input_max > 255)) {
-    throw new Error('protocol.json: user_input_max must be an integer in 1..255');
+  // §8 fixes the rule before anyone can see who is missing, so that it cannot be argued
+  // down afterwards. A quorum at or below half the field would not survive that argument.
+  if (p.quorum * 2 <= p.total_slots) {
+    throw new Error(
+      `protocol.json: quorum ${p.quorum} of ${p.total_slots} is not a majority — §8 intends a ` +
+        'two-thirds rule, and a minority quorum is not a rule anyone would agree to in advance.'
+    );
+  }
+  const { user_input_min: umin, user_input_max: umax } = ENCODING_LIMITS;
+  if (!Number.isInteger(p.user_input_max) || p.user_input_max < 1 || p.user_input_max > umax) {
+    throw new Error(
+      `protocol.json: user_input_max must be an integer in 1..${umax} — §7 encodes user_input ` +
+        `as one unsigned byte, so ${umax} is what fits rather than a tunable ceiling ` +
+        `(the floor of the range players draw from is ${umin})`
+    );
   }
   if (String(p.seed_domain_separation).includes('\x1f')) {
     throw new Error('protocol.json: seed_domain_separation may not contain byte 0x1f (it is the field separator)');
@@ -138,6 +183,9 @@ function validateTemplate(t, totalSlots) {
 function load(opts = {}) {
   const dataDir = opts.dataDir || path.join(ROOT, 'data');
   const protocol = validateProtocol(readJson(path.join(dataDir, 'protocol.json')));
+  // Not frozen, not tagged, optional (§4.2). Loaded here so every consumer reads both
+  // halves of the configuration off one object.
+  const runtime = opts.runtime || loadRuntime(dataDir, opts.env || process.env);
   const roster = validateRoster(readJson(path.join(dataDir, 'roster.json')), protocol.total_slots);
   const template = validateTemplate(readJson(path.join(dataDir, 'schedule_template.json')), protocol.total_slots);
 
@@ -148,12 +196,15 @@ function load(opts = {}) {
     root: ROOT,
     dataDir,
     protocol,
+    runtime,
     roster,
     template,
     byPersonId,
     byLocalId,
-    userInputMax: Number.isInteger(protocol.user_input_max) ? protocol.user_input_max : 255,
+    // Required and validated above, so no fallback here: an absent value is a startup
+    // failure, not a silent 255 that may disagree with what the tag actually says.
+    userInputMax: protocol.user_input_max,
   };
 }
 
-module.exports = { load, readJson, ROOT };
+module.exports = { load, readJson, ROOT, ENCODING_LIMITS };

@@ -51,7 +51,7 @@ The focal element of the whole app. A single large numeric field, the number typ
 - **One line of why**, no more: "Your number is sealed in your browser and cannot be read by anyone — including us — until the draw opens."
 - **Submit** is the only primary action on screen.
 
-On submit the client builds `{user_input, client_nonce, client_timestamp}` — the nonce being 16 bytes from `crypto.getRandomValues` — seals the payload with tlock against the chain and round from `protocol.json`, and posts only the ciphertext. The nonce is generated silently; it is what guarantees the contribution is uniformly random whatever the player typed, and it is revealed with everything else at the draw so the player can still verify their own number went in. Show a brief inline working state — sealing is a real computation and should not look instant if it isn't.
+On submit the client builds `{user_input, client_nonce, client_timestamp}` — the nonce being 16 bytes from `crypto.getRandomValues` — seals the payload with tlock against the chain and round from the frozen `protocol.json` (the endpoint that chain is reached through comes from `/api/status`, since it is not frozen — `PROTOCOL.md` §4.2), and posts only the ciphertext. The nonce is generated silently; it is what guarantees the contribution is uniformly random whatever the player typed, and it is revealed with everything else at the draw so the player can still verify their own number went in. Show a brief inline working state — sealing is a real computation and should not look instant if it isn't.
 
 Do not offer an edit or withdraw affordance. A submission is final by design; say so before the button, not after.
 
@@ -66,7 +66,7 @@ Do not offer an edit or withdraw affordance. A submission is final by design; sa
 - **Quorum marker** on the tally: the threshold of 8 drawn on the track, so a player can see at a glance whether the draw is already safe.
 - **drand status** — the chain's latest round, whether it is advancing, and the round the draw is waiting for. A quiet pulse on each new beacon round is enough to show liveness; if the beacon goes stale, say so plainly rather than hiding it.
 
-Everything here updates over SSE. If the stream drops, fall back to polling `/api/status` every 15 s and show a subdued "reconnecting" note.
+Everything here updates over SSE. If the stream drops, fall back to polling `/api/status` and show a subdued "reconnecting" note. The interval is whatever the status payload's `status_poll_interval_ms` says, defaulting to 15 s.
 
 ## 6. The reveal
 
@@ -123,8 +123,12 @@ GET /api/status   → phase, submitted_count, quorum, total_slots, submitted_loc
 GET /api/me       → local_id, title, submitted
 GET /api/result   → seating (11 rounds × 3 tables × 4 seats, with names),
                     contributions, r, permutation, drand_signature,
+                    excluded_local_ids,
                     stats: per player {winds, tables, opponents[], perfect_pairs},
                     pantheon_sync
+                    // a composed view: results.json + computed stats +
+                    // events/sync.json. The files, not this, are what a
+                    // verifier uses (PROTOCOL.md §4.3).
 GET /api/events   → SSE: status changes
 ```
 

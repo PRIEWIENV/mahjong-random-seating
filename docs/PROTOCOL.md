@@ -2,6 +2,8 @@
 
 Implementation specification. Once agreed, four artefacts — `protocol.json`, `roster.json`, `schedule_template.json` and `generate.js` — are frozen together and git-tagged **before** submissions open. After the freeze, changing a single byte of any of them invalidates the fairness guarantee and the run must be restarted.
 
+Exactly four, and no more. Operational settings — which drand mirror is reachable today, where Pantheon sits on the host, how long a session cookie lives — are kept out of the freeze on purpose and live in `runtime.json`. §4.1 gives the test that decides which side a parameter falls on, and why drawing that line too generously weakens the freeze rather than strengthening it.
+
 Companion documents: [`PANTHEON-INTEGRATION.md`](PANTHEON-INTEGRATION.md) for the login and seat-plan sync, [`UI-SPEC.md`](UI-SPEC.md) for the player-facing flow, [`seating-design.md`](seating-design.md) for the reasoning behind the template itself.
 
 ## 1. Overview
@@ -58,6 +60,18 @@ The drand signature for the target round is folded into the seed as well (§7). 
 
 ## 4. Frozen artefacts
 
+Four files are frozen together and git-tagged before submissions open: `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js`.
+
+### 4.1 What belongs in the freeze
+
+One test decides it:
+
+> Could changing this value, after submissions have opened, change the outcome or let somebody steer it?
+
+**Yes** — it is frozen, and it belongs in `protocol.json`. **No** — it is an operational setting, it belongs in `runtime.json`, and that file is deliberately *not* part of the tag.
+
+The split is not tidiness. Freezing something that fails the test makes the run less robust without making it any fairer. If `drand_api` were frozen and that mirror went down during the submission window, the only in-protocol remedy would be to void the round — for an outage that cannot influence the result, because the chain is pinned by `chain_hash` and `chain_public_key` and every beacon signature is checked against that key. And a frozen file the organiser has a legitimate operational reason to edit is a file players will eventually be asked to accept an edit to, which is the exact habit the freeze exists to prevent.
+
 **`roster.json`** — a snapshot of the Pantheon event roster taken at freeze time.
 ```
 {
@@ -68,14 +82,14 @@ The drand signature for the target round is folded into the seed as well (§7). 
   ]
 }
 ```
-`local_id` is Pantheon's per-event player number and is what the seat-plan sync writes back (see `PANTHEON-INTEGRATION.md`). `person_id` is the global Pantheon account id and is what a signed-in session is matched against. Freezing this list means nobody can be added, removed or swapped once submissions are open.
+`local_id` is Pantheon's per-event player number and is what the seat-plan sync writes back (see `PANTHEON-INTEGRATION.md`). `person_id` is the global Pantheon account id and is what a signed-in session is matched against. Freezing this list means nobody can be added, removed or swapped once submissions are open. `local_id` must be in `1 … 255`, because §7 encodes it as a single byte.
 
-**`protocol.json`**
+**`protocol.json`** — the frozen parameters, and nothing else.
 ```
 {
   "drand_chain": "quicknet",
-  "chain_hash": "<public chain hash of the drand quicknet chain>",
-  "drand_api": "https://api.drand.sh",
+  "chain_hash": "<64 hex — the drand quicknet chain hash>",
+  "chain_public_key": "<96 or 192 hex — that same chain's group public key>",
   "target_round": 123456,
   "submission_cutoff_utc": "2026-09-10T20:00:00Z",
   "quorum": 8,
@@ -83,11 +97,57 @@ The drand signature for the target round is folded into the seed as well (§7). 
   "user_input_max": 255,
   "seed_domain_separation": "mahjong-seating-v1",
   "schedule_template_ref": "data/schedule_template.json@<git tag>",
-  "generate_script_ref": "generate.js@<git tag>"
+  "generate_script_ref": "generate.js@<git tag>",
+  "pantheon": { "wind_shuffle_mode": "WIND_SHUFFLE_MODE_PRESCRIPTED" }
 }
 ```
 
+| field | why it is frozen |
+|---|---|
+| `drand_chain`, `chain_hash`, `chain_public_key` | Identify the beacon the envelopes are sealed to. Swap the chain and you swap the randomness. |
+| `target_round` | When the envelopes open. Moving it earlier opens them early. |
+| `submission_cutoff_utc` | The snapshot boundary (§8). Moving it changes who is counted. |
+| `quorum`, `total_slots` | The rule of §8, fixed before anyone can see who is missing. |
+| `user_input_max` | The domain each player draws from, and a byte inside the contribution hash. |
+| `seed_domain_separation` | `DOMAIN` in §7. Change it and every hash in the draw changes. |
+| `schedule_template_ref`, `generate_script_ref` | Name the tag the other two artefacts come from, so the four files commit to each other. |
+| `pantheon.wind_shuffle_mode` | Any mode but `WIND_SHUFFLE_MODE_PRESCRIPTED` re-randomises winds at the table and throws away most of what the template guarantees (hard rule 5). |
+
+**`chain_public_key` is required, and it is required *in addition to* `chain_hash`, not instead of it.** `drand-client` decides whether it is talking to the right chain in `isValidInfo`, which compares the hash **and** the public key and demands both. Pin only the hash and `publicKey` is `undefined`, the comparison fails against every real chain, and the path of least resistance becomes switching chain verification off — leaving the client trusting whatever the endpoint says it is. Read the key once at freeze time from `<drand api>/<chain_hash>/info` (`runtime.json` → `drand.api`) and record it alongside the hash. It is frozen because it is half of the answer to "which randomness source is this draw bound to".
+
 **`schedule_template.json`** — the reference template on twelve abstract points, already exported and independently re-verified. Its structure and invariants are documented in `seating-design.md`; `tools/verify_template.py` re-derives every one of them from the data.
+
+### 4.2 `runtime.json` — operational, not frozen, not tagged
+
+```
+{
+  "drand": {
+    "api": "https://api.drand.sh",
+    "mirrors": ["https://api.drand.sh", "https://api2.drand.sh",
+                "https://api3.drand.sh", "https://drand.cloudflare.com"],
+    "health_poll_ms": 30000
+  },
+  "pantheon": {
+    "frey_base_url": "http://localhost:4001",
+    "mimir_base_url": "http://localhost:4002",
+    "twirp_path_template": "/twirp/{service}/{method}",
+    "frey_service": "frey.Frey",
+    "mimir_service": "mimir.Mimir"
+  },
+  "ui":     { "status_poll_interval_ms": 15000 },
+  "server": { "sse_heartbeat_ms": 25000, "session_ttl_days": 30, "rate_limit_per_minute": 30 }
+}
+```
+
+The file is optional and so is every key in it; anything absent falls back to the defaults shown, which are the ones compiled into `server/runtime.js`. None of this is a promise to players, and all of it may be changed mid-window without voiding anything — that is the whole point of it being here.
+
+`drand.api` is where beacons are fetched from. `drand.mirrors` is the set the server cross-checks the answer against before it will draw: if two mirrors disagree about the signature for a round, the job stops rather than picking one (§9). Neither field can influence the result, because the chain is pinned by the two frozen fields above.
+
+Pantheon admin credentials for the sync are **not** in this file and never in the repository. They are environment variables (`deploy/README.md` §2).
+
+To keep the two kinds of setting from drifting back together, the loader **rejects `protocol.json` outright** if it contains any operational key, and names the one it found.
+
+### 4.3 Files written by the run
 
 **Submission record** (`events/submissions/<local_id>.json`, mirrored into the repository as it arrives)
 ```
@@ -96,26 +156,69 @@ The drand signature for the target round is folded into the seed as well (§7). 
 The ciphertext seals `{user_input, client_nonce, client_timestamp}` (§3). The server stores and mirrors it without being able to read it.
 Ciphertexts are safe to publish: nobody can decrypt them, including the organiser, until the target round arrives.
 
-**`results.json`** (written automatically after the draw)
+**`events/snapshot.json`** (written at the cutoff, before the beacon exists)
+```
+{ "cutoff_utc": "...", "taken_at": "...", "local_ids": [1,2,3,...],
+  "submissions": [ { "local_id": 1, "ciphertext": "...", "received_at": "..." }, ... ] }
+```
+The roll of who submitted in time. It is fixed before anybody can know which omission
+would be useful, and it is published, which is what lets a verifier check that
+`results.json` accounts for every submission rather than only for the ones it chose to
+list. It is mirrored **before** `results.json`, so a result is never readable without
+the file needed to audit it.
+
+**`results.json`** (written automatically after the draw, exactly once)
 ```
 {
   "round_used": 123456,
   "drand_signature": "...",
   "participating_local_ids": [1,2,3,5,6,7,8,9,10,11,12],
+  "excluded_local_ids": [ { "local_id": 4, "reason": "..." } ],
   "revealed": { "1": { "user_input": 7, "client_nonce": "...", "client_timestamp": "..." }, ... },
   "contributions": { "1": "<sha256 hex>", ... },
   "R": "<256-bit hex>",
   "seed": "<sha256 hex>",
   "permutation": [ ... ],
   "seating": { ... 11 rounds, real names ... },
-  "pantheon_prescript": "...",
-  "pantheon_sync": { "status": "ok", "at": "..." }
+  "pantheon_prescript": "..."
 }
 ```
 
+**Everything in this file is produced by `generate.js`, and nothing else is.** That is
+the property `--verify` rests on: it recomputes the whole file and compares every byte,
+with no field set aside and therefore no footnote about what was really checked. Two
+things that used to live here have moved out for that reason, and the rule they broke is
+worth stating, because it is the rule for anything added later:
+
+> A file cannot make a byte-for-byte claim about a value it could not have computed.
+
+- **`excluded_local_ids` stayed, and moved *into* the computation.** A submission that
+  would not open is not a contribution (§8), so who was excluded is part of the answer to
+  "who took part" and belongs inside the claim. `generate.js` now takes the list as an
+  input, validates it (every id in the roster, none of them also a participant, each with
+  a reason) and emits it in canonical order.
+- **`pantheon_sync` left.** See below.
+
+Note what the byte comparison still cannot do on its own: it recomputes *from* the
+payloads this file lists, so a file that omits a player from both `revealed` and
+`excluded_local_ids` is self-consistent. `events/snapshot.json` is what closes that, and
+`generate.js --verify` performs the check whenever the snapshot is available, saying
+plainly when it is not.
+
+**`events/sync.json`** (written after the Pantheon sync, which is after the draw)
+```
+{ "round_used": 123456, "status": "ok", "at": "...", "event_id": 42, "attempts": 1 }
+```
+The sync outcome is deliberately **not** in `results.json`. It records a network call
+carrying a wall-clock timestamp, made after `results.json` already existed, so a
+`results.json` containing it would have to describe an event that postdates itself and
+could never be recomputed. Keeping it separate is what lets `results.json` be written
+once and verified without qualification. `GET /api/result` joins the two back together
+for the UI; the files are what a verifier uses.
+
 ## 5. End-to-end sequence
 
-1. **Freeze.** Snapshot the Pantheon roster into `roster.json`; choose the drand chain, target round and cutoff; write `protocol.json`; commit with `schedule_template.json` and `generate.js`; git-tag. Announce the tag to the players.
+1. **Freeze.** Snapshot the Pantheon roster into `roster.json`; choose the drand chain, target round and cutoff; write `protocol.json` — the frozen parameters only, §4.1 — and commit it with `schedule_template.json` and `generate.js`; git-tag. Announce the tag to the players. `runtime.json` is not part of this and is not tagged.
 2. **Submission window.** Any time before the cutoff, each player opens the app, signs in with their Pantheon account, enters one number and submits. Their browser seals the number with tlock against the chain and target round from `protocol.json` and posts only the ciphertext.
 3. **Waiting.** The app shows a live view: countdown to the target round, drand chain health, and how many of the twelve have submitted. Nothing is required of the player here.
 4. **Finalisation.** At `submission_cutoff_utc` the server snapshots the submissions received. With ≥ 8 it waits for drand to publish the signature for `target_round`, decrypts, computes the result and publishes it. With < 8 the round is declared void.
@@ -133,12 +236,18 @@ All endpoints are JSON over HTTPS.
   { phase: "open" | "awaiting_round" | "revealing" | "done" | "void",
     submitted_count, quorum, total_slots,
     submitted_local_ids: [...],            // who, not what
-    cutoff_utc, target_round,
-    drand: { latest_round, expected_round_at_cutoff, healthy: bool, last_seen_utc },
+    cutoff_utc, target_round, user_input_max,
+    drand: { chain_hash, chain_public_key,  // frozen: what the browser pins the chain with
+             api,                           // operational (§4.2): where it is reached
+             latest_round, expected_round_at_cutoff, healthy: bool, last_seen_utc },
+    frey_base_url, status_poll_interval_ms, // operational (§4.2)
     server_time_utc }                       // so the countdown never drifts
+
+  Every frozen number the app shows a player comes from here, so the page can never
+  state a rule other than the one the draw is tagged to.
   ```
 - `GET /api/result` — after the draw: the contents of `results.json`, plus the derived per-player statistics the seat-plan explorer renders (see `UI-SPEC.md` §6).
-- `GET /api/events` — Server-Sent Events stream pushing `status` changes, so the waiting view updates without polling. Polling `/api/status` every 15 s is the fallback when the stream drops.
+- `GET /api/events` — Server-Sent Events stream pushing `status` changes, so the waiting view updates without polling. Polling `/api/status` is the fallback when the stream drops; the cadence defaults to 15 s and is served in the status payload as `status_poll_interval_ms` (`runtime.json` → `ui`, §4.2) rather than compiled into the bundle.
 - **Scheduled job** — not an HTTP endpoint. Runs the finalisation of §5 at the cutoff, then the Pantheon sync.
 
 ## 7. `generate.js` specification
@@ -169,10 +278,12 @@ Use rejection sampling in step 5, not modulo, so the shuffle is exactly uniform.
 
 ## 8. Quorum and failure handling
 
-- `quorum = 8` is frozen with everything else and cannot be adjusted once submissions open — an adjustment made after seeing who is missing is itself a manipulable step.
+- `quorum = 8` is frozen with everything else and cannot be adjusted once submissions open — an adjustment made after seeing who is missing is itself a manipulable step. This is the clearest case of the §4.1 test: the value is nothing but a number in a config file, and it is frozen precisely because knowing who is missing would make choosing it a move.
+- The loader refuses a quorum at or below half the field. §8 intends a two-thirds rule, and a minority quorum is not one anyone would have agreed to in advance — which is the only moment at which agreeing to it means anything.
 - The snapshot is taken at exactly `submission_cutoff_utc`. Anything arriving later does not count, even if the drand round has not landed yet. This removes any argument about late arrivals.
 - Falling short of quorum has one pre-agreed remedy: void the round, announce a new `target_round`, and have **all twelve** submit again. Existing ciphertexts are bound to the lapsed round and cannot be reused.
 - **drand late or unreachable at the target time** is a delay, not a failure. The ciphertexts and the round are unchanged, so the outcome is already determined; re-run the job when the beacon is reachable.
+- **A drand mirror going down** is not even a delay. Point `runtime.json` at another one and restart; nothing frozen is touched, because the chain is pinned by `chain_hash` and `chain_public_key` rather than by an address (§4.2).
 
 ## 9. Trust boundary
 

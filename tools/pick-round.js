@@ -20,7 +20,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const QUICKNET = '52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971';
+// No chain hash hardcoded here. The chain is whatever protocol.json is frozen to; a
+// second copy of it in a tool is a second place for it to be wrong. The endpoint used
+// to look the chain up is operational (§4.2) and comes from runtime.json.
+const { loadRuntime } = require('../server/runtime');
 
 function parseArgs(argv) {
   const out = {};
@@ -48,8 +51,12 @@ async function main() {
   const src = fs.existsSync(protocolPath) ? protocolPath : examplePath;
   const protocol = JSON.parse(fs.readFileSync(src, 'utf8'));
 
-  const api = String(args.api || protocol.drand_api || 'https://api.drand.sh').replace(/\/+$/, '');
-  const chainHash = String(args['chain-hash'] || protocol.chain_hash || QUICKNET);
+  const runtime = loadRuntime(path.join(ROOT, 'data'), process.env);
+  const api = String(args.api || runtime.drand.api).replace(/\/+$/, '');
+  const chainHash = String(args['chain-hash'] || protocol.chain_hash || '');
+  if (!/^[0-9a-f]{64}$/.test(chainHash)) {
+    throw new Error('no chain_hash in protocol.json — fill it in (or pass --chain-hash) before picking a round');
+  }
 
   const info = await fetch(`${api}/${chainHash}/info`).then((r) => {
     if (!r.ok) throw new Error(`${api}/${chainHash}/info -> HTTP ${r.status}`);
@@ -99,7 +106,8 @@ async function main() {
     protocol.submission_cutoff_utc = cutoff;
     protocol.chain_hash = chainHash;
     protocol.chain_public_key = info.public_key;
-    protocol.drand_api = api;
+    // Deliberately NOT written: the endpoint this was looked up through is operational
+    // (§4.2) and does not belong in a frozen file. config.js rejects it if it appears.
     fs.writeFileSync(protocolPath, JSON.stringify(protocol, null, 2) + '\n');
     console.log(`\n  written to data/protocol.json (target_round, submission_cutoff_utc, chain_hash, chain_public_key)`);
     console.log('  now re-read it, then freeze and tag per RUNBOOK step 8.');

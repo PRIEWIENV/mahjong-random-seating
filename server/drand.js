@@ -11,12 +11,9 @@
  * something to paper over by taking the first answer.
  */
 
-const DEFAULT_MIRRORS = [
-  'https://api.drand.sh',
-  'https://api2.drand.sh',
-  'https://api3.drand.sh',
-  'https://drand.cloudflare.com',
-];
+// The mirror set is operational, not frozen (§4.2), so it is configured in
+// runtime.json and defaulted there rather than duplicated here.
+const { DEFAULTS } = require('./runtime');
 
 class DrandError extends Error {}
 
@@ -34,13 +31,14 @@ async function getJson(url, timeoutMs = 10_000) {
 
 class Drand {
   /**
-   * @param {string} chainHash 64 hex chars
-   * @param {string[]} mirrors base URLs; the protocol's drand_api is put first
+   * @param {string} chainHash 64 hex chars, from the frozen protocol.json
+   * @param {string[]} mirrors base URLs, from runtime.json; the configured api goes first
    */
   constructor(chainHash, mirrors = []) {
     this.chainHash = chainHash;
     const seen = new Set();
-    this.mirrors = [...mirrors, ...DEFAULT_MIRRORS].filter((m) => {
+    const configured = mirrors.length ? mirrors : DEFAULTS.drand.mirrors;
+    this.mirrors = configured.filter((m) => {
       const u = String(m).replace(/\/+$/, '');
       if (!u || seen.has(u)) return false;
       seen.add(u);
@@ -131,4 +129,4 @@ class Drand {
   }
 }
 
-module.exports = { Drand, DrandError, DEFAULT_MIRRORS };
+module.exports = { Drand, DrandError };

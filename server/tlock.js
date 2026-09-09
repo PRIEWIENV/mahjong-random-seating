@@ -16,6 +16,8 @@
  * moment earlier than by anyone else. Encryption happens in the player's browser.
  */
 
+const { DEFAULTS } = require('./runtime');
+
 let _mod = null;
 
 async function mod() {
@@ -39,17 +41,23 @@ async function mod() {
 }
 
 /**
- * A chain client bound to the exact chain named in protocol.json.
+ * A chain client bound to the exact chain named in the frozen protocol.json, reached
+ * through whatever endpoint runtime.json currently points at.
  *
  * BOTH chainHash and publicKey go into chainVerificationParams. drand-client's
  * isValidInfo() checks them together (`hash === … && public_key === …`), so passing
  * only the hash leaves publicKey undefined, the comparison fails against every real
- * chain, and the tempting "fix" is to drop verification altogether. Pinning both is
- * what makes a hostile drand_api an unusable attack.
+ * chain, and the tempting "fix" is to drop verification altogether.
+ *
+ * Pinning both is also precisely why the endpoint itself need not be frozen (§4.1): a
+ * swapped or hostile drand.api cannot substitute a chain, only fail loudly.
+ *
+ * @param {{protocol: object, runtime?: object}} cfg
  */
-async function chainClient(protocol) {
+async function chainClient(cfg) {
+  const { protocol, runtime } = cfg;
   const m = await mod();
-  const base = String(protocol.drand_api).replace(/\/+$/, '');
+  const base = String(runtime?.drand?.api || DEFAULTS.drand.api).replace(/\/+$/, '');
   const params = { chainHash: protocol.chain_hash, publicKey: protocol.chain_public_key };
   const chain = new m.HttpCachingChain(`${base}/${protocol.chain_hash}`, {
     chainVerificationParams: params,
@@ -62,9 +70,9 @@ async function chainClient(protocol) {
 const MAX_PAYLOAD_BYTES = 512;
 
 /** Encrypt one payload for `round`. Used by the test harness; players do this in-browser. */
-async function encryptPayload(payload, round, protocol) {
+async function encryptPayload(payload, round, cfg) {
   const m = await mod();
-  const client = await chainClient(protocol);
+  const client = await chainClient(cfg);
   const json = JSON.stringify({
     user_input: payload.user_input,
     client_nonce: payload.client_nonce,
@@ -80,9 +88,10 @@ async function encryptPayload(payload, round, protocol) {
  * seal anything at all, and generate.js must never be handed a payload it will only
  * reject after the round has already been consumed.
  */
-async function decryptPayload(ciphertext, protocol) {
+async function decryptPayload(ciphertext, cfg) {
+  const { protocol } = cfg;
   const m = await mod();
-  const client = await chainClient(protocol);
+  const client = await chainClient(cfg);
   const plaintext = await m.timelockDecrypt(ciphertext, client);
   const buf = Buffer.from(plaintext);
   if (buf.length > MAX_PAYLOAD_BYTES) {
@@ -95,7 +104,9 @@ async function decryptPayload(ciphertext, protocol) {
   } catch {
     throw new Error('decrypted payload is not JSON');
   }
-  const max = Number.isInteger(protocol.user_input_max) ? protocol.user_input_max : 255;
+  // No fallback: config.js requires user_input_max, so an absent one means this was
+  // handed something that never went through validation.
+  const max = protocol.user_input_max;
   if (!Number.isInteger(obj.user_input) || obj.user_input < 0 || obj.user_input > max) {
     throw new Error(`user_input must be an integer in 0..${max}`);
   }
