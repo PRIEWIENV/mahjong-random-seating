@@ -44,6 +44,13 @@ npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
 ```
 
+`.github/workflows/reproducibility.yml` runs the first three on every push, on Linux and
+on Windows with `core.autocrlf=true`, plus `build-client.js --check` — the rebuild from
+source that `--verify-hash` cannot stand in for, because it needs esbuild. It runs them on
+a clone nobody has touched, which is the point: the checkout bug in
+[`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) §6d could not appear in the
+tree where the files were written. `e2e` is not in it — live drand, three minutes.
+
 To actually run the app you need `data/roster.json` and `data/protocol.json`; the
 server refuses to start without them, and copying the `.example` files is not enough
 (`target_round: 0` is rejected on purpose).

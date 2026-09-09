@@ -1,0 +1,85 @@
+# The checks that only mean something away from the machine the files were written on.
+#
+# Every claim this project makes to a participant is a claim about bytes: the bundle that
+# handled your number hashes to the digest in the freeze commit, the result file follows
+# from the published ciphertexts, the template has the invariants it says it has. All of
+# those passed for months in the working tree — the one place a checkout bug cannot
+# appear. A fresh clone on Windows produced a different public/app.js (347738 bytes, 21
+# CRs, against a 347717-byte blob) and --verify-hash refused it, which reads as tampering
+# rather than as a line-ending setting. See docs/IMPLEMENTATION_NOTES.md §6d.
+#
+# So this runs on a clone nobody has touched, on both line-ending regimes, and the
+# Windows job deliberately turns core.autocrlf back on: with .gitattributes doing its job
+# that is a passing configuration, and if the rules are ever narrowed or deleted, this is
+# the job that goes red.
+#
+# What is not here: test/e2e.js. It talks to live drand and waits out a real round, so it
+# is a command someone runs (`npm run e2e`), not a gate on a commit.
+
+name: reproducibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      # Before the checkout, or it has nothing to act on. This is the Windows default and
+      # the configuration that broke the digests; the point of the job is that it no
+      # longer can.
+      - name: Restore the line-ending setting that broke the digests
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf true
+
+      - uses: actions/checkout@v4
+
+      # Node 24, not the engines floor: server/db.js requires node:sqlite unflagged,
+      # which 22.x does not do.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # What the VPS runs, and what a participant runs. Needs nothing but the checkout,
+      # so it goes first: if the bytes arrived wrong, nothing after this is meaningful.
+      - name: The committed bundle matches its committed hash
+        run: node tools/build-client.js --verify-hash
+
+      # What --verify-hash cannot tell you: that the hash was computed from this source.
+      # Needs esbuild, so it belongs here rather than on the deployment box.
+      - name: The committed bundle rebuilds from source, byte for byte
+        run: node tools/build-client.js --check
+
+      - name: The schedule template's invariants re-derive
+        run: node tools/verify-template.js
+
+      - run: npm test
+
+      # --check builds to a scratch name and deletes it; nothing else in this job writes.
+      # A dirty tree here means a step had a side effect it was not supposed to have.
+      - name: The checks left the tree untouched
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the checks modified the working tree"
+            git status --porcelain
+            exit 1
+          fi

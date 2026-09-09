@@ -364,7 +364,13 @@ hashes to its committed digest, and that no byte-pinned artefact contains a CR.
 
 The general lesson is worth keeping: a reproducibility claim that has never been checked
 from a fresh clone has not been checked. Every verification in this project passed in the
-tree where the files were written, which is the one place the bug could not appear.
+tree where the files were written, which is the one place the bug could not appear. So
+that check is now somebody's job rather than nobody's:
+`.github/workflows/reproducibility.yml` runs `--verify-hash`, `--check`, the template
+invariants and the unit tests on a fresh clone, on Linux and on Windows with
+`core.autocrlf=true` restored on purpose. Removing `.gitattributes` on that branch
+reproduces the failure exactly — 347738 bytes, 21 CRs, digest `89fd10…`, two red tests —
+which is what makes the job worth the minute it costs.
 
 ## 7. The Pantheon boundary, and what is *not* verified
 
