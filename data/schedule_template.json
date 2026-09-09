@@ -1,0 +1,404 @@
+{
+  "version": "1.0",
+  "description": "Fixed reference seating template on 12 abstract points (0-11). Real players are mapped onto these points by the protocol permutation pi.",
+  "n_players": 12,
+  "n_rounds": 11,
+  "n_tables": 3,
+  "seat_order": [
+    "E",
+    "S",
+    "W",
+    "N"
+  ],
+  "seat_order_cn": [
+    "东",
+    "南",
+    "西",
+    "北"
+  ],
+  "seat_geometry": "Seats are listed counter-clockwise E->S->W->N. Opposite pairs are (E,W) and (S,N); the upper-hand (shangjia) of seat i is seat i-1 in this order.",
+  "verified_properties": {
+    "c2_same_table_per_pair": 3,
+    "c3_seat_distribution_per_point": [
+      3,
+      3,
+      3,
+      2
+    ],
+    "c4_table_distribution_target": [
+      4,
+      4,
+      3
+    ],
+    "c4_squared_deviation_cost": 18,
+    "c4_deviating_points": [
+      4,
+      8,
+      10
+    ],
+    "c4_deviating_pattern": [
+      5,
+      3,
+      3
+    ],
+    "c4_note": "A cost of 18 (exactly three points at {5,3,3}) is the proven global minimum: GBTD(4,3) does not exist, and of the five non-isomorphic resolvable 2-(12,4,3) designs (Morales & Velarde 2001) only one admits condition 5 at all.",
+    "c5_opposite_per_pair": 1,
+    "c6_perfect_pairs": 55,
+    "c6_max_possible": 66,
+    "c6_note": "Proven optimal (CP-SAT, objective == bound) jointly over partner-pairing and seat orientation for the unique feasible design."
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 0,
+            "S": 1,
+            "W": 2,
+            "N": 3
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 9,
+            "S": 8,
+            "W": 10,
+            "N": 11
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 5,
+            "S": 6,
+            "W": 7,
+            "N": 4
+          }
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 5,
+            "S": 10,
+            "W": 4,
+            "N": 11
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 0,
+            "S": 2,
+            "W": 8,
+            "N": 1
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 3,
+            "S": 7,
+            "W": 6,
+            "N": 9
+          }
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 6,
+            "S": 4,
+            "W": 0,
+            "N": 3
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 8,
+            "S": 5,
+            "W": 7,
+            "N": 1
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 10,
+            "S": 9,
+            "W": 2,
+            "N": 11
+          }
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 7,
+            "S": 11,
+            "W": 4,
+            "N": 2
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 3,
+            "S": 8,
+            "W": 9,
+            "N": 6
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 1,
+            "S": 5,
+            "W": 0,
+            "N": 10
+          }
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 1,
+            "S": 9,
+            "W": 7,
+            "N": 5
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 6,
+            "S": 11,
+            "W": 2,
+            "N": 0
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 4,
+            "S": 3,
+            "W": 10,
+            "N": 8
+          }
+        }
+      ]
+    },
+    {
+      "round": 6,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 11,
+            "S": 8,
+            "W": 3,
+            "N": 5
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 7,
+            "S": 0,
+            "W": 6,
+            "N": 10
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 9,
+            "S": 2,
+            "W": 1,
+            "N": 4
+          }
+        }
+      ]
+    },
+    {
+      "round": 7,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 10,
+            "S": 6,
+            "W": 1,
+            "N": 9
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 4,
+            "S": 7,
+            "W": 8,
+            "N": 2
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 5,
+            "S": 3,
+            "W": 11,
+            "N": 0
+          }
+        }
+      ]
+    },
+    {
+      "round": 8,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 8,
+            "S": 0,
+            "W": 9,
+            "N": 4
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 1,
+            "S": 7,
+            "W": 11,
+            "N": 3
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 2,
+            "S": 6,
+            "W": 5,
+            "N": 10
+          }
+        }
+      ]
+    },
+    {
+      "round": 9,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 6,
+            "S": 2,
+            "W": 5,
+            "N": 8
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 3,
+            "S": 4,
+            "W": 10,
+            "N": 1
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 9,
+            "S": 11,
+            "W": 0,
+            "N": 7
+          }
+        }
+      ]
+    },
+    {
+      "round": 10,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 2,
+            "S": 10,
+            "W": 3,
+            "N": 7
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 0,
+            "S": 4,
+            "W": 5,
+            "N": 9
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 11,
+            "S": 1,
+            "W": 6,
+            "N": 8
+          }
+        }
+      ]
+    },
+    {
+      "round": 11,
+      "tables": [
+        {
+          "table": 1,
+          "seats": {
+            "E": 4,
+            "S": 1,
+            "W": 11,
+            "N": 6
+          }
+        },
+        {
+          "table": 2,
+          "seats": {
+            "E": 2,
+            "S": 3,
+            "W": 9,
+            "N": 5
+          }
+        },
+        {
+          "table": 3,
+          "seats": {
+            "E": 10,
+            "S": 0,
+            "W": 8,
+            "N": 7
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+[Unit]
+Description=Mahjong seating relay (accepts tlock ciphertexts)
+Documentation=file:///opt/mahjong/app/docs/PROTOCOL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mahjong
+Group=mahjong
+WorkingDirectory=/opt/mahjong/app
+EnvironmentFile=/opt/mahjong/app/.env
+ExecStart=/usr/bin/node server/server.js
+Restart=always
+RestartSec=3
+
+# The relay holds nothing that would let anyone decrypt early, but it does hold the
+# mirroring PAT, so give it as little of the machine as it can work with.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mahjong/app/var /opt/mahjong/app/events
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

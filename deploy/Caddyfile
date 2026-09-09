@@ -1,0 +1,34 @@
+# Caddy in front of the app (PROTOCOL.md §10).
+#
+# Replace example.com with the real domain. Caddy obtains and renews TLS on its own;
+# the app itself only ever listens on 127.0.0.1, and Pantheon is reached over localhost.
+
+example.com {
+	encode gzip
+
+	log {
+		output file /var/log/caddy/mahjong.log
+		format json
+	}
+
+	# Server-Sent Events must not be buffered or the waiting stage stops updating and
+	# silently falls back to 15 s polling. flush_interval -1 disables response buffering.
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1
+	}
+
+	header {
+		# The submission stage runs the vendored tlock bundle and talks to drand. No CDN
+		# is allowed: the code that handles a player's plaintext number is part of the
+		# freeze, so it must come from this origin and nowhere else.
+		#
+		# connect-src also needs the Frey base URL, because PANTHEON-INTEGRATION.md §2
+		# has the BROWSER authenticate against Pantheon directly — add it explicitly:
+		#   connect-src 'self' https://your-pantheon.example https://api.drand.sh ...
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.drand.sh https://api2.drand.sh https://api3.drand.sh https://drand.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

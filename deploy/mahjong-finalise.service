@@ -1,0 +1,22 @@
+[Unit]
+Description=Mahjong seating finalisation (PROTOCOL.md §4 step 4)
+Documentation=file:///opt/mahjong/app/docs/PROTOCOL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mahjong
+Group=mahjong
+WorkingDirectory=/opt/mahjong/app
+EnvironmentFile=/opt/mahjong/app/.env
+# --no-wait: return immediately if the round has not landed. The timer retries, so
+# the job never sits holding a connection open, and a drand outage is just a delay.
+ExecStart=/usr/bin/node server/finalise.js --no-wait
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mahjong/app/var /opt/mahjong/app/events /opt/mahjong/app
+RestrictAddressFamilies=AF_INET AF_INET6

@@ -1,0 +1,27 @@
+{
+  "name": "mahjong-random-seating",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Timelock-randomised seating draw for 12 players (see docs/PROTOCOL.md)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "node tools/build-client.js",
+    "serve": "node server/server.js",
+    "dev": "node tools/build-client.js --watch",
+    "finalise": "node server/finalise.js",
+    "verify-template": "node tools/verify-template.js",
+    "test": "node --test test/*.test.js",
+    "e2e": "node test/e2e.js"
+  },
+  "dependencies": {
+    "tlock-js": "0.9.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

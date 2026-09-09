@@ -1,0 +1,22 @@
+# Must never be committed: Pantheon admin credentials and backend secrets
+secrets/
+*.env
+.env*
+
+# Note: roster.json and protocol.json MUST be committed and tagged — they are part of the
+# public commitment. Do not add them here.
+
+# Build and runtime artefacts
+node_modules/
+# SQLite state and scratch output. Losing var/ loses nothing that matters: every
+# ciphertext is also mirrored into the repository as it arrives.
+var/
+# Written by the draw itself; committed only as part of publishing a finished result.
+events/
+decrypted.json
+my-results.json
+independent.json
+
+# Note: public/app.js, public/app.css and public/app.js.sha256 MUST be committed. The
+# submission stage is where plaintext numbers exist, so the code running there is part
+# of the freeze.

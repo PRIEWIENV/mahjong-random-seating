@@ -1,0 +1,392 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+
+const { createServer } = require('../server/server');
+const { load } = require('../server/config');
+const { Store } = require('../server/db');
+const { StubPantheon } = require('../server/pantheon');
+const { makeDataDir, fakeCiphertext, cleanup, ROOT } = require('./helpers');
+
+const QUIET = { info() {}, warn() {}, error() {} };
+
+async function boot(opts = {}) {
+  const fx = makeDataDir({ protocol: opts.protocol });
+  const cfg = load({ dataDir: fx.dataDir });
+  cfg.root = fx.dir; // keep events/ out of the working tree
+  const store = new Store(':memory:');
+  const mirrored = [];
+  const mirror = { enabled: false, enqueue: (p, c) => mirrored.push({ p, c }), flush: async () => {}, drain: async () => true };
+  const pantheon = new StubPantheon({
+    roster: fx.roster,
+    // A genuinely valid Pantheon account that is NOT in the event — UI-SPEC §3's
+    // second failure message only exists if the fake can represent this case.
+    extraAccounts: [{ person_id: 9999, auth_token: 'token-9999' }],
+  });
+  const { server, hub } = createServer({
+    cfg, store, mirror, pantheon,
+    publicDir: path.join(ROOT, 'public'),
+    now: opts.now, rateLimit: opts.rateLimit,
+    drand: { latest: async () => ({ round: 123 }) },
+    drandPollMs: 0,
+    log: QUIET,
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const call = async (p, init = {}) => {
+    const res = await fetch(base + p, init);
+    return { status: res.status, headers: res.headers, body: await res.json().catch(() => null) };
+  };
+  const signIn = async (personId) => {
+    const res = await fetch(base + '/api/session', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ person_id: personId, auth_token: `token-${personId}` }),
+    });
+    const body = await res.json().catch(() => null);
+    const setCookie = res.headers.getSetCookie?.()[0];
+    return { status: res.status, body, cookie: setCookie ? setCookie.split(';')[0] : null };
+  };
+
+  return {
+    base, fx, cfg, store, mirrored, pantheon, hub, call, signIn,
+    get: (p, cookie) => call(p, cookie ? { headers: { cookie } } : {}),
+    submit: (cookie, ciphertext) => call('/api/submit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+      body: JSON.stringify({ ciphertext }),
+    }),
+    async close() {
+      await new Promise((r) => server.close(r));
+      store.close();
+      cleanup(fx.dir);
+    },
+  };
+}
+
+const ct = (protocol) => fakeCiphertext(protocol.target_round, protocol.chain_hash);
+
+// ---------------------------------------------------------------------------
+// sign-in (§6, PANTHEON-INTEGRATION.md §2)
+// ---------------------------------------------------------------------------
+
+test('a registered account signs in and gets an httpOnly cookie', async () => {
+  const s = await boot();
+  const r = await s.signIn(1001);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.local_id, 1);
+  const setCookie = r.cookie;
+  assert.ok(setCookie.startsWith('mjs_session='));
+  await s.close();
+});
+
+test('the session cookie is httpOnly and SameSite=Strict', async () => {
+  const s = await boot();
+  const res = await fetch(s.base + '/api/session', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ person_id: 1001, auth_token: 'token-1001' }),
+  });
+  const raw = res.headers.getSetCookie()[0];
+  assert.match(raw, /HttpOnly/i);
+  assert.match(raw, /SameSite=Strict/i);
+  await s.close();
+});
+
+test('wrong credentials and not-registered are DIFFERENT answers (UI-SPEC §3)', async () => {
+  const s = await boot();
+  const bad = await s.call('/api/session', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ person_id: 1001, auth_token: 'wrong' }),
+  });
+  assert.equal(bad.status, 401);
+  assert.equal(bad.body.error, 'bad_credentials');
+  assert.match(bad.body.message, /did not recognise/);
+
+  // Valid Pantheon account, simply not in the event.
+  const outsider = await s.signIn(9999);
+  assert.equal(outsider.status, 403);
+  assert.equal(outsider.body.error, 'not_registered');
+  assert.match(outsider.body.message, /isn't registered for this event/);
+
+  assert.notEqual(bad.body.message, outsider.body.message);
+  await s.close();
+});
+
+test('an account in live Pantheon but not in the frozen roster is refused', async () => {
+  // PANTHEON-INTEGRATION.md §2: the frozen check is what stops a roster edit made
+  // after the freeze from quietly enlarging the field of twelve.
+  const s = await boot();
+  s.pantheon.registered.push({ person_id: 4242, title: 'Added later', local_id: 13 });
+  s.pantheon.accounts.set(4242, 'token-4242');
+  const r = await s.signIn(4242);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.error, 'not_registered');
+  await s.close();
+});
+
+test('an account in the frozen roster but removed from live Pantheon is refused', async () => {
+  const s = await boot();
+  s.pantheon.registered = s.pantheon.registered.filter((p) => p.person_id !== 1001);
+  const r = await s.signIn(1001);
+  assert.equal(r.status, 403);
+  await s.close();
+});
+
+test('the server never receives a password field', async () => {
+  // §2: "Do not let this app handle Pantheon passwords." Sending one must not help.
+  const s = await boot();
+  const r = await s.call('/api/session', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ person_id: 1001, email: 'a@b.c', password: 'hunter2' }),
+  });
+  assert.equal(r.status, 400, 'a password instead of an auth_token must not authenticate');
+  await s.close();
+});
+
+// ---------------------------------------------------------------------------
+// /api/me and /api/submit
+// ---------------------------------------------------------------------------
+
+test('/api/me needs a session and reports submitted state', async () => {
+  const s = await boot();
+  assert.equal((await s.get('/api/me')).status, 401);
+  const { cookie } = await s.signIn(1003);
+  const me = await s.get('/api/me', cookie);
+  assert.equal(me.status, 200);
+  assert.deepEqual(me.body, { local_id: 3, title: s.fx.roster.players[2].title, submitted: false });
+
+  assert.equal((await s.submit(cookie, ct(s.cfg.protocol))).status, 201);
+  assert.equal((await s.get('/api/me', cookie)).body.submitted, true);
+  await s.close();
+});
+
+test('submitting without a session is refused', async () => {
+  const s = await boot();
+  const r = await s.submit(null, ct(s.cfg.protocol));
+  assert.equal(r.status, 401);
+  await s.close();
+});
+
+test('a second submission from the same player is refused', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1005);
+  assert.equal((await s.submit(cookie, ct(s.cfg.protocol))).status, 201);
+  const second = await s.submit(cookie, ct(s.cfg.protocol));
+  assert.equal(second.status, 409);
+  assert.equal(second.body.error, 'already_submitted');
+  assert.equal((await s.get('/api/status')).body.submitted_count, 1);
+  await s.close();
+});
+
+test('concurrent duplicate submissions store exactly one', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1007);
+  const rs = await Promise.all(Array.from({ length: 8 }, () => s.submit(cookie, ct(s.cfg.protocol))));
+  assert.equal(rs.filter((r) => r.status === 201).length, 1);
+  assert.equal((await s.get('/api/status')).body.submitted_count, 1);
+  await s.close();
+});
+
+test('a ciphertext for the wrong round is refused at submission time', async () => {
+  // §8 counts submissions, not valid ones. Caught at the door, it is a reload; caught
+  // at finalisation, that player can no longer resubmit.
+  const s = await boot();
+  const { cookie } = await s.signIn(1001);
+  const r = await s.submit(cookie, fakeCiphertext(s.cfg.protocol.target_round + 1, s.cfg.protocol.chain_hash));
+  assert.equal(r.status, 400);
+  assert.equal(r.body.error, 'bad_ciphertext');
+  assert.equal((await s.get('/api/status')).body.submitted_count, 0);
+  await s.close();
+});
+
+test('§8: submissions at or after the cutoff are refused', async () => {
+  let now = Date.now();
+  const s = await boot({ protocol: { submission_cutoff_utc: new Date(now + 1000).toISOString() }, now: () => now });
+  const { cookie } = await s.signIn(1001);
+  now += 5000;
+  const r = await s.submit(cookie, ct(s.cfg.protocol));
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'closed');
+  await s.close();
+});
+
+// ---------------------------------------------------------------------------
+// §9 non-negotiable: what anyone submitted is never exposed before the reveal
+// ---------------------------------------------------------------------------
+
+test('/api/status reports who submitted, never what', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1002);
+  await s.submit(cookie, ct(s.cfg.protocol));
+  const { status, body } = await s.get('/api/status');
+  assert.equal(status, 200);
+  assert.deepEqual(body.submitted_local_ids, [2]);
+  const raw = JSON.stringify(body);
+  for (const leak of ['ciphertext', 'user_input"', 'client_nonce', 'AGE ENCRYPTED', 'person_id']) {
+    assert.ok(!raw.includes(leak), `/api/status leaked ${leak}`);
+  }
+  await s.close();
+});
+
+test('no endpoint returns a ciphertext before the reveal', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1002);
+  await s.submit(cookie, ct(s.cfg.protocol));
+  for (const p of ['/api/status', '/api/me', '/api/result']) {
+    const r = await s.get(p, cookie);
+    const raw = JSON.stringify(r.body || {});
+    assert.ok(!raw.includes('AGE ENCRYPTED'), `${p} leaked a ciphertext`);
+    assert.ok(!raw.includes('client_nonce'), `${p} leaked a nonce`);
+  }
+  await s.close();
+});
+
+test('response headers carry no submission data', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1002);
+  const res = await fetch(s.base + '/api/submit', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie },
+    body: JSON.stringify({ ciphertext: ct(s.cfg.protocol) }),
+  });
+  for (const [k, v] of res.headers) {
+    assert.ok(!/nonce|user_input|ciphertext/i.test(`${k}${v}`), `header ${k} leaked something`);
+  }
+  await s.close();
+});
+
+// ---------------------------------------------------------------------------
+// status shape and phases
+// ---------------------------------------------------------------------------
+
+test('/api/status carries everything the waiting view needs (§6)', async () => {
+  const s = await boot();
+  const { body } = await s.get('/api/status');
+  for (const k of ['phase', 'submitted_count', 'quorum', 'total_slots', 'submitted_local_ids',
+                   'cutoff_utc', 'target_round', 'drand', 'server_time_utc']) {
+    assert.ok(k in body, `missing ${k}`);
+  }
+  for (const k of ['latest_round', 'healthy', 'last_seen_utc']) assert.ok(k in body.drand, `drand.${k} missing`);
+  await s.close();
+});
+
+test('phase goes open -> void below quorum and open -> awaiting_round at or above it', async () => {
+  let now = Date.now();
+  const s = await boot({ protocol: { submission_cutoff_utc: new Date(now + 1000).toISOString() }, now: () => now });
+  for (let i = 1; i <= 7; i++) {
+    const { cookie } = await s.signIn(1000 + i);
+    await s.submit(cookie, ct(s.cfg.protocol));
+  }
+  assert.equal((await s.get('/api/status')).body.phase, 'open');
+  now += 5000;
+  assert.equal((await s.get('/api/status')).body.phase, 'void');
+
+  let now2 = Date.now();
+  const s2 = await boot({ protocol: { submission_cutoff_utc: new Date(now2 + 1000).toISOString() }, now: () => now2 });
+  for (let i = 1; i <= 8; i++) {
+    const { cookie } = await s2.signIn(1000 + i);
+    await s2.submit(cookie, ct(s2.cfg.protocol));
+  }
+  now2 += 5000;
+  assert.equal((await s2.get('/api/status')).body.phase, 'awaiting_round');
+  await s.close(); await s2.close();
+});
+
+// ---------------------------------------------------------------------------
+// mirroring, SSE, static, misc
+// ---------------------------------------------------------------------------
+
+test('the ciphertext is mirrored to events/submissions/<local_id>.json (§4)', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1004);
+  await s.submit(cookie, ct(s.cfg.protocol));
+  assert.equal(s.mirrored.length, 1);
+  assert.equal(s.mirrored[0].p, 'events/submissions/4.json');
+  const rec = JSON.parse(s.mirrored[0].c);
+  assert.equal(rec.local_id, 4);
+  assert.ok(rec.ciphertext.startsWith('-----BEGIN AGE'));
+  await s.close();
+});
+
+test('the SSE stream opens and pushes a status frame', async () => {
+  const s = await boot();
+  const res = await fetch(s.base + '/api/events', { headers: { accept: 'text/event-stream' } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/event-stream/);
+  const reader = res.body.getReader();
+  const chunk = new TextDecoder().decode((await reader.read()).value);
+  assert.match(chunk, /retry:|event: status/);
+  await reader.cancel();
+  await s.close();
+});
+
+test('the frozen public files are served', async () => {
+  const s = await boot();
+  for (const f of ['/protocol.json', '/roster.json', '/schedule_template.json']) {
+    assert.equal((await s.get(f)).status, 200, `${f} should be served`);
+  }
+  await s.close();
+});
+
+test('roster.json exposes no secrets — there are none to expose', async () => {
+  const s = await boot();
+  const { body } = await s.get('/roster.json');
+  for (const p of body.players) {
+    assert.deepEqual(Object.keys(p).sort(), ['local_id', 'person_id', 'title']);
+  }
+  await s.close();
+});
+
+test('an unknown path serves the SPA rather than 404 (one route, §8/UI-SPEC §2)', async () => {
+  const s = await boot();
+  const res = await fetch(s.base + '/anything?player=3');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  await s.close();
+});
+
+test('path traversal out of public/ is refused', async () => {
+  const s = await boot();
+  for (const p of ['/../package.json', '/../../etc/passwd']) {
+    const res = await fetch(s.base + p);
+    const text = await res.text();
+    assert.ok(!text.includes('"dependencies"'), `${p} leaked package.json`);
+  }
+  await s.close();
+});
+
+test('the dev-authorize stand-in is absent in production', async () => {
+  const prev = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  const s = await boot();
+  const r = await s.call('/api/dev-authorize', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ person_id: 1001 }),
+  });
+  assert.equal(r.status, 404, 'a password-free sign-in shortcut must not exist in production');
+  process.env.NODE_ENV = prev;
+  await s.close();
+});
+
+test('a malformed body is a 400, not a crash', async () => {
+  const s = await boot();
+  const res = await fetch(s.base + '/api/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'not json' });
+  assert.ok(res.status === 400 || res.status === 401);
+  assert.equal((await s.get('/api/status')).status, 200, 'server still healthy');
+  await s.close();
+});
+
+test('the rate limiter caps repeated sign-in attempts', async () => {
+  const s = await boot({ rateLimit: 5 });
+  const codes = [];
+  for (let i = 0; i < 9; i++) {
+    const r = await s.call('/api/session', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ person_id: 1001, auth_token: 'wrong' }),
+    });
+    codes.push(r.status);
+  }
+  assert.ok(codes.includes(429), `expected a 429 among ${codes.join(',')}`);
+  await s.close();
+});

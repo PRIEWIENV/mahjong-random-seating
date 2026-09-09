@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the mahjong seating finalisation job
+
+[Timer]
+# A no-op until submission_cutoff_utc. After the cutoff it takes the snapshot and
+# then keeps retrying until drand publishes the target round, which is also the
+# recovery path for a drand outage.
+OnCalendar=*:0/5
+Persistent=true
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
