@@ -288,6 +288,84 @@ so there is never an open round with no announced target. Restarting a round tha
 merely *open*, because of who has submitted so far, is the manipulable step §8 exists to
 remove, and the reset will not do it.
 
+## 6c. The operational half: a dashboard and a freeze command
+
+RUNBOOK sections B, C and D were prose, and three of their steps had nothing to perform
+them on. Step 13 says to chase whoever has not sealed a number; step 15 says to confirm
+the sync took; PANTHEON-INTEGRATION.md §4 says a failed sync should be "surfaced in the
+admin view" — of which there was none. The freeze itself was a dozen manual actions
+performed once, under time pressure, on the day.
+
+**`server/admin.js`** is the dashboard, at `/admin`, gated by `ADMIN_TOKEN`. Two
+decisions shape it:
+
+- **Read-only.** §9 keeps the finalisation job off HTTP so that nothing an outsider can
+  poke may trigger, retry or re-time the draw. A button here would give that away for a
+  convenience nobody needs: the organiser is already on the box when they run
+  `tools/new-round.js`. Non-GET methods answer 405, and there is a test that says so.
+- **Not part of the frozen bundle.** `public/app.js` is hash-pinned because it handles a
+  player's plaintext number. Nothing here does, and folding it in would change the frozen
+  hash for a reason unrelated to the draw. So it is one server-rendered string with no
+  build step and no dependency.
+
+It shows *when* each player submitted and never *what* — the same rule as everywhere
+else, and this is the easiest place in the codebase to break it by accident, being the
+one screen whose job is to show the organiser more than a player sees. There is a test
+that takes every ciphertext in the database and asserts none of them appears in the page
+or in `/admin/data.json`.
+
+The pre-flight panel uses three levels rather than two, because the two states that
+matter most are neither green nor red on their own: running against the stub, or with
+mirroring off, is correct on a laptop and catastrophic in production. A first draft
+rendered "ok" next to a detail line reading "STUB — authorises anyone the stub knows",
+which is worse than no row at all.
+
+**`tools/freeze.js`** is RUNBOOK steps 8-11 as one command. It reads the roster back out
+of Pantheon and refuses to freeze anything that would only surface later: a seated count
+that is not `total_slots`, a player with no usable `local_id`, one account registered
+twice. The `local_id` case is the sharpest — it blocks the seat-plan sync, and the sync
+runs after the draw, when nothing can be changed.
+
+It also runs the checks that were previously left to memory: the template's proved
+invariants re-derived, the browser bundle **rebuilt from source and diffed** against the
+committed one, and the unit tests. The rebuild has to happen at freeze time and nowhere
+else: it needs esbuild, which the VPS does not have, so the VPS runs `--verify-hash`,
+which compares the committed bundle to its committed hash and therefore cannot tell you
+that hash was computed from different source.
+
+Nothing touches git unless `--tag <name>` is passed. Without it the command prints the
+`git add` and `git tag` lines and exits.
+
+## 6d. The bytes in a checkout were not the bytes that were committed
+
+Found while testing `tools/freeze.js` in a throwaway clone: `build-client.js --check`
+failed there and passed in the working tree, on identical source.
+
+| | bytes | CR | digest |
+|---|---|---|---|
+| the git blob | 347717 | 0 | `52c9ed…` (matches `app.js.sha256`) |
+| a fresh clone's checkout | 347738 | 21 | `89fd10…` |
+
+`core.autocrlf=true` — the Windows default — rewrites line endings on checkout. The
+repository had no `.gitattributes`, so every byte-pinned artefact came out of a clone
+with different bytes and therefore a different digest.
+
+This is not cosmetic. `--verify-hash` is the command `deploy/README.md` has the VPS run,
+and it is what a participant runs to confirm that the code which handled their number is
+the code that was tagged. On a fresh Windows clone it failed, and a failure there reads
+as tampering rather than as a line-ending setting. The digests the admin dashboard shows
+for `protocol.json`, `roster.json` and `generate.js` had the same problem.
+
+**Resolution.** `.gitattributes` sets `* text=auto eol=lf` and marks the byte-pinned
+artefacts `-text`, which switches off translation entirely so no local `core.autocrlf`
+can reintroduce it. Verified by re-cloning: 347717 bytes, no CR, digest matches.
+`test/checkout.test.js` guards it — it asserts the rules exist, that the committed bundle
+hashes to its committed digest, and that no byte-pinned artefact contains a CR.
+
+The general lesson is worth keeping: a reproducibility claim that has never been checked
+from a fresh clone has not been checked. Every verification in this project passed in the
+tree where the files were written, which is the one place the bug could not appear.
+
 ## 7. The Pantheon boundary, and what is *not* verified
 
 Everything the app needs from Pantheon goes through one interface in
@@ -366,12 +444,16 @@ production.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 131 across generate, encoding, config, roll-call, resume, attempts, API, stats, Pantheon | pass |
+| Unit tests (`npm test`) — 161 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
 | A voided attempt is archived, verifies, and the next attempt opens | passes |
 | Tampering with an archived ciphertext is detected, and blocks the reset | passes |
+| No ciphertext reaches the admin page or its JSON | passes |
+| The freeze refuses a roster that would break the sync after the draw | passes |
+| A fresh clone checks out the bundle byte-identically and its digest matches | passes *(after `.gitattributes`)* |
+| **RUNBOOK B/C/D executed against a real event** | **outstanding — needs Pantheon, a roster and a deployment** |
 | Byte encoding cross-checked by an independent Python implementation | agrees |
 | e2e A2: full journey, sign-in → submit → reveal → result → sync | passes |
 | e2e A3: sign-in gate both ways, with distinguishable refusals | passes |

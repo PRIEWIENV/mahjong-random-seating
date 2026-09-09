@@ -1,0 +1,35 @@
+# Reproducibility, not style.
+#
+# The freeze pins public/app.js and app.css by SHA-256, deploy/README.md has the VPS run
+# `build-client.js --verify-hash` against that pin, and the admin dashboard shows a
+# digest for every frozen artefact. All of that assumes the bytes in a checkout are the
+# bytes that were committed.
+#
+# Git's autocrlf breaks that assumption. Verified on this repository: the blob for
+# public/app.js is 347717 bytes with no CR, and a fresh clone on Windows with default
+# settings checked it out at 347738 bytes with 21 CRs. --verify-hash refused it, which
+# reads as tampering rather than as a line-ending setting — and it would refuse it on the
+# deployment box and in the hands of any participant trying to confirm that the code
+# handling their number is the code that was tagged.
+#
+# So: LF in the repository and in the working tree, everywhere.
+* text=auto eol=lf
+
+# Belt and braces on the files whose exact bytes are the whole point. -text switches off
+# every form of translation, so no local core.autocrlf can reintroduce it.
+#
+# The trade: -text means "these bytes, verbatim, in both directions". It protects a
+# correct file forever, and it will just as faithfully preserve a wrong one — committing
+# an already-CRLF copy bakes CRLF into the blob, and `git add --renormalize` does not
+# touch -text paths. If that happens, fix the working-tree file and commit it.
+# test/checkout.test.js fails loudly on any CR in these, which is how you find out.
+public/app.js        -text
+public/app.css       -text
+public/app.js.sha256 -text
+generate.js          -text
+data/*.json          -text
+
+# Binary, so git never tries in the first place.
+*.png binary
+*.ico binary
+*.woff2 binary

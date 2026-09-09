@@ -22,6 +22,14 @@ chown -R mahjong:mahjong /opt/mahjong
 
 `npm ci --omit=dev` is deliberate: the server needs `tlock-js`, and nothing else.
 
+If `--verify-hash` fails on a **fresh clone**, suspect the checkout before suspecting
+the bundle. Git rewrites line endings on checkout when `core.autocrlf` is on, which is
+the Windows default: the blob is 347717 bytes with no CR and the working copy comes out
+347738 bytes with 21 CRs, and the digest is not the same digest. `.gitattributes` in this
+repository switches that off for every byte-pinned artefact, so a checkout that still
+shows it is one made before that file existed, or one where a local setting overrides it.
+Check with `git check-attr text eol -- public/app.js`.
+
 Note which bundle check runs where. `--verify-hash` compares the committed
 `app.js` + `app.css` against their committed digest and needs no dependencies, which is
 why it is the one that runs here — `--omit=dev` means esbuild is not installed on this
@@ -55,9 +63,22 @@ PANTHEON_ADMIN_PERSON_ID=...
 PANTHEON_ADMIN_TOKEN=...
 ```
 
+```sh
+# The organiser's dashboard. Without this the /admin route does not exist.
+ADMIN_TOKEN=...                      # openssl rand -hex 16
+```
+
 `NODE_ENV=production` matters for more than logging: it marks the session cookie
 `Secure` and makes `/api/dev-authorize` return 404. That endpoint is the development
 stand-in for Frey; it must not exist here.
+
+`ADMIN_TOKEN` gates `/admin`, which shows submission progress, who is still missing, the
+pre-flight checks and the sync outcome. Unset, the route 404s like any other path, so an
+organiser who never configured one has not accidentally published a roster and a
+submission timeline. The page is read-only by design: the draw, the reset and the sync are
+commands run on this box, because §9 keeps anything that could trigger or re-time the draw
+off HTTP. Treat the token like the PAT — it reveals who has submitted and when, which is
+public information anyway, but there is no reason to hand it out.
 
 `data/runtime.json` is the file counterpart of those overrides and is optional in the
 same way. It is gitignored on purpose: nothing in it can change the outcome, and keeping
@@ -115,7 +136,12 @@ Two things in that file are load-bearing:
 curl -s https://your.domain/api/status | jq     # 12 slots, submitted_count 0, phase "open"
 curl -s https://your.domain/protocol.json | jq  # the frozen parameters, as tagged
 curl -s https://your.domain/api/dev-authorize -X POST -d '{}'   # must be 404
+curl -s -o /dev/null -w '%{http_code}\n' https://your.domain/admin   # must be 404
 ```
+
+Then open `/admin?token=…` and read the pre-flight panel. Every row should be green.
+`Mirroring to the repository: DISABLED` and `Pantheon adapter is the STUB` are the two
+that make the deployment unfit to run a real draw.
 
 In that status payload, `drand.chain_hash` and `drand.chain_public_key` must match the
 tagged `protocol.json` exactly — they are what the browser pins the chain with, and the

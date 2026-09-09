@@ -39,7 +39,7 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 131 unit tests, offline, ~5s
+npm test                  # 161 unit tests, offline, ~6s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
 ```
@@ -65,6 +65,17 @@ gitignored, because it is deliberately outside the freeze (`PROTOCOL.md` §4.2).
 flow exercisable without a Pantheon deployment. It also enables a development-only
 sign-in stand-in that is refused under `NODE_ENV=production`.
 
+Set `ADMIN_TOKEN` to put the organiser's dashboard on `/admin?token=…`: submission
+progress and who is still missing, the pre-flight checks, the frozen artefacts'
+fingerprints, the result, the Pantheon sync, and every past attempt. It is read-only, and
+without `ADMIN_TOKEN` the route does not exist at all.
+
+```sh
+ADMIN_TOKEN=$(openssl rand -hex 16) PANTHEON_MODE=stub npm run serve
+node tools/freeze.js                            # RUNBOOK 8-11, checks only
+node tools/freeze.js --write --tag frozen-v1    # ...and commit and tag
+```
+
 ## Layout
 
 ```
@@ -79,6 +90,7 @@ server/
   finalise.js                # the scheduled draw job and the Pantheon sync (§5, §8)
                              # idempotent: never re-draws, never un-publishes a result
   rounds.js                  # voided attempts: archive, verify, and open the next one
+  admin.js                   # the organiser's read-only dashboard (RUNBOOK C/D)
   pantheon.js                # the Pantheon boundary: Twirp client + in-process stub
   config.js                  # loads and validates the frozen artefacts; refuses to start otherwise
   runtime.js                 # the other half: operational settings and their defaults (§4.2)
@@ -103,6 +115,7 @@ tools/
   build-client.js            # builds and hash-pins the browser bundle
   pick-round.js              # target_round and cutoff, kept consistent
   new-round.js               # after a void: verify the archive, then open the next attempt
+  freeze.js                  # RUNBOOK 8-11 as one command: snapshot, check, commit, tag
   decrypt-submissions.js     # participant-side verification
 test/
   *.test.js                  # unit tests, incl. the roll-call against the snapshot

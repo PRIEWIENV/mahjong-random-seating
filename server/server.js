@@ -9,6 +9,7 @@
  *   GET  /api/status    public; everything the waiting view needs
  *   GET  /api/result    after the draw: results.json + precomputed stats
  *   GET  /api/events    SSE stream of status changes
+ *   GET  /admin         the organiser's read-only dashboard, behind ADMIN_TOKEN
  *
  * Node's own http module, no framework: this process is a relay for opaque blobs, and
  * the smaller its dependency tree, the less an auditor has to take on faith.
@@ -24,6 +25,7 @@
  * directly and posts only the resulting token pair (PANTHEON-INTEGRATION.md §2).
  */
 
+const crypto = require('node:crypto');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -38,9 +40,11 @@ const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
 const { readIndex, ROUNDS_DIR } = require('./rounds');
 const { computeStats } = require('./stats');
+const { collect, render } = require('./admin');
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'mjs_session';
+const ADMIN_COOKIE = 'mjs_admin';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -120,6 +124,10 @@ function createServer(opts = {}) {
   const limiter = new RateLimiter(opts.rateLimit ?? cfg.runtime.server.rate_limit_per_minute, opts.rateWindowMs ?? 60_000);
   const nowFn = opts.now || (() => Date.now());
   const secureCookie = opts.secureCookie ?? process.env.NODE_ENV === 'production';
+  // The dashboard exists only when a token is configured. Unset means the route is not
+  // there at all, rather than there and asking for a password: an organiser who never
+  // set one has not accidentally published a roster and a submission timeline.
+  const adminToken = opts.adminToken ?? process.env.ADMIN_TOKEN ?? null;
   const isStub = pantheon.constructor?.name === 'StubPantheon';
 
   // ---- drand health, refreshed in the background --------------------------
@@ -350,6 +358,50 @@ function createServer(opts = {}) {
     return sendJson(res, 404, { error: 'not_yet', phase: phaseOf(cfg, store, nowFn()) });
   }
 
+  // ---- /admin -------------------------------------------------------------
+  //
+  // Read-only, by design. §9 keeps the finalisation job off HTTP so that nothing an
+  // outsider can poke may trigger, retry or re-time the draw; a button here would give
+  // that away for a convenience nobody needs, since the organiser is already on the box
+  // when they run tools/new-round.js.
+  function adminAuthorised(req, url) {
+    if (!adminToken) return false;
+    const supplied = url.searchParams.get('token') || parseCookies(req.headers.cookie)[ADMIN_COOKIE];
+    if (typeof supplied !== 'string' || supplied.length !== adminToken.length) return false;
+    // Constant time, so the page cannot be used as an oracle for guessing the token.
+    return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(adminToken));
+  }
+
+  function admin(req, res, url) {
+    if (!adminAuthorised(req, url)) {
+      // 404, not 401: an unauthenticated probe learns nothing, not even that the page
+      // is here. The organiser has the link; nobody else needs to know it exists.
+      return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+    }
+    const model = collect({
+      cfg, store, status: status(), syncOutcome: syncOutcome(),
+      isStub, mirror, publicDir, now: nowFn(),
+      production: process.env.NODE_ENV === 'production',
+    });
+    if (url.pathname === '/admin/data.json') return sendJson(res, 200, model);
+
+    const headers = {
+      'content-type': 'text/html; charset=utf-8',
+      // Nothing here loads anything, and nothing here should ever be framed or indexed.
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+      'referrer-policy': 'no-referrer',
+      'x-robots-tag': 'noindex, nofollow',
+    };
+    // Move the token out of the URL on first use, so it stops being in the address bar,
+    // in the history, and in any referrer.
+    if (url.searchParams.get('token')) {
+      headers['set-cookie'] =
+        `${ADMIN_COOKIE}=${adminToken}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=43200` +
+        (secureCookie ? '; Secure' : '');
+    }
+    return send(res, 200, render(model), headers);
+  }
+
   // ---- static -------------------------------------------------------------
   function serveFile(res, abs) {
     let data;
@@ -380,6 +432,15 @@ function createServer(opts = {}) {
       }
 
       if (req.method === 'GET' && p === '/api/status') return sendJson(res, 200, status());
+
+      if (req.method === 'GET' && (p === '/admin' || p === '/admin/data.json')) {
+        // Rate-limited like sign-in: the token is the only thing in front of a roster
+        // and a submission timeline.
+        if (!limiter.allow(`admin:${ip}`, nowFn())) {
+          return send(res, 429, 'Too many requests', { 'content-type': 'text/plain; charset=utf-8' });
+        }
+        return admin(req, res, url);
+      }
 
       /**
        * DEV ONLY. PANTHEON-INTEGRATION.md §2 has the browser authenticate against Frey
@@ -478,5 +539,10 @@ if (require.main === module) {
     console.info(`[server] event ${cfg.roster.pantheon_event_id}, ${cfg.protocol.total_slots} slots, ` +
       `quorum ${cfg.protocol.quorum}, round ${cfg.protocol.target_round}, cutoff ${cfg.protocol.submission_cutoff_utc}`);
     console.info(`[server] pantheon: ${pantheon.constructor.name}`);
+    console.info(
+      process.env.ADMIN_TOKEN
+        ? `[server] admin dashboard at /admin?token=… (RUNBOOK C/D)`
+        : '[server] admin dashboard disabled (set ADMIN_TOKEN to enable /admin)'
+    );
   });
 }

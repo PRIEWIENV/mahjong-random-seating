@@ -15,7 +15,8 @@
     "verify-template": "node tools/verify-template.js",
     "test": "node --test test/*.test.js",
     "e2e": "node test/e2e.js",
-    "new-round": "node tools/new-round.js"
+    "new-round": "node tools/new-round.js",
+    "freeze": "node tools/freeze.js"
   },
   "dependencies": {
     "tlock-js": "0.9.0"

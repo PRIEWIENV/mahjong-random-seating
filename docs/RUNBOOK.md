@@ -15,23 +15,49 @@ Ordered — do not skip steps. Steps marked with a lock enter the frozen state; 
 
 ## B. Freeze
 
-8. In Pantheon: make sure the event is marked prescripted, exactly the right twelve players are registered, and every one of them has a `local_id` (`UpdatePlayersLocalIds`).
-9. Snapshot that roster into `data/roster.json` — `pantheon_event_id`, and the twelve `{local_id, person_id, title}`.
-10. Choose the drand quicknet target round, convert it to a UTC timestamp, and fill `data/protocol.json` (`tools/pick-round.js --in 72h --write` sets `target_round`, `submission_cutoff_utc`, `chain_hash` and `chain_public_key` together, so they cannot disagree). Allow a generous window — **72 hours** is a good default — with `quorum: 8` and `user_input_max: 255`.
-    - Check that `protocol.json` contains **only** frozen parameters (`PROTOCOL.md` §4.1). The server refuses to start if an operational key is in there, and names it. Anything operational belongs in `data/runtime.json`, which is not tagged.
-    - Confirm `chain_public_key` is present and is the key `<drand api>/<chain_hash>/info` reports right now. Without it the client cannot tell which chain it is talking to.
-11. 🔒 Commit `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` — those four and no others — git-tag the commit (e.g. `frozen-v1`), and tell the players the tag. `runtime.json` is gitignored and is deliberately not in the tag.
+`node tools/freeze.js` performs steps 9 to 11 and refuses on anything that would only
+surface after the draw. Run it with `--write` to snapshot the roster, and `--tag <name>`
+to commit and tag. Without `--tag` it changes nothing in git and prints the two commands.
+
+8. In Pantheon: mark the event prescripted, register exactly the right twelve players, and give every one of them a `local_id` (`UpdatePlayersLocalIds`). Anyone attending but not playing should be `ignore_seating`.
+9. `node tools/freeze.js` reads that roster back and writes `data/roster.json` from it. It refuses if the seated count is not `total_slots`, if anybody lacks a usable `local_id`, if one account is registered twice, or if a player has no title. Each of those otherwise lands after the draw: a missing `local_id` blocks the seat-plan sync, which runs once the seat plan already exists.
+10. Choose the target round: `node tools/pick-round.js --in 72h --write` sets `target_round`, `submission_cutoff_utc`, `chain_hash` and `chain_public_key` together so they cannot disagree. Allow a generous window — **72 hours** is a good default — with `quorum: 8` and `user_input_max: 255`.
+    - `protocol.json` must contain **only** frozen parameters (`PROTOCOL.md` §4.1). The server refuses to start if an operational key is in there, and names it. Anything operational belongs in `data/runtime.json`, which is not tagged.
+    - `chain_public_key` must be present and must be what `<drand api>/<chain_hash>/info` reports right now. Without it the client cannot tell which chain it is talking to.
+11. 🔒 `node tools/freeze.js --write --tag frozen-v1`. Before it writes anything to git it re-derives every proved invariant of the template, rebuilds the browser bundle from source and diffs it against the committed one, and runs the unit tests. It commits `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` — those four and no others — plus the built bundle and its hash, then tags. `runtime.json` is gitignored and is deliberately not in the tag.
+    - The bundle rebuild is the check that has to happen **here**. It needs esbuild, which the VPS does not have (`npm ci --omit=dev`); the VPS runs `--verify-hash`, which only compares the committed bundle to its committed hash and cannot tell you the hash was computed from different source.
 
 ## C. Submission window
 
-12. Send the players one link — no personal links, no tokens: they sign in with the Pantheon accounts they already have. Tell them three things: one number between 0 and 255, once; you can close the page immediately; here is when the draw happens.
-13. Chase anyone still missing as the cutoff approaches. The waiting view already shows who has not sealed a number, and reveals nothing about anyone's number.
+`ADMIN_TOKEN=... npm run serve` puts the dashboard on `/admin?token=…`. It is read-only:
+the draw, the reset and the sync are commands run on the box, because §9 keeps anything
+that could trigger or re-time the draw off HTTP entirely.
+
+12. Send the players one link — no personal links, no tokens: they sign in with the Pantheon accounts they already have. `tools/freeze.js --tag` prints the announcement to copy, which says the three things that matter: one number between 0 and 255, once; you can close the page immediately; here is when the draw happens, and here is the tag.
+13. Chase anyone still missing as the cutoff approaches. The dashboard's first panel is that list by name, and the player-facing waiting view shows the same counts. Neither reveals anything about anyone's number — only *whether* they submitted, and when.
+    - Watch the pre-flight panel too. `Mirroring to the repository: DISABLED` means nobody but this server is timestamping the ciphertexts, and that third party is what the fairness argument leans on. `Pantheon adapter is the STUB` in production means sign-in is a fake.
 
 ## D. Draw and publication
 
-14. After the cutoff, confirm the job ran, `results.json` was written and pushed, and the result stage renders.
-15. Confirm the Pantheon sync succeeded (`status` in `events/sync.json`, also surfaced by `GET /api/result`, and the prescript visible in Pantheon's admin UI). If it failed, paste `pantheon_prescript` from `results.json` in by hand — do not re-run the draw. A sync failure never touches `results.json`, which is written once and stays authoritative.
-16. Point the players at the result. Anyone inclined to check should be able to reproduce the same plan from public information alone.
+14. After the cutoff, confirm the job ran and `results.json` was written and pushed. The dashboard's result panel shows `round_used`, R, the seed, the permutation and the digest of `results.json`; the result stage renders for players on its own.
+15. Confirm the Pantheon sync succeeded — `status` in `events/sync.json`, shown in the dashboard's sync panel, and the prescript visible in Pantheon's admin UI. If it failed, paste `pantheon_prescript` from `results.json` in by hand and apply it with `WIND_SHUFFLE_MODE_PRESCRIPTED`. **Do not re-run the draw.** A sync failure never touches `results.json`, which is written once and stays authoritative.
+    If `--verify` fails for someone on a fresh clone, have them check the checkout before
+    the draw: `git check-attr text eol -- public/app.js` should report `-text`. Git
+    rewriting line endings changes the bytes of a frozen artefact and therefore its
+    digest, which looks exactly like tampering and is not.
+
+16. Point the players at the result. Anyone inclined to check should be able to reproduce the same plan from public information alone:
+
+    ```sh
+    git checkout frozen-v1
+    node generate.js --verify results.json     # whole file, plus the roll-call
+    python3 tools/verify_template.py data/schedule_template.json
+    ```
+
+    The first compares every byte of `results.json` against a fresh recomputation from
+    the payloads it reveals, and then checks that `events/snapshot.json` accounts for
+    every submission taken at the cutoff. The second re-derives the template's proved
+    properties from the round data rather than trusting the file's own claims.
 
 ## When things go wrong
 

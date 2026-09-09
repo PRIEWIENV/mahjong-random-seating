@@ -89,7 +89,7 @@ Calls that modify event configuration require an administrator account, so the b
 
 The sync happens after the draw is already final and published, so a failure there is an operational nuisance, not a fairness problem — the seat plan in `results.json` is authoritative and reproducible from public data whatever Pantheon says.
 
-Record the sync outcome in `events/sync.json` (**not** in `results.json`, which is written once and must stay byte-for-byte reproducible — `PROTOCOL.md` §4.3), retry a few times with backoff, and if it still fails, surface it in the admin view and fall back to pasting the prescript into Pantheon's own admin UI by hand. Do **not** regenerate or re-draw anything in response to a sync failure.
+Record the sync outcome in `events/sync.json` (**not** in `results.json`, which is written once and must stay byte-for-byte reproducible — `PROTOCOL.md` §4.3), retry a few times with backoff, and if it still fails, surface it in the admin view (`/admin`, gated by `ADMIN_TOKEN`) and fall back to pasting the prescript into Pantheon's own admin UI by hand. Do **not** regenerate or re-draw anything in response to a sync failure.
 
 ## 5. Method reference
 
