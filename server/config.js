@@ -186,11 +186,26 @@ function load(opts = {}) {
   // Not frozen, not tagged, optional (§4.2). Loaded here so every consumer reads both
   // halves of the configuration off one object.
   const runtime = opts.runtime || loadRuntime(dataDir, opts.env || process.env);
-  const roster = validateRoster(readJson(path.join(dataDir, 'roster.json')), protocol.total_slots);
+
+  // rosterOptional exists for tools/freeze.js and for nothing else. Writing
+  // data/roster.json out of Pantheon is what RUNBOOK step 10 does, so the one command
+  // that creates the file cannot also refuse to start without it — before this, a first
+  // freeze stopped at "copy the .example file, fill it in", which is exactly the twelve
+  // rows of retyping the tool exists to remove. Everything else — the server, the
+  // finalisation job, generate.js — takes the strict path, where an absent or malformed
+  // roster is a startup failure.
+  let roster = null;
+  let rosterError = null;
+  try {
+    roster = validateRoster(readJson(path.join(dataDir, 'roster.json')), protocol.total_slots);
+  } catch (err) {
+    if (!opts.rosterOptional) throw err;
+    rosterError = err;
+  }
   const template = validateTemplate(readJson(path.join(dataDir, 'schedule_template.json')), protocol.total_slots);
 
-  const byPersonId = new Map(roster.players.map((p) => [p.person_id, p]));
-  const byLocalId = new Map(roster.players.map((p) => [p.local_id, p]));
+  const byPersonId = new Map((roster?.players || []).map((p) => [p.person_id, p]));
+  const byLocalId = new Map((roster?.players || []).map((p) => [p.local_id, p]));
 
   return {
     root: ROOT,
@@ -198,6 +213,8 @@ function load(opts = {}) {
     protocol,
     runtime,
     roster,
+    // null only under rosterOptional, and then this says why.
+    rosterError,
     template,
     byPersonId,
     byLocalId,

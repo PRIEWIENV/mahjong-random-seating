@@ -28,6 +28,8 @@
  * (§3: "never mixed with the player sign-in path"). Only the sync needs admin rights.
  */
 
+const fs = require('node:fs');
+
 const DEFAULT_TWIRP_PATH = '/twirp/{service}/{method}';
 
 class PantheonError extends Error {
@@ -173,7 +175,11 @@ class StubPantheon {
   constructor({ roster, extraAccounts = [], eventId } = {}) {
     this.eventId = eventId ?? roster?.pantheon_event_id ?? 42;
     this.registered = (roster?.players || []).map((p) => ({
-      person_id: p.person_id, title: p.title, local_id: p.local_id, ignore_seating: false,
+      person_id: p.person_id, title: p.title, local_id: p.local_id,
+      // Carried through rather than forced false: someone attending but not playing is
+      // a case RUNBOOK step 8 names explicitly, and a stub that cannot represent one
+      // cannot rehearse the roster snapshot that has to filter them out.
+      ignore_seating: Boolean(p.ignore_seating),
     }));
     this.accounts = new Map();
     for (const p of this.registered) this.accounts.set(p.person_id, `token-${p.person_id}`);
@@ -217,7 +223,17 @@ function createPantheon(cfg, env = process.env, opts = {}) {
   // misconfigured deployment fails to reach Pantheon rather than quietly authorising
   // everybody against an in-process fake.
   const mode = env.PANTHEON_MODE || 'twirp';
-  if (mode === 'stub') return new StubPantheon({ roster: cfg?.roster, ...opts });
+  if (mode === 'stub') {
+    // A stub seeded from the frozen roster can only ever agree with it, which makes it
+    // useless for rehearsing the one step whose job is to write that file. This points
+    // the stub at a separate "Pantheon side" of the world — a registration list that the
+    // repository has not seen — so RUNBOOK step 10 and its refusals can be exercised
+    // without a Pantheon deployment. tools/rehearse.js is the caller.
+    const seed = env.PANTHEON_STUB_ROSTER
+      ? JSON.parse(fs.readFileSync(env.PANTHEON_STUB_ROSTER, 'utf8'))
+      : cfg?.roster;
+    return new StubPantheon({ roster: seed, ...opts });
+  }
   return new TwirpPantheon(cfg?.runtime?.pantheon || {}, env, opts);
 }
 

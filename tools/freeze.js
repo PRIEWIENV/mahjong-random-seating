@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * RUNBOOK section B, steps 8 to 11 — the freeze, as one auditable command.
+ * RUNBOOK section B, steps 10 and 11 — the freeze, as one auditable command.
  *
  * Those steps were prose: pull the roster out of Pantheon by hand, retype twelve rows
  * into roster.json, remember to check the local ids, remember to re-verify the template,
@@ -15,11 +15,14 @@
  * run. It does not commit or tag unless asked: --tag <name> is the only thing that
  * writes to git, and without it this prints the two commands for you to run yourself.
  *
+ *   node tools/freeze.js --event 42          first freeze: no roster.json exists yet
  *   node tools/freeze.js                     snapshot + check, write nothing
  *   node tools/freeze.js --write             write data/roster.json too
  *   node tools/freeze.js --write --tag frozen-v1     ...and commit and tag
  *
- * PANTHEON_MODE=stub exercises the whole thing without a Pantheon deployment.
+ * PANTHEON_MODE=stub exercises the whole thing without a Pantheon deployment;
+ * tools/rehearse.js drives section B end to end that way, which is how the first-freeze
+ * bug below was found.
  */
 
 const { execFileSync } = require('node:child_process');
@@ -51,17 +54,19 @@ function parseArgs(argv) {
 }
 
 /**
- * Step 8/9: read the event roster out of Pantheon and turn it into roster.json.
+ * Step 10: read the event roster out of Pantheon and turn it into roster.json.
  *
  * Every refusal here is a failure that would otherwise land after the draw. A missing
  * local_id blocks the seat-plan sync; a thirteenth registration changes who is in the
  * draw; a duplicate person_id lets one account submit twice.
  */
-async function snapshotRoster(cfg, problems, injected) {
+async function snapshotRoster(cfg, problems, injected, eventIdOverride) {
   const pantheon = injected || createPantheon(cfg, process.env);
-  const eventId = cfg.roster?.pantheon_event_id ?? Number(process.env.PANTHEON_EVENT_ID);
+  // On a first freeze there is no roster.json to read the event id out of, and it is the
+  // one thing that cannot be derived from anything else — hence --event.
+  const eventId = cfg.roster?.pantheon_event_id ?? Number(eventIdOverride ?? process.env.PANTHEON_EVENT_ID);
   if (!Number.isInteger(eventId) || eventId < 1) {
-    problems.push('no pantheon_event_id: put one in data/roster.json, or set PANTHEON_EVENT_ID');
+    problems.push('no pantheon_event_id: pass --event <id> (first freeze), put one in data/roster.json, or set PANTHEON_EVENT_ID');
     return null;
   }
 
@@ -105,7 +110,71 @@ async function snapshotRoster(cfg, problems, injected) {
   };
 }
 
-/** Step 10's checks, plus the ones RUNBOOK A leaves to memory. */
+/**
+ * Step 10's second half: decide whether the snapshot becomes data/roster.json.
+ *
+ * The guard on `problems` is the part that matters. snapshotRoster reports what is wrong
+ * with the registrations but still returns the roster it read, so without it a refused
+ * freeze wrote out a roster built from a registration list it had just refused — and the
+ * next run, finding a file where there had been none, compared against that instead.
+ * Found by tools/rehearse.js on its first pass through section B.
+ */
+function applyRosterSnapshot({ cfg, snapshot, problems, lines, write }) {
+  if (!snapshot) return cfg;
+  if (problems.length) {
+    lines.push(warn('data/roster.json not written — fix the registrations above and run this again'));
+    return cfg;
+  }
+
+  const writeRoster = () => {
+    fs.writeFileSync(path.join(cfg.dataDir, 'roster.json'), JSON.stringify(snapshot, null, 2) + '\n');
+    // Re-read it strictly. What was just written is what the server, the finalisation
+    // job and every verifier will load, so the checks below should run against that
+    // rather than against the object this process happens to be holding.
+    try {
+      // The same data directory that was just written to, not the default one: a re-read
+      // that silently looks somewhere else would report on a file nobody edited.
+      return load({ dataDir: cfg.dataDir });
+    } catch (err) {
+      problems.push(`data/roster.json was written but does not load: ${err.message}`);
+      return cfg;
+    }
+  };
+
+  if (cfg.rosterError) {
+    if (!write) {
+      const why = /^missing /.test(cfg.rosterError.message)
+        ? 'the file does not exist yet'
+        : cfg.rosterError.message;
+      lines.push(warn(`no usable data/roster.json yet — ${why}`));
+      lines.push('        re-run with --write to snapshot it from Pantheon; that is what step 10 is');
+      return cfg;
+    }
+    const next = writeRoster();
+    lines.push(ok(`data/roster.json created from Pantheon event ${snapshot.pantheon_event_id} (${snapshot.players.length} players)`));
+    return next;
+  }
+
+  if (JSON.stringify(cfg.roster.players) === JSON.stringify(snapshot.players)) {
+    lines.push(ok(`roster matches Pantheon event ${snapshot.pantheon_event_id} (${snapshot.players.length} players)`));
+    return cfg;
+  }
+  if (write) {
+    const next = writeRoster();
+    lines.push(ok(`data/roster.json rewritten from Pantheon (${snapshot.players.length} players)`));
+    return next;
+  }
+  lines.push(warn('data/roster.json differs from Pantheon — re-run with --write to snapshot it'));
+  for (const p of snapshot.players) {
+    const had = cfg.roster.players.find((q) => q.local_id === p.local_id);
+    if (!had || had.person_id !== p.person_id || had.title !== p.title) {
+      lines.push(`        local_id ${p.local_id}: ${had ? `${had.title} (${had.person_id})` : '—'} -> ${p.title} (${p.person_id})`);
+    }
+  }
+  return cfg;
+}
+
+/** Step 11's checks, plus the ones RUNBOOK A leaves to memory. */
 function preflight(cfg, lines, problems) {
   const now = Date.now();
 
@@ -179,37 +248,46 @@ function gitStatus() {
   }
 }
 
+/**
+ * The configuration as it stands *before* this command has done its job.
+ *
+ * data/roster.json is the file step 10 produces, so requiring a valid one in order to
+ * start made the first freeze of an event impossible: the command that writes the twelve
+ * rows refused to run until somebody had already typed the twelve rows. protocol.json is
+ * a different case — a freeze with no target round is not a freeze, and pick-round.js is
+ * what sets one — so that stays a hard precondition, and the error says where to go.
+ */
+function loadForFreeze() {
+  try {
+    return load({ rosterOptional: true });
+  } catch (err) {
+    if (/target_round|submission_cutoff/.test(err.message)) {
+      throw new Error(
+        `${err.message}\n        Run this first: node tools/pick-round.js --in 72h --write ` +
+          '(RUNBOOK step 9 — it comes before this one)'
+      );
+    }
+    throw err;
+  }
+}
+
 async function main(argv) {
   const args = parseArgs(argv);
   const lines = [];
   const problems = [];
 
-  const cfg = load({});
-  process.stdout.write(`\n\x1b[1mFreeze — RUNBOOK steps 8-11\x1b[0m\n\n`);
-
-  // ---- step 8/9 -----------------------------------------------------------
-  const snapshot = await snapshotRoster(cfg, problems);
-  if (snapshot) {
-    const current = JSON.stringify(cfg.roster.players);
-    const fresh = JSON.stringify(snapshot.players);
-    if (current === fresh) {
-      lines.push(ok(`roster matches Pantheon event ${snapshot.pantheon_event_id} (${snapshot.players.length} players)`));
-    } else if (args.write) {
-      const body = JSON.stringify(snapshot, null, 2) + '\n';
-      fs.writeFileSync(path.join(cfg.dataDir, 'roster.json'), body);
-      lines.push(ok(`data/roster.json rewritten from Pantheon (${snapshot.players.length} players)`));
-    } else {
-      lines.push(warn('data/roster.json differs from Pantheon — re-run with --write to snapshot it'));
-      for (const p of snapshot.players) {
-        const had = cfg.roster.players.find((q) => q.local_id === p.local_id);
-        if (!had || had.person_id !== p.person_id || had.title !== p.title) {
-          lines.push(`        local_id ${p.local_id}: ${had ? `${had.title} (${had.person_id})` : '—'} -> ${p.title} (${p.person_id})`);
-        }
-      }
-    }
-  }
+  let cfg = loadForFreeze();
+  process.stdout.write(`\n\x1b[1mFreeze — RUNBOOK steps 10-11\x1b[0m\n\n`);
 
   // ---- step 10 ------------------------------------------------------------
+  const snapshot = await snapshotRoster(cfg, problems, null, args.event);
+  cfg = applyRosterSnapshot({ cfg, snapshot, problems, lines, write: Boolean(args.write) });
+
+  // Everything below is about a set of twelve players: the checks, the four files, the
+  // announcement. Without a roster there is nothing to freeze.
+  if (!cfg.roster) problems.push('no data/roster.json — see above. Nothing was frozen.');
+
+  // ---- step 11 ------------------------------------------------------------
   preflight(cfg, lines, problems);
 
   for (const l of lines) process.stdout.write(l + '\n');
@@ -221,7 +299,7 @@ async function main(argv) {
     return 1;
   }
 
-  // ---- step 11 ------------------------------------------------------------
+  // ---- step 11: commit and tag --------------------------------------------
   process.stdout.write('\n  Ready to freeze these four, and nothing else:\n');
   for (const f of FROZEN) process.stdout.write(`    ${f}\n`);
   process.stdout.write('  public/app.js and app.js.sha256 go with them (the submission code is frozen too).\n');
@@ -292,4 +370,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { snapshotRoster, preflight, FROZEN };
+module.exports = { snapshotRoster, applyRosterSnapshot, preflight, FROZEN };

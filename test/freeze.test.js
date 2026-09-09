@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * The freeze, as a command (RUNBOOK steps 8-11).
+ * The freeze, as a command (RUNBOOK steps 10-11).
  *
  * Every refusal here corresponds to a failure that would otherwise surface after the
  * draw, when nothing can be changed. A missing `local_id` is the sharpest example: it
@@ -13,9 +13,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { snapshotRoster, FROZEN } = require('../tools/freeze');
+const { snapshotRoster, applyRosterSnapshot, FROZEN } = require('../tools/freeze');
 const { load } = require('../server/config');
-const { makeDataDir, cleanup } = require('./helpers');
+const { createPantheon } = require('../server/pantheon');
+const { makeDataDir, makeRoster, cleanup } = require('./helpers');
 
 /** A Pantheon that returns exactly what the test asks for. */
 const fake = (players) => ({ getEventRoster: async () => players });
@@ -116,6 +117,148 @@ test('the snapshot is ordered by local_id, so two freezes of one roster agree', 
   const shuffled = [...registered(cfg)].reverse();
   const snap = await snapshotRoster(cfg, [], fake(shuffled));
   assert.deepEqual(snap.players.map((p) => p.local_id), [1,2,3,4,5,6,7,8,9,10,11,12]);
+  cleanup(fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// the first freeze of an event, when data/roster.json does not exist yet
+
+test('the roster can be snapshotted before data/roster.json exists', async () => {
+  // The state every event starts in, and the one the command could not handle: writing
+  // that file is step 10's whole job, so the event id has to come from somewhere else.
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  cfg.root = fx.dir;
+
+  const players = makeRoster(12, 4242).players.map((p) => ({ ...p, ignore_seating: false }));
+  const problems = [];
+  const snap = await snapshotRoster(cfg, problems, fake(players), 4242);
+
+  assert.deepEqual(problems, []);
+  assert.equal(snap.pantheon_event_id, 4242);
+  assert.equal(snap.players.length, 12);
+  cleanup(fx.dir);
+});
+
+test('with no roster and no event id, the refusal says how to give it one', async () => {
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  const problems = [];
+  assert.equal(await snapshotRoster(cfg, problems, fake([])), null);
+  assert.match(problems.join('\n'), /--event <id>/);
+  cleanup(fx.dir);
+});
+
+test('a roster already in the file wins over --event, so a freeze cannot switch events', async () => {
+  // The event id is scoped to the sign-in gate. Letting a flag override a roster that is
+  // already frozen would let one command quietly re-point the draw at another event.
+  const fx = makeDataDir();
+  const cfg = load({ dataDir: fx.dataDir });
+  const problems = [];
+  const snap = await snapshotRoster(cfg, problems, fake(registered(cfg)), 4242);
+  assert.equal(snap.pantheon_event_id, 42);
+  cleanup(fx.dir);
+});
+
+test('an attendee marked ignore_seating is left out of the twelve', async () => {
+  // RUNBOOK step 8 names this case: present at the event, not in the draw. Counting them
+  // would make the roster thirteen and fail the total_slots check for the wrong reason.
+  const fx = makeDataDir();
+  const cfg = load({ dataDir: fx.dataDir });
+  const withScorer = [...registered(cfg), { person_id: 9099, title: '记录员', local_id: 0, ignore_seating: true }];
+  const problems = [];
+  const snap = await snapshotRoster(cfg, problems, fake(withScorer));
+  assert.deepEqual(problems, []);
+  assert.equal(snap.players.length, 12);
+  assert.ok(!snap.players.some((p) => p.person_id === 9099));
+  cleanup(fx.dir);
+});
+
+test('the stub can be pointed at a roster the repository has not seen', async () => {
+  // Seeded from cfg.roster, a stub can only ever agree with the file — which makes it
+  // useless for rehearsing the step whose job is to write that file. Two differences
+  // here that a real Pantheon would also show: a different event, and a thirteenth
+  // registration that is not playing.
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));   // as at a first freeze
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  const file = path.join(fx.dir, 'pantheon-event.json');
+  fs.writeFileSync(file, JSON.stringify({
+    pantheon_event_id: 4242,
+    players: [
+      ...makeRoster(12, 4242).players,
+      { local_id: 0, person_id: 9099, title: '记录员', ignore_seating: true },
+    ],
+  }));
+
+  const pantheon = createPantheon(cfg, { PANTHEON_MODE: 'stub', PANTHEON_STUB_ROSTER: file });
+  const roster = await pantheon.getEventRoster(4242);
+  assert.equal(roster.length, 13);
+  assert.equal(roster.filter((p) => !p.ignore_seating).length, 12);
+  assert.deepEqual(await pantheon.getEventRoster(42), [], 'a different event must be empty');
+
+  const problems = [];
+  const snap = await snapshotRoster(cfg, problems, pantheon, 4242);
+  assert.deepEqual(problems, []);
+  assert.equal(snap.players.length, 12);
+  cleanup(fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// what a refused freeze is allowed to leave behind
+
+test('a refused freeze writes no roster at all', async () => {
+  // snapshotRoster reports what is wrong with the registrations and still returns what
+  // it read, so this guard is the only thing standing between a refusal and a
+  // data/roster.json built from a registration list that was just refused. The run after
+  // that one would find a file where there had been none and compare against it.
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+
+  const players = makeRoster(12, 4242).players.map((p, i) => ({
+    ...p, ignore_seating: false, local_id: i === 6 ? null : p.local_id,
+  }));
+  const problems = [];
+  const lines = [];
+  const snap = await snapshotRoster(cfg, problems, fake(players), 4242);
+  assert.equal(problems.length, 1, 'the missing local_id must be reported');
+
+  const after = applyRosterSnapshot({ cfg, snapshot: snap, problems, lines, write: true });
+  assert.equal(after.roster, null);
+  assert.ok(!fs.existsSync(path.join(fx.dataDir, 'roster.json')), 'nothing may be written');
+  assert.match(lines.join('\n'), /not written/);
+  cleanup(fx.dir);
+});
+
+test('a clean snapshot is written, and re-read strictly before the checks run', async () => {
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  const players = makeRoster(12, 4242).players.map((p) => ({ ...p, ignore_seating: false }));
+  const problems = [];
+  const snap = await snapshotRoster(cfg, problems, fake(players), 4242);
+
+  const after = applyRosterSnapshot({ cfg, snapshot: snap, problems, lines: [], write: true });
+  assert.deepEqual(problems, []);
+  assert.equal(after.roster.players.length, 12, 'the returned config must be the strict re-read');
+  assert.equal(after.rosterError, null);
+  assert.equal(after.byPersonId.size, 12);
+  cleanup(fx.dir);
+});
+
+test('without --write nothing is written, however clean the snapshot is', async () => {
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  const players = makeRoster(12, 4242).players.map((p) => ({ ...p, ignore_seating: false }));
+  const lines = [];
+  const snap = await snapshotRoster(cfg, [], fake(players), 4242);
+  applyRosterSnapshot({ cfg, snapshot: snap, problems: [], lines, write: false });
+  assert.ok(!fs.existsSync(path.join(fx.dataDir, 'roster.json')));
+  assert.match(lines.join('\n'), /re-run with --write/);
   cleanup(fx.dir);
 });
 

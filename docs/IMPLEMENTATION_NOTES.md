@@ -372,6 +372,40 @@ invariants and the unit tests on a fresh clone, on Linux and on Windows with
 reproduces the failure exactly — 347738 bytes, 21 CRs, digest `89fd10…`, two red tests —
 which is what makes the job worth the minute it costs.
 
+## 6e. Rehearsing the half a person performs
+
+Section A of the RUNBOOK had `test/e2e.js`. Sections B, C and D — snapshot the roster,
+pick the round, freeze, tag, chase the stragglers, confirm the draw ran and the sync took
+— had nothing, and they are the half performed by a person, once, under time pressure, on
+the day. `tools/rehearse.js` performs them: a throwaway git repository built from the
+working tree, the Pantheon stub pointed at a registration list the repository has not
+seen, and a real drand round four minutes out. The commands are the real commands, the
+server is its own process, the sealing is real tlock, the finalisation job runs separately
+the way cron runs it, and the commit and the tag are real.
+
+It found two things on its first two passes, both in the step that matters most:
+
+- **`tools/freeze.js` could not perform step 10 at all.** Writing `data/roster.json` out
+  of Pantheon is what that step is, and the command loaded the full configuration first —
+  which requires a valid `data/roster.json`. On a first freeze it stopped at *copy the
+  .example file, fill it in*: twelve rows of retyping, which is the thing the tool exists
+  to remove, at the moment when a typo in a `person_id` locks somebody out of the draw.
+  `load({ rosterOptional: true })` is now the one exception, and it is only for this
+  command; everything else still treats an absent roster as a startup failure.
+- **A refused freeze wrote the roster anyway.** `snapshotRoster` reports what is wrong
+  with the registrations and still returns what it read, so the refusal printed in red
+  while `data/roster.json` appeared on disk, built from the registration list that had
+  just been refused. The next run would have found a file where there had been none and
+  compared against that.
+
+Both are the same shape as the CRLF bug in §6d: a step that had only ever been performed
+by the person who wrote it, in the one arrangement where it works. The order of the steps
+was wrong in the RUNBOOK too — the freeze refuses a `target_round` of 0, so picking the
+round has to come first, and it was written second.
+
+What the rehearsal does not cover is what §7 covers: Pantheon is the stub, no browser
+drives the frozen bundle, and mirroring is off. It asserts that the dashboard says so.
+
 ## 7. The Pantheon boundary, and what is *not* verified
 
 Everything the app needs from Pantheon goes through one interface in
@@ -450,7 +484,7 @@ production.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 161 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon | pass |
+| Unit tests (`npm test`) — 172 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -459,7 +493,10 @@ production.
 | No ciphertext reaches the admin page or its JSON | passes |
 | The freeze refuses a roster that would break the sync after the draw | passes |
 | A fresh clone checks out the bundle byte-identically and its digest matches | passes *(after `.gitattributes`)* |
-| **RUNBOOK B/C/D executed against a real event** | **outstanding — needs Pantheon, a roster and a deployment** |
+| RUNBOOK B/C/D end to end (`npm run rehearse`): freeze, tag, 12 submissions, draw, sync, player verification | passes *(against the stub)* |
+| A refused freeze leaves no `data/roster.json` behind | passes |
+| A fresh clone **at the tag** recomputes the seat plan and matches the bundle hash | passes |
+| **RUNBOOK B/C/D executed for a real event** | **outstanding — needs Pantheon, real registrations and a deployment** |
 | Byte encoding cross-checked by an independent Python implementation | agrees |
 | e2e A2: full journey, sign-in → submit → reveal → result → sync | passes |
 | e2e A3: sign-in gate both ways, with distinguishable refusals | passes |

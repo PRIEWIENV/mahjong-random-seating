@@ -13,8 +13,9 @@
 # that is a passing configuration, and if the rules are ever narrowed or deleted, this is
 # the job that goes red.
 #
-# What is not here: test/e2e.js. It talks to live drand and waits out a real round, so it
-# is a command someone runs (`npm run e2e`), not a gate on a commit.
+# What is not here: test/e2e.js and tools/rehearse.js. Both talk to live drand and wait out
+# a real round, so they are commands someone runs (`npm run e2e`, `npm run rehearse`)
+# before a freeze, not gates on a commit.
 
 name: reproducibility
 

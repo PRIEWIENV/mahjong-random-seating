@@ -147,6 +147,57 @@ test('operational settings can be overridden from the environment without a re-t
   cleanup(dir);
 });
 
+// ---------------------------------------------------------------------------
+// the one caller that legitimately has no roster yet
+
+test('a missing roster is a startup failure everywhere except the command that writes it', () => {
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+
+  // The server, the finalisation job, generate.js: all of them get the refusal.
+  assert.throws(() => load({ dataDir: fx.dataDir }), /roster\.json/);
+
+  // tools/freeze.js is the exception, because writing that file is what it is for.
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  assert.equal(cfg.roster, null);
+  assert.match(cfg.rosterError.message, /roster\.json/);
+  assert.equal(cfg.protocol.total_slots, 12, 'the rest of the configuration still loads');
+  cleanup(fx.dir);
+});
+
+test('rosterOptional tolerates the placeholder roster, not a broken protocol', () => {
+  // Copying roster.example.json is the other way to arrive with no usable roster: the
+  // file exists, and every person_id in it is 0.
+  const fx = makeDataDir();
+  const placeholder = {
+    pantheon_event_id: 0,
+    players: Array.from({ length: 12 }, (_, i) => ({ local_id: i + 1, person_id: 0, title: 'Player' })),
+  };
+  fs.writeFileSync(path.join(fx.dataDir, 'roster.json'), JSON.stringify(placeholder));
+  const cfg = load({ dataDir: fx.dataDir, rosterOptional: true });
+  assert.equal(cfg.roster, null);
+  assert.match(cfg.rosterError.message, /pantheon_event_id/);
+
+  // It relaxes the roster and nothing else. A protocol this command cannot fix still
+  // stops it dead, which is what keeps "freeze" from meaning "freeze whatever is lying
+  // around".
+  const p = JSON.parse(fs.readFileSync(path.join(fx.dataDir, 'protocol.json'), 'utf8'));
+  p.target_round = 0;
+  fs.writeFileSync(path.join(fx.dataDir, 'protocol.json'), JSON.stringify(p));
+  assert.throws(() => load({ dataDir: fx.dataDir, rosterOptional: true }), /target_round/);
+  cleanup(fx.dir);
+});
+
+test('with a roster present, rosterOptional changes nothing at all', () => {
+  const fx = makeDataDir();
+  const strict = load({ dataDir: fx.dataDir });
+  const lenient = load({ dataDir: fx.dataDir, rosterOptional: true });
+  assert.deepEqual(lenient.roster, strict.roster);
+  assert.equal(lenient.rosterError, null);
+  assert.equal(lenient.byLocalId.size, 12);
+  cleanup(fx.dir);
+});
+
 test('/api/status serves the operational half so the bundle need not embed it', () => {
   const fx = makeDataDir();
   const cfg = load({ dataDir: fx.dataDir });

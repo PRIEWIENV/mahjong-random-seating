@@ -15,15 +15,26 @@ Ordered — do not skip steps. Steps marked with a lock enter the frozen state; 
 
 ## B. Freeze
 
-`node tools/freeze.js` performs steps 9 to 11 and refuses on anything that would only
+**Rehearse it first.** `npm run rehearse` performs the whole of B, C and D — roster
+snapshot, freeze, tag, twelve sealed submissions, the chase list, the draw, the sync, and
+the check a player does afterwards — in a throwaway git repository, against the Pantheon
+stub and a real drand round about four minutes away. It takes five minutes and it is the
+only way to find out that a step does not work at a time when that is still cheap. The
+first two runs found two: `freeze.js` could not create the roster it exists to create, and
+a refused freeze wrote one anyway.
+
+`node tools/freeze.js` performs steps 10 and 11 and refuses on anything that would only
 surface after the draw. Run it with `--write` to snapshot the roster, and `--tag <name>`
 to commit and tag. Without `--tag` it changes nothing in git and prints the two commands.
 
 8. In Pantheon: mark the event prescripted, register exactly the right twelve players, and give every one of them a `local_id` (`UpdatePlayersLocalIds`). Anyone attending but not playing should be `ignore_seating`.
-9. `node tools/freeze.js` reads that roster back and writes `data/roster.json` from it. It refuses if the seated count is not `total_slots`, if anybody lacks a usable `local_id`, if one account is registered twice, or if a player has no title. Each of those otherwise lands after the draw: a missing `local_id` blocks the seat-plan sync, which runs once the seat plan already exists.
-10. Choose the target round: `node tools/pick-round.js --in 72h --write` sets `target_round`, `submission_cutoff_utc`, `chain_hash` and `chain_public_key` together so they cannot disagree. Allow a generous window — **72 hours** is a good default — with `quorum: 8` and `user_input_max: 255`.
+9. Choose the target round: `node tools/pick-round.js --in 72h --write` sets `target_round`, `submission_cutoff_utc`, `chain_hash` and `chain_public_key` together so they cannot disagree. Allow a generous window — **72 hours** is a good default — with `quorum: 8` and `user_input_max: 255`.
     - `protocol.json` must contain **only** frozen parameters (`PROTOCOL.md` §4.1). The server refuses to start if an operational key is in there, and names it. Anything operational belongs in `data/runtime.json`, which is not tagged.
     - `chain_public_key` must be present and must be what `<drand api>/<chain_hash>/info` reports right now. Without it the client cannot tell which chain it is talking to.
+    - This comes before the roster snapshot because the freeze refuses to run against a `target_round` of 0: freezing without a round is not freezing.
+10. `node tools/freeze.js --event <id> --write` reads that roster back out of Pantheon and writes `data/roster.json` from it. It refuses if the seated count is not `total_slots`, if anybody lacks a usable `local_id`, if one account is registered twice, or if a player has no title — and on any of those it writes nothing at all, because a roster built from a registration list that was just refused is worse than no roster. Each of those otherwise lands after the draw: a missing `local_id` blocks the seat-plan sync, which runs once the seat plan already exists.
+    - `--event <id>` is only needed for the first freeze of an event. After that the id is in `roster.json`, and it wins: a flag cannot re-point an existing freeze at a different event.
+    - Without `--write` the command reports what it would do and changes nothing.
 11. 🔒 `node tools/freeze.js --write --tag frozen-v1`. Before it writes anything to git it re-derives every proved invariant of the template, rebuilds the browser bundle from source and diffs it against the committed one, and runs the unit tests. It commits `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` — those four and no others — plus the built bundle and its hash, then tags. `runtime.json` is gitignored and is deliberately not in the tag.
     - The bundle rebuild is the check that has to happen **here**. It needs esbuild, which the VPS does not have (`npm ci --omit=dev`); the VPS runs `--verify-hash`, which only compares the committed bundle to its committed hash and cannot tell you the hash was computed from different source.
 
@@ -34,7 +45,7 @@ the draw, the reset and the sync are commands run on the box, because §9 keeps 
 that could trigger or re-time the draw off HTTP entirely.
 
 12. Send the players one link — no personal links, no tokens: they sign in with the Pantheon accounts they already have. `tools/freeze.js --tag` prints the announcement to copy, which says the three things that matter: one number between 0 and 255, once; you can close the page immediately; here is when the draw happens, and here is the tag.
-13. Chase anyone still missing as the cutoff approaches. The dashboard's first panel is that list by name, and the player-facing waiting view shows the same counts. Neither reveals anything about anyone's number — only *whether* they submitted, and when.
+13. Chase anyone still missing as the cutoff approaches. The dashboard's first panel is that list by name, and the player-facing waiting view shows the same counts. Neither reveals anything about anyone's number — only *whether* they submitted, and when. `npm run rehearse` asserts both halves of that: the list is exactly the players with no submission, and no ciphertext reaches the page or its JSON.
     - Watch the pre-flight panel too. `Mirroring to the repository: DISABLED` means nobody but this server is timestamping the ciphertexts, and that third party is what the fairness argument leans on. `Pantheon adapter is the STUB` in production means sign-in is a fake.
 
 ## D. Draw and publication

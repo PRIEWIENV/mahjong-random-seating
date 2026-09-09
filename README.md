@@ -25,7 +25,7 @@ Start with [`docs/seating-design.md`](docs/seating-design.md): it explains the w
 **Outstanding**
 
 - **The Twirp client has not been run against a real Pantheon instance.** None was available. `PANTHEON-INTEGRATION.md` says to confirm the field names against the instance you actually run; that is still to do, and RUNBOOK steps A2, A3 and A6 are not satisfied against real Pantheon until it happens. Everything passes against the stub. See [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) §7.
-- The operational half of the RUNBOOK: snapshot the real roster, choose the target round, freeze and tag (steps 8–11).
+- **The operational half of the RUNBOOK has been rehearsed, not performed.** `npm run rehearse` runs sections B, C and D end to end in a throwaway repository — roster snapshot, freeze, tag, twelve sealed submissions, the chase list, the draw, the sync, and the check a player does afterwards — against the Pantheon stub and a real drand round. Every step passes. What is left is doing it for an actual event, with real registrations and a deployment, and with the stub replaced by the instance in the first bullet.
 
 **Read [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) before freezing.** One item there is about what "verified" actually means:
 
@@ -39,9 +39,10 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 161 unit tests, offline, ~6s
+npm test                  # 172 unit tests, offline, ~6s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
+npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~5 min
 ```
 
 `.github/workflows/reproducibility.yml` runs the first three on every push, on Linux and
