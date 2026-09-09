@@ -248,6 +248,46 @@ attempt carrying a documented manual remedy (RUNBOOK step 15); re-running it eve
 minutes forever would bury that remedy under mirror noise and fight an operator who has
 already pasted the prescript in by hand.
 
+## 6b. §8's remedy needed code that did not exist
+
+§8 says a voided round is followed by a new `target_round` and a fresh set of
+submissions. Nothing implemented that, and the gap was not cosmetic. Probing the state
+after a void and a re-freeze:
+
+```
+phaseOf says: void
+phaseOf on a FRESH database: void
+old submissions still counted: 1,2,3,4,5,6,7
+player 1 resubmitting -> {"stored":false,"reason":"already_submitted"}
+```
+
+Three independent dead ends: players saw "void" forever, ciphertexts bound to the lapsed
+round still counted towards the new quorum, and nobody could submit again.
+
+**Resolution.** A run is now a sequence of attempts. `server/rounds.js` archives an
+attempt at the moment it is declared void, and `tools/new-round.js` opens the next one.
+
+The archive is the point, not the reset. "Fewer than eight submitted" is a claim, and it
+is exactly the claim an organiser would make who wanted another go after seeing who had
+turned up. So the evidence is published rather than cleared: every ciphertext as
+received, the roll taken at the cutoff, the notice, and **the `protocol.json` and
+`roster.json` that attempt ran under**, with a `manifest.json` of SHA-256 digests, all
+mirrored so a third party timestamps it.
+
+Archiving `protocol.json` is the part that makes the rest usable. The next attempt
+overwrites it with a new `target_round`; without the copy, the archived ciphertexts would
+name a chain and round the repository no longer records anywhere, and the evidence would
+be unopenable. The voided round's beacon lands three seconds later regardless, so
+`tools/decrypt-submissions.js` pointed at the archive opens every ciphertext and counts
+them — the void becomes checkable rather than trusted.
+
+The reset is deliberately hard to misuse. It refuses unless the round was actually
+declared void, its archive verifies byte for byte, `protocol.json` already names a later
+round with a future cutoff, and no `results.json` exists. Re-freeze first, reset second,
+so there is never an open round with no announced target. Restarting a round that is
+merely *open*, because of who has submitted so far, is the manipulable step §8 exists to
+remove, and the reset will not do it.
+
 ## 7. The Pantheon boundary, and what is *not* verified
 
 Everything the app needs from Pantheon goes through one interface in
@@ -326,10 +366,12 @@ production.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 115 across generate, encoding, config, roll-call, resume, API, stats, Pantheon | pass |
+| Unit tests (`npm test`) — 131 across generate, encoding, config, roll-call, resume, attempts, API, stats, Pantheon | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
+| A voided attempt is archived, verifies, and the next attempt opens | passes |
+| Tampering with an archived ciphertext is detected, and blocks the reset | passes |
 | Byte encoding cross-checked by an independent Python implementation | agrees |
 | e2e A2: full journey, sign-in → submit → reveal → result → sync | passes |
 | e2e A3: sign-in gate both ways, with distinguishable refusals | passes |

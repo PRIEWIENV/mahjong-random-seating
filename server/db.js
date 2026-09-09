@@ -123,6 +123,25 @@ class Store {
   }
 
   // ---- misc state -------------------------------------------------------
+  /**
+   * Clear the live state of one attempt so the next can open (§8).
+   *
+   * Sessions survive: a player's identity did not change, only the round did, and
+   * making twelve people sign in again buys nothing. The submissions do not survive
+   * here because they are bound to the lapsed round and cannot be reused — but they are
+   * not lost either. server/rounds.js archives every ciphertext, the roll taken at the
+   * cutoff and the frozen parameters before this is ever called, and refuses to let it
+   * be called until that archive verifies.
+   *
+   * @returns {number} how many submissions were cleared
+   */
+  clearRound() {
+    const n = this.db.prepare('SELECT COUNT(*) AS n FROM submissions').get().n;
+    this.db.exec('DELETE FROM submissions');
+    this.db.prepare("DELETE FROM state WHERE key IN ('snapshot','phase','result','pantheon_sync')").run();
+    return n;
+  }
+
   get(key, fallback = null) {
     const row = this.db.prepare('SELECT value FROM state WHERE key = ?').get(key);
     return row ? JSON.parse(row.value) : fallback;

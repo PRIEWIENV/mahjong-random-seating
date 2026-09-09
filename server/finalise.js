@@ -27,6 +27,7 @@ const { decryptPayload } = require('./tlock');
 const { Mirror, writeLocal } = require('./mirror');
 const { computeStats } = require('./stats');
 const { createPantheon, PantheonError } = require('./pantheon');
+const { archiveVoidedAttempt } = require('./rounds');
 const { generate, serialise } = require('../generate');
 
 const KEY_SNAPSHOT = 'snapshot';
@@ -143,6 +144,21 @@ function publishVoid(cfg, store, mirror, reason, detail, log) {
   writeLocal(cfg.root, 'events/void.json', body);
   mirror.enqueue('events/void.json', body, `void: ${reason} (round ${cfg.protocol.target_round})`);
   store.set(KEY_PHASE, 'void');
+
+  // Archive now, while the attempt is still live and consistent (§8, server/rounds.js).
+  // "Fewer than eight submitted" is a claim, and the only thing that makes it a fact is
+  // the evidence: the ciphertexts as received, the roll at the cutoff, and the frozen
+  // parameters they were sealed under. protocol.json in particular is about to be
+  // rewritten with a new target_round, so waiting until the reset would be too late.
+  try {
+    archiveVoidedAttempt(cfg, store, notice, mirror, log);
+  } catch (err) {
+    // The void itself is published either way; losing the archive must not also lose
+    // the notice. But say so loudly, because the reset will refuse to run without it.
+    log.error?.(`[finalise] FAILED to archive the voided attempt: ${err.message}`);
+    log.error?.('[finalise] fix this before starting a new round — tools/new-round.js will refuse');
+  }
+
   log.error?.(`[finalise] ROUND VOID — ${reason}`);
   return notice;
 }

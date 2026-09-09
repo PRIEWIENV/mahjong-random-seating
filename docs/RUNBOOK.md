@@ -35,7 +35,14 @@ Ordered — do not skip steps. Steps marked with a lock enter the frozen state; 
 
 ## When things go wrong
 
-- **Fewer than 8 submissions.** Per `PROTOCOL.md` §8: void the round, set a new target round, and have **everyone** — including those who already submitted — submit again. Old ciphertexts are bound to the lapsed round and cannot be reused.
+- **Fewer than 8 submissions.** Per `PROTOCOL.md` §8: void the round, set a new target round, and have **everyone** — including those who already submitted — submit again. Old ciphertexts are bound to the lapsed round and cannot be reused. In that order:
+
+  1. The job has already published `events/void.json` and archived the attempt under `events/rounds/<target_round>/`. Confirm the archive is there and complete; `tools/new-round.js --dry-run` checks it and changes nothing.
+  2. Pick the new round and re-freeze: `node tools/pick-round.js --in 72h --write`, then commit `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` and git-tag again. Announce the new tag.
+  3. `node tools/new-round.js`. It re-verifies the archive, then clears the live submissions and phase so the new round can open. It refuses if step 2 has not happened, and it never touches the archive.
+  4. Tell the players three things: the new tag, that **all twelve** must submit again, and that the previous attempt is published at `events/rounds/<target_round>/` for anyone who wants to confirm it really was short of quorum. Once that round's beacon has landed, `tools/decrypt-submissions.js --dir events/rounds/<r>/submissions --protocol events/rounds/<r>/protocol.json` opens every archived ciphertext.
+
+  Nothing from the voided attempt is deleted at any point. The reset clears live tables only, and refuses to run while the archive does not verify.
 - **drand unreachable at the target time.** A delay, not a security problem. The ciphertexts and the round are fixed, so the outcome is already determined; re-run the finalisation job when the beacon is reachable.
 - **One drand mirror is down.** Point `data/runtime.json` at another and restart. This touches nothing frozen and needs no announcement: the chain is pinned by `chain_hash` and `chain_public_key`, so an endpoint cannot substitute a different one (`PROTOCOL.md` §4.2).
 - **Pantheon moved to a different port or host.** Same answer — `runtime.json`, restart, no re-tag.

@@ -7,6 +7,9 @@
  * making now.
  */
 export default function Void({ status }) {
+  // The archive of THIS attempt only exists once the job has written it, which is the
+  // same moment the phase becomes void — so by the time this screen renders it is there.
+  const mine = status?.previous_rounds?.find((r) => r.target_round === status.target_round);
   // The quorum and the field size are frozen parameters (§4.1). They are read from
   // /api/status and never defaulted here: a placeholder 8 on this screen would be the
   // app telling a player a rule that may not be the one the draw was tagged to.
@@ -26,6 +29,14 @@ export default function Void({ status }) {
           组织者会公布新的开奖轮次，届时<strong>全部 {status?.total_slots} 位</strong>都需要重新提交
           （旧的密文绑定在已经过去的那一轮上，不能再用）。
         </p>
+        {mine && (
+          <p className="hint">
+            这一轮的记录不会被删掉。全部密文、截止时的名册和当时冻结的参数都已
+            <a href={`/${mine.archive}/manifest.json`} target="_blank" rel="noreferrer">公开存档</a>
+            ，等第 {status.target_round} 轮的信标公布之后，任何人都能自己解开，
+            确认当时确实只有 {mine.submitted_count} 位提交。
+          </p>
+        )}
       </div>
     </div>
   );

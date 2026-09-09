@@ -205,6 +205,18 @@ payloads this file lists, so a file that omits a player from both `revealed` and
 `generate.js --verify` performs the check whenever the snapshot is available, saying
 plainly when it is not.
 
+**`events/rounds/<target_round>/`** (written when an attempt is declared void, §8)
+```
+manifest.json     digests of everything below, plus the counts and how to check them
+protocol.json     the frozen parameters THAT attempt ran under
+roster.json
+void.json         the notice as published
+snapshot.json     the roll taken at the cutoff
+submissions/<local_id>.json
+```
+Kept so that a voided round can be audited rather than taken on trust, and listed in
+`events/rounds/index.json`. See §8.
+
 **`events/sync.json`** (written after the Pantheon sync, which is after the draw)
 ```
 { "round_used": 123456, "status": "ok", "at": "...", "event_id": 42, "attempts": 1 }
@@ -282,6 +294,18 @@ Use rejection sampling in step 5, not modulo, so the shuffle is exactly uniform.
 - The loader refuses a quorum at or below half the field. §8 intends a two-thirds rule, and a minority quorum is not one anyone would have agreed to in advance — which is the only moment at which agreeing to it means anything.
 - The snapshot is taken at exactly `submission_cutoff_utc`. Anything arriving later does not count, even if the drand round has not landed yet. This removes any argument about late arrivals.
 - Falling short of quorum has one pre-agreed remedy: void the round, announce a new `target_round`, and have **all twelve** submit again. Existing ciphertexts are bound to the lapsed round and cannot be reused.
+- **A voided attempt is archived, never discarded.** "Fewer than eight submitted" is a claim, and it is exactly the claim an organiser would make who wanted a second try after seeing who had turned up. What makes it a fact is the evidence, so at the moment a round is declared void the job writes `events/rounds/<target_round>/` holding every ciphertext as received, the roll taken at the cutoff, the void notice, **the frozen `protocol.json` and `roster.json` that attempt ran under**, and a `manifest.json` of SHA-256 digests. All of it is mirrored, so it is timestamped by a third party like the ciphertexts themselves.
+
+  The archived `protocol.json` is the load-bearing part. The next attempt overwrites that file with a new `target_round`, and without the copy the archived ciphertexts would name a chain and a round that nothing in the repository records.
+
+  The voided round's beacon lands three seconds later whatever anyone does, so the archive is verifiable by anybody, at leisure:
+  ```sh
+  node tools/decrypt-submissions.js \
+    --dir events/rounds/<target_round>/submissions \
+    --protocol events/rounds/<target_round>/protocol.json
+  ```
+  It opens every archived ciphertext and counts them. `events/rounds/index.json` lists the attempts and the digest of each manifest.
+- **Re-freeze first, reset second.** Opening the next attempt is a deliberate operator action (`tools/new-round.js`), and it refuses unless: the round really was declared void, its archive verifies byte for byte, `protocol.json` already names a later `target_round` with a cutoff in the future, and no `results.json` exists. So there is never a moment when the organiser holds an open round with no announced target. Restarting a round that is merely open, because of who has submitted so far, is the manipulable step this rule exists to remove.
 - **drand late or unreachable at the target time** is a delay, not a failure. The ciphertexts and the round are unchanged, so the outcome is already determined; re-run the job when the beacon is reachable.
 - **A drand mirror going down** is not even a delay. Point `runtime.json` at another one and restart; nothing frozen is touched, because the chain is pinned by `chain_hash` and `chain_public_key` rather than by an address (§4.2).
 

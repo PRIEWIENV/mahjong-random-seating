@@ -24,6 +24,7 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
   // served straight out of the tagged protocol.json; inventing one here would let the
   // page state a bound the draw does not actually use.
   const max = status?.user_input_max;
+  const last = status?.previous_rounds?.[status.previous_rounds.length - 1];
   const busy = phase === 'sealing' || phase === 'posting';
 
   useEffect(() => {
@@ -82,6 +83,24 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
       <form className="card submit" onSubmit={onSubmit}>
         <p className="eyebrow">你好，{me?.title}</p>
         <h1>选一个数字</h1>
+
+        {/*
+          §8: a run can take more than one attempt. Someone who was told the last round
+          was void and is now being asked for a number again needs to know why, and needs
+          somewhere to check that the void was real — otherwise a restart is
+          indistinguishable from the rules moving.
+        */}
+        {status?.attempt > 1 && (
+          <p className="note">
+            这是第 {status.attempt} 次开奖。上一次截止时只有 {last?.submitted_count} 位提交，
+            未达到 {last?.quorum} 位的门槛，按事先定好的规则作废了。
+            {' '}
+            <a href={`/${last?.archive}/manifest.json`} target="_blank" rel="noreferrer">
+              上一次的全部密文和参数都在这里
+            </a>
+            ，等那一轮的信标公布后任何人都能自己解开核对。
+          </p>
+        )}
 
         <div className={`bignum ${phase === 'rolling' ? 'rolling' : ''}`}>
           <input

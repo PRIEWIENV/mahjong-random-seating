@@ -36,6 +36,7 @@ const { phaseOf, KEY_RESULT, KEY_SYNC } = require('./finalise');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
+const { readIndex, ROUNDS_DIR } = require('./rounds');
 const { computeStats } = require('./stats');
 
 const MAX_BODY = 64 * 1024;
@@ -147,6 +148,7 @@ function createServer(opts = {}) {
   // ---- GET /api/status ----------------------------------------------------
   function status() {
     const submitted = store.submittedLocalIds();
+    const previous = readIndex(cfg);
     return {
       phase: phaseOf(cfg, store, nowFn()),
       submitted_count: submitted.length,
@@ -176,6 +178,11 @@ function createServer(opts = {}) {
       // UI-SPEC §5's fallback cadence, served rather than compiled into the bundle, so
       // it can be changed without a rebuild and without touching anything frozen.
       status_poll_interval_ms: cfg.runtime.ui.status_poll_interval_ms,
+      // §8: a run can take more than one attempt. Players who were told a round was
+      // void need to see that this is a new one and where the last one's evidence is,
+      // or being asked for a number a second time looks like the rules moving.
+      attempt: previous.length + 1,
+      previous_rounds: previous,
       // UI-SPEC §5: the countdown is driven by this, so it never drifts.
       server_time_utc: new Date(nowFn()).toISOString(),
     };
@@ -422,6 +429,20 @@ function createServer(opts = {}) {
       // repository cannot drift apart.
       const dataName = p.replace(/^\//, '');
       if (DATA_FILES.has(dataName)) return serveFile(res, path.join(cfg.dataDir, dataName));
+
+      // The archived attempts (§8). Public by construction: every ciphertext in there is
+      // safe to publish, and the whole point of keeping them is that anyone can check
+      // the void was honest. Read-only, and confined to events/rounds/ — the containment
+      // check is belt and braces on top of the URL parser, which already folds away dot
+      // segments before this sees the path.
+      if (req.method === 'GET' && p.startsWith(`/${ROUNDS_DIR}/`)) {
+        const roundsRoot = path.join(cfg.root, ROUNDS_DIR);
+        const target = path.join(cfg.root, p.slice(1));
+        if (target.startsWith(roundsRoot + path.sep) && fs.existsSync(target) && fs.statSync(target).isFile()) {
+          return serveFile(res, target);
+        }
+        return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+      }
 
       // SPA: one route. Any non-asset path renders the app, which derives its stage.
       const abs = path.join(publicDir, p);

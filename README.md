@@ -39,7 +39,7 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 115 unit tests, offline, ~4s
+npm test                  # 131 unit tests, offline, ~5s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
 ```
@@ -78,6 +78,7 @@ server/
   server.js                  # the six endpoints of §6, plus the SSE stream
   finalise.js                # the scheduled draw job and the Pantheon sync (§5, §8)
                              # idempotent: never re-draws, never un-publishes a result
+  rounds.js                  # voided attempts: archive, verify, and open the next one
   pantheon.js                # the Pantheon boundary: Twirp client + in-process stub
   config.js                  # loads and validates the frozen artefacts; refuses to start otherwise
   runtime.js                 # the other half: operational settings and their defaults (§4.2)
@@ -101,6 +102,7 @@ tools/
   verify_contribution.py     # second implementation of the byte encoding, in another language
   build-client.js            # builds and hash-pins the browser bundle
   pick-round.js              # target_round and cutoff, kept consistent
+  new-round.js               # after a void: verify the archive, then open the next attempt
   decrypt-submissions.js     # participant-side verification
 test/
   *.test.js                  # unit tests, incl. the roll-call against the snapshot
@@ -116,8 +118,9 @@ deploy/
 2. **`roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` are frozen and git-tagged together before submissions open.** After that a single changed byte voids the guarantee and the run restarts.
 3. **Those four, and nothing else.** A parameter is frozen if changing it mid-window could change or steer the outcome, and operational otherwise (`PROTOCOL.md` §4.1). Freezing more than that is not extra caution: it means the organiser will eventually have a good reason to edit a tagged file, which is the habit the freeze exists to prevent.
 4. **The quorum rule is frozen too** (see `PROTOCOL.md` §8). It must not be renegotiated when a 7-of-12 situation actually arises — deciding after the fact is itself a manipulable step.
-5. **What a player submitted is never exposed before the reveal.** Only whether they submitted.
-6. **Sync to Pantheon with `WIND_SHUFFLE_MODE_PRESCRIPTED`.** Any other mode re-randomises the winds and throws away most of what the template was optimised for.
+5. **A voided attempt is archived, never deleted.** Its ciphertexts, the roll at the cutoff and the `protocol.json` it ran under are published under `events/rounds/<target_round>/` so anyone can confirm the round really was short of quorum. Opening the next attempt requires re-freezing first, and `tools/new-round.js` refuses while the archive does not verify.
+6. **What a player submitted is never exposed before the reveal.** Only whether they submitted.
+7. **Sync to Pantheon with `WIND_SHUFFLE_MODE_PRESCRIPTED`.** Any other mode re-randomises the winds and throws away most of what the template was optimised for.
 
 ## Verification tool
 
