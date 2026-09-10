@@ -2,7 +2,7 @@
 
 The draw app sits alongside a self-hosted [Pantheon](https://github.com/MahjongPantheon/pantheon) instance on the same server. Pantheon supplies identity and the event roster, and receives the finished seat plan.
 
-Everything below was read off the Pantheon protocol definitions in `Common/proto/` on `master`. **Confirm the field names against the instance you are actually running before writing code** — Pantheon is under active development and these are the details most likely to drift.
+Everything below was read off the Pantheon protocol definitions in `Common/proto/` on `master` and then **checked against a running instance** (Pantheon `cdda3fc`, September 2026). That check was worth doing: the proto files and the running service disagreed in four places, every disagreement was silent, and §6 records what it took to find them. Re-run it against the instance you are actually going to use — the values in §5 are facts about one deployment, not about Pantheon in general.
 
 ## 1. Services and transport
 
@@ -93,7 +93,7 @@ Record the sync outcome in `events/sync.json` (**not** in `results.json`, which 
 
 ## 5. Method reference
 
-Methods named here, all verified against `Common/proto/frey.proto`, `Common/proto/mimir.proto` and `Common/proto/atoms.proto`:
+Methods named here, verified against `Common/proto/*.proto` **and called against a live instance**:
 
 | Purpose | Service | Method |
 |---|---|---|
@@ -105,3 +105,83 @@ Methods named here, all verified against `Common/proto/frey.proto`, `Common/prot
 | Write the seat plan | Mimir | `UpdatePrescriptedEventConfig` |
 | Apply a session's seating | Mimir | `MakePrescriptedSeating` |
 | Preview next session's seating | Mimir | `GetNextPrescriptedSeating` |
+
+### 5.1 What the wire actually looks like
+
+Confirmed by calling a running instance. All six of these were wrong in the first
+implementation, and none of them failed loudly.
+
+| | Guessed from the protos | What the instance does |
+|---|---|---|
+| URL path | `/twirp/{service}/{method}` | `/v2/{service}/{method}` |
+| Service segment | `frey.Frey`, `mimir.Mimir` | `common.Frey`, `common.Mimir` |
+| Dev ports | Frey 4001, Mimir 4002 | **Mimir 4001, Frey 4004** |
+| Request fields | snake_case | snake_case — accepted by both services |
+| **Response fields** | snake_case | **lowerCamelCase**: `personId`, `authToken`, `authSuccess`, `tenhouId`, `localId` |
+| Bad credentials | `{auth_success: false}` | HTTP 400 `invalid_argument` "Password check failed" |
+
+Two of those deserve spelling out, because they are the ones that bite rather than break.
+
+**A field holding its default is absent, not null.** That is the protobuf JSON mapping,
+and it means an unassigned `local_id` does not appear in the response at all, nor does
+`ignore_seating: false`, nor `auth_success: false`. Code that reads `p.local_id ?? null`
+is right by accident; code that treats an absent field as "the server did not say" is
+wrong. A bool that is `true` is always present, which is what makes
+`authSuccess === true` a complete test for a successful sign-in.
+
+**A bad credential pair is an error, not a false.** Frey's `quickAuthorize` either
+returns `{authSuccess: true}` or throws: 400 `invalid_argument` for a wrong token, 404
+`not_found` for an unknown person. A client that lets those propagate reports a mistyped
+password as "Pantheon is unreachable" — a 503 where UI-SPEC §3 requires a
+distinguishable 401. `server/pantheon.js` treats 400, 401, 403 and 404 as refusals and
+keeps throwing on 5xx and 429, so an outage still reads as an outage.
+
+**Admin calls need the event scope.** Mimir reads `X-Auth-Token`, `X-Current-Person-Id`
+and `X-Current-Event-Id` (`Mimir/src/Meta.php`), and event admin and referee rights are
+scoped by the third. Without it the prescript write is refused — after the draw, when
+nothing can be changed.
+
+## 6. A local Pantheon to test against
+
+The whole integration was written without one, which is why §5.1 exists. Getting one up
+takes about half an hour.
+
+Pantheon's own README says Windows is not supported; use WSL 2 or Linux. Inside it:
+
+```sh
+git clone https://github.com/MahjongPantheon/pantheon.git && cd pantheon
+docker compose -f docker-compose-amd64.yml up -d mimir.pantheon.internal frey.pantheon.internal redis.pantheon.internal
+(cd Mimir && make container_deps && make container_migrate)
+(cd Frey  && make container_deps && make container_migrate)
+make bootstrap_admin        # admin@localhost.localdomain / 123456
+(cd Mimir && make container_seed)
+(cd Frey  && make container_dev &)   # Frey's dev server; nginx proxies to it on :4004
+node tools/pantheon-fixture.js       # our event: prescripted, 12 players, local ids 1..12
+```
+
+Five things cost an hour between them and are invisible from the documentation:
+
+- **The Host header decides everything.** Each container's nginx matches on
+  `server_name mimir.pantheon.local` and has a catch-all that answers 404. A request to
+  `http://127.0.0.1:4001` therefore 404s even though the service is healthy. Use the
+  hostnames, with `/etc/hosts` entries pointing at 127.0.0.1. This is why
+  `runtime.json`'s Pantheon base URLs are hostnames and not addresses.
+- **WSL rewrites `/etc/hosts` on every start.** Put `generateHosts = false` under a
+  `[network]` section in `/etc/wsl.conf` first, or the entries vanish and the symptom is
+  a sudden 404 from a service that was working a minute ago.
+- **Frey calls Hugin on every single request.** Its metrics middleware `await`s a POST to
+  `hugin/addMetric` and wraps failures, so with Hugin not running *every* Frey call
+  returns 500 `fetch failed`. Start `hugin.pantheon.internal` too.
+- **Redis caches negative lookups.** Probing `QuickAuthorize` for a person before that
+  person exists caches "not known", and the correct call afterwards still fails.
+  `redis-cli FLUSHALL` after seeding.
+- **Only tournaments can be prescripted.** `CreateEvent` hard-sets `is_prescripted = 0`
+  for club and online events. It reports success, it stores `wind_shuffle_mode`
+  faithfully, and the only symptom is that `GetAllRegisteredPlayers` returns no local
+  ids — because Mimir only fills them in for prescripted events. RUNBOOK step 8's event
+  must be `EVENT_TYPE_TOURNAMENT`.
+
+`tools/pantheon-fixture.js` does the rest of RUNBOOK step 8 over the API: copies a
+ruleset from the instance (`CreateEvent` refuses without a full one), creates the
+tournament, registers twelve players and assigns their local ids, then reads them back
+the way `tools/freeze.js` will.

@@ -406,6 +406,53 @@ round has to come first, and it was written second.
 What the rehearsal does not cover is what §7 covers: Pantheon is the stub, no browser
 drives the frozen bundle, and mirroring is off. It asserts that the dashboard says so.
 
+## 6f. The Pantheon client, against a real Pantheon
+
+§7 used to say the Twirp client had never met the thing it was written for. It has now:
+Pantheon `cdda3fc` in Docker under WSL 2, driven through `server/pantheon.js` itself
+rather than through curl.
+
+Six of its assumptions were wrong. Not one of them announced itself:
+
+| | Written | Actual |
+|---|---|---|
+| Path | `/twirp/{service}/{method}` | `/v2/{service}/{method}` |
+| Service | `frey.Frey`, `mimir.Mimir` | `common.Frey`, `common.Mimir` |
+| Ports | Frey 4001, Mimir 4002 | Mimir 4001, Frey 4004 |
+| Responses | snake_case | lowerCamelCase |
+| Bad password | `{auth_success: false}` | HTTP 400 `invalid_argument` |
+| Admin scope | two headers | three — `X-Current-Event-Id` too |
+
+The interesting ones are the last three.
+
+**Every response field came back undefined.** Protobuf JSON emits lowerCamelCase, so
+`p.local_id` was always `undefined` on a roster where every player had a local id. The
+failure mode was survivable — `tools/freeze.js` would have refused to freeze a roster
+where nobody had one — but only because that refusal exists. The same bug in
+`getPrescript` would have read `next_session_index` as 0 and quietly rewritten session 1.
+
+**The sign-in gate was answering the wrong question.** Frey does not report a bad
+credential pair as `false`; it throws 400 `invalid_argument` "Password check failed".
+`server/server.js` catches an exception from `verifyToken` and returns **503 "Cannot
+reach Pantheon right now"**. So every mistyped password would have told twelve players
+that the server was broken, on the one day they all sign in at once, and UI-SPEC §3's
+requirement that the two refusals be distinguishable was silently unmet. Refusal statuses
+now read as refusals; 5xx and 429 still throw.
+
+**And `return true` was the default.** The old client, finding neither `authorized` nor
+`success` in the response, returned true. Against this Frey that is unreachable — a bad
+token never yields a 200 — but it is one deployment away from authorising everybody. The
+rule that replaced it comes from the protobuf JSON mapping rather than from guesswork: a
+bool that is true is always serialised and a false one is always omitted, so
+`authSuccess === true` is the whole test and an unreadable body is a refusal.
+
+Getting an instance up to find this out took about an hour, and five of the obstacles are
+recorded in PANTHEON-INTEGRATION.md §6 because none of them are in Pantheon's
+documentation. The sharpest: `CreateEvent` accepts `is_prescripted: true` on a club
+event, reports success, stores the wind shuffle mode faithfully, and sets
+`is_prescripted = 0` — only tournaments can be prescripted. The single visible symptom is
+that the roster comes back with no local ids.
+
 ## 7. The Pantheon boundary, and what is *not* verified
 
 Everything the app needs from Pantheon goes through one interface in
@@ -484,7 +531,7 @@ production.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 172 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon | pass |
+| Unit tests (`npm test`) — 178 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -504,7 +551,12 @@ production.
 | e2e A5/A7: recomputed offline in a fresh process, and again in Python | byte-identical |
 | e2e A6: prescript read back, session 1 matches **including winds** | passes *(against the stub)* |
 | UI: all six stages rendered and inspected, including the phone grid | passes |
-| **RUNBOOK A2/A3/A6 against a real Pantheon instance** | **outstanding — see §7** |
+| RUNBOOK A2/A3/A6 against a real Pantheon instance (`cdda3fc`, local Docker) | passes *(after six fixes — §6f)* |
+| Roster snapshot from a live event, through `tools/freeze.js` | passes |
+| Sign-in gate live: correct token, wrong token, unknown person | passes, three distinct answers |
+| Prescript written, read back byte-identical, and applied with `MakePrescriptedSeating` | passes, seat order intact |
+| The whole suite on Linux (WSL 2), including e2e A2-A7 | passes |
+| **The Pantheon instance actually deployed against** | **outstanding — §5.1 is one commit's behaviour** |
 
 `npm run e2e` needs network access to `api.drand.sh` and takes about three minutes,
 most of it waiting for the target round to land.

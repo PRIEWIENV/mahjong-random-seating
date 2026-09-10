@@ -24,7 +24,7 @@ Start with [`docs/seating-design.md`](docs/seating-design.md): it explains the w
 
 **Outstanding**
 
-- **The Twirp client has not been run against a real Pantheon instance.** None was available. `PANTHEON-INTEGRATION.md` says to confirm the field names against the instance you actually run; that is still to do, and RUNBOOK steps A2, A3 and A6 are not satisfied against real Pantheon until it happens. Everything passes against the stub. See [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) §7.
+- The Twirp client **has** now been run against a real Pantheon (`cdda3fc`, in Docker under WSL 2): the roster snapshot, the sign-in gate in all three directions, and the prescript written, read back and applied with `MakePrescriptedSeating`, seat order intact. Six things were wrong and none of them failed loudly — see [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) §5.1 and §6. What is still outstanding is narrower: **the instance you actually deploy against**. Pantheon moves, §5.1 is a fact about one commit, and `tools/pantheon-fixture.js` plus §6 make re-checking it a half-hour job rather than a research project.
 - **The operational half of the RUNBOOK has been rehearsed, not performed.** `npm run rehearse` runs sections B, C and D end to end in a throwaway repository — roster snapshot, freeze, tag, twelve sealed submissions, the chase list, the draw, the sync, and the check a player does afterwards — against the Pantheon stub and a real drand round. Every step passes. What is left is doing it for an actual event, with real registrations and a deployment, and with the stub replaced by the instance in the first bullet.
 
 **Read [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) before freezing.** One item there is about what "verified" actually means:
@@ -39,7 +39,7 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 172 unit tests, offline, ~6s
+npm test                  # 178 unit tests, offline, ~6s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~5 min
@@ -124,6 +124,8 @@ tools/
   pick-round.js              # target_round and cutoff, kept consistent
   new-round.js               # after a void: verify the archive, then open the next attempt
   freeze.js                  # RUNBOOK 8-11 as one command: snapshot, check, commit, tag
+  rehearse.js                # RUNBOOK B/C/D end to end in a sandbox, before the day
+  pantheon-fixture.js        # builds the test event on a local Pantheon (dev only)
   decrypt-submissions.js     # participant-side verification
 test/
   *.test.js                  # unit tests, incl. the roll-call against the snapshot

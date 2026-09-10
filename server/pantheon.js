@@ -30,7 +30,39 @@
 
 const fs = require('node:fs');
 
-const DEFAULT_TWIRP_PATH = '/twirp/{service}/{method}';
+const DEFAULT_TWIRP_PATH = '/v2/{service}/{method}';
+
+/**
+ * Read a protobuf JSON field under either spelling.
+ *
+ * Requests may be written in snake_case — both Pantheon services accept it — but the
+ * responses come back in lowerCamelCase, which is what the protobuf JSON mapping
+ * specifies and what a live instance actually emits: `{"personId":1,"authToken":"..."}`,
+ * `{"authSuccess":true}`, `{"tenhouId":"..."}`. Reading only snake_case meant every
+ * field this client cared about came back undefined.
+ *
+ * The other half of that mapping matters just as much: a field holding its default is
+ * omitted entirely. An unset `local_id` is not null, it is absent; `ignore_seating:
+ * false` is absent; and `auth_success: false` is absent. Absent therefore has to read as
+ * the default rather than as "the server did not say".
+ */
+function field(obj, snakeName) {
+  if (obj == null || typeof obj !== 'object') return undefined;
+  if (obj[snakeName] !== undefined) return obj[snakeName];
+  return obj[snakeName.replace(/_([a-z])/g, (_, c) => c.toUpperCase())];
+}
+
+/**
+ * Twirp codes that mean "no", as opposed to "ask again later".
+ *
+ * Frey answers a bad credential pair with an error rather than with a false: a wrong
+ * token is 400 invalid_argument "Password check failed", an unknown person is 404
+ * not_found. Treating those as transport failures reported a mistyped password to the
+ * player as "Cannot reach Pantheon right now" — a 503 where UI-SPEC §3 requires a
+ * distinguishable 401. 429 is deliberately not in this set: it is a rate limit, and
+ * retrying is the right response to it.
+ */
+const REFUSAL_STATUSES = new Set([400, 401, 403, 404]);
 
 class PantheonError extends Error {
   constructor(message, opts = {}) {
@@ -50,11 +82,13 @@ class TwirpPantheon {
    * @param {object} env process.env — carries the admin credentials for the sync
    */
   constructor(cfg = {}, env = process.env, opts = {}) {
-    this.freyBase = String(cfg.frey_base_url || 'http://localhost:4001').replace(/\/+$/, '');
-    this.mimirBase = String(cfg.mimir_base_url || 'http://localhost:4002').replace(/\/+$/, '');
+    // The fallbacks match server/runtime.js's defaults, which are the values a live
+    // Pantheon answers to. Two copies of a wrong guess is how the first set survived.
+    this.freyBase = String(cfg.frey_base_url || 'http://frey.pantheon.local:4004').replace(/\/+$/, '');
+    this.mimirBase = String(cfg.mimir_base_url || 'http://mimir.pantheon.local:4001').replace(/\/+$/, '');
     this.pathTemplate = cfg.twirp_path_template || DEFAULT_TWIRP_PATH;
-    this.freyService = cfg.frey_service || 'frey.Frey';
-    this.mimirService = cfg.mimir_service || 'mimir.Mimir';
+    this.freyService = cfg.frey_service || 'common.Frey';
+    this.mimirService = cfg.mimir_service || 'common.Mimir';
     // Admin credentials for the sync step only. §3: kept in the environment, never in
     // the repository, and never used on the sign-in path.
     this.adminPersonId = env.PANTHEON_ADMIN_PERSON_ID ? Number(env.PANTHEON_ADMIN_PERSON_ID) : null;
@@ -67,7 +101,7 @@ class TwirpPantheon {
     return base + this.pathTemplate.replace('{service}', service).replace('{method}', method);
   }
 
-  async #call(base, service, method, body, { admin = false } = {}) {
+  async #call(base, service, method, body, { admin = false, eventId = null } = {}) {
     const headers = { 'content-type': 'application/json', accept: 'application/json' };
     if (admin) {
       if (!this.adminToken || !this.adminPersonId) {
@@ -78,6 +112,11 @@ class TwirpPantheon {
       // Header names differ between Pantheon versions; these are the documented ones.
       headers['x-auth-token'] = this.adminToken;
       headers['x-current-person-id'] = String(this.adminPersonId);
+      // Mimir scopes admin and referee rights per event and reads the scope from this
+      // header (Meta.php). Without it an event admin is not recognised as one, and the
+      // prescript write — which runs after the draw, when nothing can be changed — is
+      // refused.
+      if (eventId != null) headers['x-current-event-id'] = String(eventId);
     }
 
     const ac = new AbortController();
@@ -110,14 +149,22 @@ class TwirpPantheon {
 
   /** Frey QuickAuthorize — confirm a {person_id, auth_token} pair the browser obtained. */
   async verifyToken(personId, authToken) {
-    const out = await this.#call(this.freyBase, this.freyService, 'QuickAuthorize', {
-      person_id: personId,
-      auth_token: authToken,
-    });
-    // Twirp JSON may report either a boolean field or an empty success body.
-    if (typeof out.authorized === 'boolean') return out.authorized;
-    if (typeof out.success === 'boolean') return out.success;
-    return true;
+    let out;
+    try {
+      out = await this.#call(this.freyBase, this.freyService, 'QuickAuthorize', {
+        person_id: personId,
+        auth_token: authToken,
+      });
+    } catch (err) {
+      // A refusal is an answer, not an outage. See REFUSAL_STATUSES.
+      if (REFUSAL_STATUSES.has(err.status)) return false;
+      throw err;
+    }
+    // A bool that is true is always present in protobuf JSON, because true is not the
+    // default; false is always absent. So "present and true" is the whole test, and an
+    // unrecognisable body is a refusal rather than — as it was — an implicit yes.
+    const ok = field(out, 'auth_success') ?? out.authorized ?? out.success;
+    return ok === true;
   }
 
   /** Mimir GetAllRegisteredPlayers — the live event roster, with local ids. */
@@ -125,21 +172,22 @@ class TwirpPantheon {
     const out = await this.#call(this.mimirBase, this.mimirService, 'GetAllRegisteredPlayers', {
       event_ids: [eventId],
     });
-    const players = out.players || out.registered_players || [];
+    const players = out.players || field(out, 'registered_players') || [];
     return players.map((p) => ({
-      person_id: p.id ?? p.person_id,
+      person_id: p.id ?? field(p, 'person_id'),
       title: p.title,
-      local_id: p.local_id ?? null,
-      ignore_seating: Boolean(p.ignore_seating),
+      // Absent means unassigned, which is what tools/freeze.js refuses to freeze over.
+      local_id: field(p, 'local_id') ?? null,
+      ignore_seating: field(p, 'ignore_seating') === true,
     }));
   }
 
   async getPrescript(eventId) {
     const out = await this.#call(this.mimirBase, this.mimirService, 'GetPrescriptedEventConfig',
-      { event_id: eventId }, { admin: true });
+      { event_id: eventId }, { admin: true, eventId });
     return {
-      event_id: out.event_id ?? eventId,
-      next_session_index: out.next_session_index ?? 0,
+      event_id: field(out, 'event_id') ?? eventId,
+      next_session_index: field(out, 'next_session_index') ?? 0,
       prescript: out.prescript ?? '',
     };
   }
@@ -150,7 +198,7 @@ class TwirpPantheon {
       event_id: eventId,
       next_session_index: nextSessionIndex,
       prescript,
-    }, { admin: true });
+    }, { admin: true, eventId });
   }
 }
 
@@ -237,4 +285,6 @@ function createPantheon(cfg, env = process.env, opts = {}) {
   return new TwirpPantheon(cfg?.runtime?.pantheon || {}, env, opts);
 }
 
-module.exports = { TwirpPantheon, StubPantheon, PantheonError, createPantheon, DEFAULT_TWIRP_PATH };
+module.exports = {
+  TwirpPantheon, StubPantheon, PantheonError, createPantheon, DEFAULT_TWIRP_PATH, field,
+};

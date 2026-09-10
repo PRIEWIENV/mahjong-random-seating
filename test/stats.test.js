@@ -137,26 +137,113 @@ test('the prescript Pantheon receives round-trips back to the same seat plan', a
   });
 });
 
-test('the Twirp client posts to the documented method paths', async () => {
+// ---------------------------------------------------------------------------
+// The Twirp client, against what a live Pantheon actually does.
+//
+// Every value below was read off a running instance (Pantheon cdda3fc) rather than off
+// the proto files, because the two disagreed in four places and each disagreement was
+// silent. The old version of this test pinned the guesses.
+
+/** A fetch that records what was sent and replies with whatever the test wants. */
+function recorder(reply) {
   const calls = [];
-  const fake = async (url, init) => {
+  const fetch = async (url, init) => {
     calls.push({ url, body: JSON.parse(init.body), headers: init.headers });
-    return { ok: true, status: 200, text: async () => JSON.stringify({ authorized: true, players: [] }) };
+    const r = typeof reply === 'function' ? reply(url, calls.length - 1) : reply;
+    const status = r.status ?? 200;
+    return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(r.body ?? {}) };
   };
-  const p = new TwirpPantheon(
-    { frey_base_url: 'http://f', mimir_base_url: 'http://m' },
-    { PANTHEON_ADMIN_PERSON_ID: '1', PANTHEON_ADMIN_TOKEN: 'tok' },
-    { fetch: fake }
-  );
+  return { calls, fetch };
+}
+
+const client = (fetch, env = { PANTHEON_ADMIN_PERSON_ID: '1', PANTHEON_ADMIN_TOKEN: 'tok' }) =>
+  new TwirpPantheon({ frey_base_url: 'http://f', mimir_base_url: 'http://m' }, env, { fetch });
+
+test('the Twirp client posts to the paths a live Pantheon serves', async () => {
+  // /v2, not /twirp: both services mount the handler under /v2 (Mimir in
+  // www/twirp/index.php, Frey in app/server.ts). And the protobuf package is `common`
+  // for both, so the service segment is common.Frey / common.Mimir — not frey.Frey.
+  const { calls, fetch } = recorder({ body: { authSuccess: true, players: [] } });
+  const p = client(fetch);
   await p.verifyToken(7, 'abc');
   await p.getEventRoster(42);
   await p.setPrescript(42, 'x', 1);
-  assert.equal(calls[0].url, 'http://f/twirp/frey.Frey/QuickAuthorize');
-  assert.equal(calls[1].url, 'http://m/twirp/mimir.Mimir/GetAllRegisteredPlayers');
+
+  assert.equal(calls[0].url, 'http://f/v2/common.Frey/QuickAuthorize');
+  assert.equal(calls[1].url, 'http://m/v2/common.Mimir/GetAllRegisteredPlayers');
+  assert.equal(calls[2].url, 'http://m/v2/common.Mimir/UpdatePrescriptedEventConfig');
+  // Requests may stay snake_case; both services accept it.
   assert.deepEqual(calls[1].body, { event_ids: [42] });
-  assert.equal(calls[2].url, 'http://m/twirp/mimir.Mimir/UpdatePrescriptedEventConfig');
   assert.equal(calls[2].body.next_session_index, 1);
-  await assert.doesNotReject(async () => {});
+});
+
+test('responses are read in lowerCamelCase, which is what the wire carries', async () => {
+  // Observed: {"personId":1,"authToken":"..."}, {"authSuccess":true},
+  // {"players":[{"id":2,"title":"...","tenhouId":"...","lastUpdate":"..."}]}.
+  const { fetch } = recorder({ body: {
+    players: [{ id: 2, title: 'playerplayer1', localId: 5, ignoreSeating: true }],
+  } });
+  const roster = await client(fetch).getEventRoster(1);
+  assert.deepEqual(roster, [{ person_id: 2, title: 'playerplayer1', local_id: 5, ignore_seating: true }]);
+});
+
+test('a field holding its default is absent from the response, and reads as the default', async () => {
+  // The seeded event returns players with no localId and no ignoreSeating at all,
+  // because protobuf JSON omits an unset optional and a false bool. Reading those as
+  // "the server did not say" rather than as unassigned/false is how a roster of twelve
+  // silently became twelve players with no local ids.
+  const { fetch } = recorder({ body: { players: [{ id: 2, title: 'x' }] } });
+  const roster = await client(fetch).getEventRoster(1);
+  assert.equal(roster[0].local_id, null, 'an absent localId means unassigned');
+  assert.equal(roster[0].ignore_seating, false, 'an absent ignoreSeating means false');
+});
+
+test('a bad credential pair is a refusal, not an outage', async () => {
+  // Frey answers a wrong token with 400 invalid_argument "Password check failed" and an
+  // unknown person with 404 not_found — never with a 200 carrying false. Letting those
+  // propagate made server.js report a mistyped password as 503 "Cannot reach Pantheon
+  // right now", where UI-SPEC §3 requires a 401 the player can act on.
+  for (const status of [400, 401, 403, 404]) {
+    const { fetch } = recorder({ status, body: { code: 'invalid_argument', msg: 'Password check failed' } });
+    assert.equal(await client(fetch).verifyToken(1, 'wrong'), false, `status ${status} must read as a refusal`);
+  }
+});
+
+test('an outage is still an outage', async () => {
+  // The distinction only works if the other direction holds: 5xx and 429 must keep
+  // throwing, so the player is told to try again rather than that their password is wrong.
+  for (const status of [500, 502, 503, 429]) {
+    const { fetch } = recorder({ status, body: { code: 'internal', msg: 'boom' } });
+    await assert.rejects(() => client(fetch).verifyToken(1, 'tok'), /QuickAuthorize/, `status ${status}`);
+  }
+});
+
+test('sign-in needs the response to say yes, and an unreadable body does not', async () => {
+  const yes = recorder({ body: { authSuccess: true } });
+  assert.equal(await client(yes.fetch).verifyToken(1, 'tok'), true);
+
+  // A bool that is true is always serialised; false is always omitted. So an empty body
+  // is a false, and anything unrecognisable is a refusal. This used to return true.
+  for (const body of [{}, { authSuccess: false }, { nonsense: 1 }, null]) {
+    const r = recorder({ body });
+    assert.equal(await client(r.fetch).verifyToken(1, 'tok'), false, `body ${JSON.stringify(body)}`);
+  }
+});
+
+test('admin calls carry the event scope Mimir checks rights against', async () => {
+  // Mimir/src/Meta.php reads X-Auth-Token, X-Current-Person-Id and X-Current-Event-Id,
+  // and event admin and referee rights are scoped by the third. Without it the prescript
+  // write is refused — after the draw, when nothing can be changed.
+  const { calls, fetch } = recorder({ body: {} });
+  await client(fetch).setPrescript(42, 'plan', 1);
+  assert.equal(calls[0].headers['x-auth-token'], 'tok');
+  assert.equal(calls[0].headers['x-current-person-id'], '1');
+  assert.equal(calls[0].headers['x-current-event-id'], '42');
+
+  // The sign-in path is not an admin path and must never send credentials (§3).
+  const s = recorder({ body: { authSuccess: true } });
+  await client(s.fetch).verifyToken(1, 'tok');
+  assert.equal(s.calls[0].headers['x-auth-token'], undefined);
 });
 
 test('the sync path refuses to run without admin credentials', async () => {

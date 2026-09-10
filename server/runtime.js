@@ -46,13 +46,18 @@ const DEFAULTS = {
     health_poll_ms: 30_000,
   },
   pantheon: {
-    frey_base_url: 'http://localhost:4001',
-    mimir_base_url: 'http://localhost:4002',
+    // Pantheon's own docker compose publishes Mimir on 4001 and Frey on 4004. Both
+    // container nginx configs match on server_name, and both have a catch-all that
+    // answers 404, so this has to be a hostname Pantheon answers to and not an IP.
+    frey_base_url: 'http://frey.pantheon.local:4004',
+    mimir_base_url: 'http://mimir.pantheon.local:4001',
     // PANTHEON-INTEGRATION.md: field and path naming drifts between Pantheon
-    // deployments, so it is configuration rather than code.
-    twirp_path_template: '/twirp/{service}/{method}',
-    frey_service: 'frey.Frey',
-    mimir_service: 'mimir.Mimir',
+    // deployments, so it is configuration rather than code. These values are the ones
+    // confirmed against a live instance (Pantheon cdda3fc): both services mount Twirp
+    // under /v2, and both protobuf packages are `common`.
+    twirp_path_template: '/v2/{service}/{method}',
+    frey_service: 'common.Frey',
+    mimir_service: 'common.Mimir',
   },
   ui: {
     // UI-SPEC §5's documented fallback cadence when the SSE stream drops. Served to

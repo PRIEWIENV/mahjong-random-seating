@@ -11,11 +11,11 @@
     "health_poll_ms": 30000
   },
   "pantheon": {
-    "frey_base_url": "http://localhost:4001",
-    "mimir_base_url": "http://localhost:4002",
-    "twirp_path_template": "/twirp/{service}/{method}",
-    "frey_service": "frey.Frey",
-    "mimir_service": "mimir.Mimir"
+    "frey_base_url": "http://frey.pantheon.local:4004",
+    "mimir_base_url": "http://mimir.pantheon.local:4001",
+    "twirp_path_template": "/v2/{service}/{method}",
+    "frey_service": "common.Frey",
+    "mimir_service": "common.Mimir"
   },
   "ui": {
     "status_poll_interval_ms": 15000
