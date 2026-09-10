@@ -24,6 +24,10 @@ const TEXT = {
     signIn: '登录',
     signingIn: '登录中…',
     rejected: 'Pantheon 不认识这个邮箱和密码。',
+    unknownAccount: 'Pantheon 里没有这个邮箱的账号。确认一下是不是用另一个邮箱注册的。',
+    unreachable: '连不上 Pantheon，所以没能验证你的身份。这不是你的问题，请联系组织者。',
+    misconfigured: '这次抽签的 Pantheon 地址配置有误，登录无法进行。请把下面这行发给组织者。',
+    pantheonError: 'Pantheon 出错了，暂时无法登录。稍后再试，或联系组织者。',
     fineprint: '你的密码只发给 Pantheon，不会经过这个应用。',
   },
   en: {
@@ -36,6 +40,10 @@ const TEXT = {
     signIn: 'Sign in',
     signingIn: 'Signing in…',
     rejected: 'Pantheon did not recognise that email and password.',
+    unknownAccount: 'Pantheon has no account with that email address. Check whether you registered under a different one.',
+    unreachable: 'Pantheon could not be reached, so your sign-in could not be checked. This is not something you did; please tell the organiser.',
+    misconfigured: 'This draw is pointed at the wrong Pantheon address, so sign-in cannot work. Please send the line below to the organiser.',
+    pantheonError: 'Pantheon returned an error, so sign-in is unavailable right now. Try again shortly, or tell the organiser.',
     fineprint: 'Your password goes to Pantheon only. It never passes through this app.',
   },
 };
@@ -64,14 +72,33 @@ export default function SignIn({ status, onSignedIn }) {
       const me = await api.createSession(pair.person_id, pair.auth_token);
       onSignedIn(me);
     } catch (err) {
-      // The server's own wording for these two: they are the ones §3 requires to stay
-      // distinguishable, and it knows which case it is.
-      if (err.code === 'not_registered') {
-        setProblem({ kind: 'info', text: err.message });
-      } else if (err.code === 'pantheon_unavailable') {
-        setProblem({ kind: 'error', text: err.message });
-      } else {
-        setProblem({ kind: 'error', text: t.rejected });
+      // §3 requires the failures to stay distinguishable, and the old `else` swallowed
+      // every one of them into "wrong password" — including an unreachable Frey and a
+      // mistyped base URL, which sent more than one deployment looking at the wrong
+      // thing. Anything the player cannot act on carries the technical line as well, so
+      // whoever they forward it to sees what actually happened.
+      const detail = err.detail || null;
+      switch (err.code) {
+        case 'not_registered':
+          setProblem({ kind: 'info', text: err.message });
+          break;
+        case 'pantheon_unavailable':          // our server could not reach Pantheon
+          setProblem({ kind: 'error', text: err.message, detail });
+          break;
+        case 'pantheon_unreachable':          // the browser could not reach Frey
+          setProblem({ kind: 'error', text: t.unreachable, detail: detail || err.message });
+          break;
+        case 'pantheon_misconfigured':
+          setProblem({ kind: 'error', text: t.misconfigured, detail: detail || err.message });
+          break;
+        case 'pantheon_error':
+          setProblem({ kind: 'error', text: t.pantheonError, detail });
+          break;
+        case 'unknown_account':
+          setProblem({ kind: 'error', text: t.unknownAccount });
+          break;
+        default:
+          setProblem({ kind: 'error', text: t.rejected });
       }
       setBusy(false);
     }
@@ -102,7 +129,12 @@ export default function SignIn({ status, onSignedIn }) {
         )}
 
         <button type="submit" disabled={busy}>{busy ? t.signingIn : t.signIn}</button>
-        {problem && <p className={problem.kind === 'info' ? 'note info' : 'note bad'}>{problem.text}</p>}
+        {problem && (
+          <p className={problem.kind === 'info' ? 'note info' : 'note bad'}>
+            {problem.text}
+            {problem.detail && <code className="detail">{problem.detail}</code>}
+          </p>
+        )}
         <p className="fineprint">{t.fineprint}</p>
       </form>
     </div>

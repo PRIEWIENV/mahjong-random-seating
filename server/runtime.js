@@ -55,6 +55,14 @@ const DEFAULTS = {
     // answers 404, so this has to be a hostname Pantheon answers to and not an IP.
     frey_base_url: 'http://frey.pantheon.local:4004',
     mimir_base_url: 'http://mimir.pantheon.local:4001',
+    // Frey is the one service reached from TWO vantage points. The backend calls it
+    // from the server, where deploy/README.md rightly says to use localhost; the
+    // BROWSER calls it too (PANTHEON-INTEGRATION.md §2), from a phone on which
+    // localhost is that phone. One field cannot be right for both, and when it was one
+    // field the failure was silent: the browser got a refused connection and the page
+    // reported it as a wrong password. Null means "the same as frey_base_url", which is
+    // correct whenever that URL is publicly resolvable.
+    frey_public_url: null,
     // PANTHEON-INTEGRATION.md: field and path naming drifts between Pantheon
     // deployments, so it is configuration rather than code. These values are the ones
     // confirmed against a live instance (Pantheon cdda3fc): both services mount Twirp
@@ -87,6 +95,7 @@ const OPERATIONAL_KEYS = {
   drand_mirrors: 'runtime.json → drand.mirrors',
   'pantheon.frey_base_url': 'runtime.json → pantheon.frey_base_url',
   'pantheon.mimir_base_url': 'runtime.json → pantheon.mimir_base_url',
+  'pantheon.frey_public_url': 'runtime.json → pantheon.frey_public_url',
   'pantheon.twirp_path_template': 'runtime.json → pantheon.twirp_path_template',
   'pantheon.frey_service': 'runtime.json → pantheon.frey_service',
   'pantheon.mimir_service': 'runtime.json → pantheon.mimir_service',
@@ -130,6 +139,10 @@ function validate(r) {
   baseUrl('pantheon', 'mimir_base_url', r.pantheon.mimir_base_url);
   r.pantheon.frey_base_url = r.pantheon.frey_base_url.replace(/\/+$/, '');
   r.pantheon.mimir_base_url = r.pantheon.mimir_base_url.replace(/\/+$/, '');
+  if (r.pantheon.frey_public_url != null) {
+    baseUrl('pantheon', 'frey_public_url', r.pantheon.frey_public_url);
+    r.pantheon.frey_public_url = r.pantheon.frey_public_url.replace(/\/+$/, '');
+  }
   for (const k of ['twirp_path_template', 'frey_service', 'mimir_service']) {
     if (typeof r.pantheon[k] !== 'string' || r.pantheon[k] === '') {
       throw new Error(`runtime.json: pantheon.${k} must be a non-empty string`);
@@ -189,9 +202,33 @@ function loadRuntime(dataDir, env = process.env) {
   if (env.DRAND_API) r.drand.api = baseUrl('drand', 'api', env.DRAND_API);
   if (env.PANTHEON_FREY_URL) r.pantheon.frey_base_url = baseUrl('pantheon', 'frey_base_url', env.PANTHEON_FREY_URL);
   if (env.PANTHEON_MIMIR_URL) r.pantheon.mimir_base_url = baseUrl('pantheon', 'mimir_base_url', env.PANTHEON_MIMIR_URL);
+  if (env.PANTHEON_FREY_PUBLIC_URL) {
+    r.pantheon.frey_public_url = baseUrl('pantheon', 'frey_public_url', env.PANTHEON_FREY_PUBLIC_URL).replace(/\/+$/, '');
+  }
   if (!r.drand.mirrors.includes(r.drand.api)) r.drand.mirrors = [r.drand.api, ...r.drand.mirrors];
 
   return r;
 }
 
-module.exports = { loadRuntime, DEFAULTS, OPERATIONAL_KEYS };
+/**
+ * The Frey URL to hand the BROWSER. Falls back to the backend's own, which is right
+ * whenever that address is publicly resolvable and wrong in exactly one way — a
+ * loopback or private address that means the server here and the player's own device
+ * there. `freyPublicUrlIsLocal` names that case so a deployment can be told before a
+ * player finds it.
+ */
+function freyPublicUrl(runtime) {
+  return runtime.pantheon.frey_public_url || runtime.pantheon.frey_base_url;
+}
+
+const LOCAL_HOST = /^(localhost|127\.|0\.0\.0\.0$|\[?::1\]?$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+
+function freyPublicUrlIsLocal(runtime) {
+  try {
+    return LOCAL_HOST.test(new URL(freyPublicUrl(runtime)).hostname);
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { loadRuntime, DEFAULTS, OPERATIONAL_KEYS, freyPublicUrl, freyPublicUrlIsLocal };

@@ -199,7 +199,8 @@ test('an artefact that is not where it should be reads as missing, not as blank'
 // ---------------------------------------------------------------------------
 
 function checksFor(over) {
-  const fx = makeDataDir();
+  const { dataDirOpts, ...rest } = over;
+  const fx = makeDataDir(dataDirOpts || {});
   const cfg = load({ dataDir: fx.dataDir });
   cfg.root = fx.dir;
   const model = collect({
@@ -212,7 +213,7 @@ function checksFor(over) {
     isStub: false,
     mirror: { enabled: true, repo: 'me/repo', branch: 'main' },
     production: true,
-    ...over,
+    ...rest,
   });
   cleanup(fx.dir);
   return Object.fromEntries(model.checks.map((c) => [c.label, c.level]));
@@ -228,6 +229,22 @@ test('the stub in production is a failure, on a laptop only a warning', () => {
   // authorises everybody in the other.
   assert.equal(checksFor({ isStub: true, production: true })['Pantheon adapter is the STUB'], 'fail');
   assert.equal(checksFor({ isStub: true, production: false })['Pantheon adapter is the STUB'], 'warn');
+});
+
+test('a Frey URL the browser cannot reach is a production failure', () => {
+  // The browser calls Frey itself (PANTHEON-INTEGRATION.md §2), so an address that
+  // resolves only on the server is not a working sign-in — and it fails on the player's
+  // screen as "wrong email or password", which is the reason it gets its own row.
+  const local = { runtime: { pantheon: { frey_base_url: 'http://127.0.0.1:14001', mimir_base_url: 'http://127.0.0.1:14002' } } };
+  const c = checksFor({ dataDirOpts: local, production: true });
+  assert.equal(c['The Frey URL given to browsers'], 'fail');
+  assert.equal(checksFor({ dataDirOpts: local, production: false })['The Frey URL given to browsers'], 'warn');
+});
+
+test('a public Frey URL passes, whatever the backend uses', () => {
+  // The two are allowed to differ, and normally must: localhost for the backend on the
+  // same host, a resolvable name for the phone in someone's hand.
+  assert.equal(checksFor({})['The Frey URL given to browsers'], 'ok');
 });
 
 test('mirroring switched off is a failure', () => {

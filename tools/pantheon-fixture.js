@@ -14,7 +14,17 @@
  *
  *   node tools/pantheon-fixture.js                       create the event, print its id
  *   node tools/pantheon-fixture.js --players 12          how many to register
+ *   node tools/pantheon-fixture.js --accounts            create the players too, with
+ *                                                        passwords, so sign-in is testable
  *   node tools/pantheon-fixture.js --event 3 --inspect   just show what an event holds
+ *
+ * Without --accounts the players are borrowed from the instance's seed data, whose
+ * passwords nobody knows. That is fine for the draw itself — it only ever needs person
+ * ids — but it cannot exercise the one path a real player takes first: the browser
+ * posting an email and a password to Frey (PANTHEON-INTEGRATION.md §2). --accounts
+ * creates twelve accounts with known credentials and prints them, so that path can be
+ * walked end to end. Re-running is safe: an account that already exists is recovered by
+ * signing in as it rather than being created twice.
  *
  * Every call here goes through the same field-name conventions server/pantheon.js uses,
  * so if this works, that works: requests in snake_case, responses in lowerCamelCase.
@@ -26,6 +36,11 @@ const ADMIN_EMAIL = process.env.PANTHEON_ADMIN_EMAIL || 'admin@localhost.localdo
 const ADMIN_PASSWORD = process.env.PANTHEON_ADMIN_PASSWORD || '123456';
 const FREY = (process.env.PANTHEON_FREY_URL || 'http://frey.pantheon.local:4004').replace(/\/+$/, '');
 const MIMIR = (process.env.PANTHEON_MIMIR_URL || 'http://mimir.pantheon.local:4001').replace(/\/+$/, '');
+
+// Deliberately a reserved TLD (RFC 2606) and a password nobody would reuse: these
+// accounts exist on a development instance and must never be mistaken for real ones.
+const ACCOUNT_DOMAIN = 'example.invalid';
+const DEFAULT_PASSWORD = 'seat-test-pass-1';
 
 const ok = (s) => console.log(`  \x1b[32mOK\x1b[0m    ${s}`);
 const note = (s) => console.log(`        ${s}`);
@@ -70,6 +85,38 @@ async function call(base, service, method, body, auth) {
 
 const frey = (m, b, a) => call(FREY, 'common.Frey', m, b, a);
 const mimir = (m, b, a) => call(MIMIR, 'common.Mimir', m, b, a);
+
+/**
+ * Twelve accounts with credentials we know, created through Frey the way a person would
+ * be. Idempotent: Frey answers 409 `already_exists` for an email it has seen, and the
+ * recovery is to sign in as that account, which also proves the password still works.
+ */
+async function createAccounts(admin, count, password) {
+  const out = [];
+  let made = 0;
+  let reused = 0;
+  for (let i = 1; i <= count; i++) {
+    const n = String(i).padStart(2, '0');
+    const email = `seat-test-${n}@${ACCOUNT_DOMAIN}`;
+    const title = `Seat Test ${n}`;
+    let personId;
+    try {
+      personId = field(await frey('CreateAccount', {
+        email, password, title, city: '', phone: '',
+      }, admin), 'person_id');
+      made++;
+    } catch (err) {
+      if (!/already_exists|already registered/i.test(err.message)) throw err;
+      const back = await frey('Authorize', { email, password });
+      personId = field(back, 'person_id');
+      reused++;
+    }
+    if (!Number.isInteger(personId)) throw new Error(`no person id for ${email}`);
+    out.push({ personId, email, password, title });
+  }
+  ok(`${count} accounts ready (${made} created, ${reused} already existed)`);
+  return out;
+}
 
 async function main(argv) {
   const args = parseArgs(argv);
@@ -129,12 +176,19 @@ async function main(argv) {
   if (!eventId) throw new Error(`CreateEvent returned no event id: ${JSON.stringify(created)}`);
   ok(`event ${eventId} created, prescripted, winds prescripted`);
 
-  // Anyone the instance already knows about will do; the draw never sees their names
-  // until the roster snapshot, and the seeder has plenty.
-  const known = field(await mimir('GetAllRegisteredPlayers', { event_ids: [1] }), 'players') || [];
-  const pool = known.filter((p) => p.id !== admin.personId).slice(0, wanted);
-  if (pool.length < wanted) {
-    throw new Error(`only ${pool.length} players available in event 1 — run \`make seed\` in the Pantheon checkout`);
+  let pool;
+  let credentials = null;
+  if (args.accounts) {
+    credentials = await createAccounts(admin, wanted, String(args.password || DEFAULT_PASSWORD));
+    pool = credentials.map((c) => ({ id: c.personId, title: c.title }));
+  } else {
+    // Anyone the instance already knows about will do; the draw never sees their names
+    // until the roster snapshot, and the seeder has plenty.
+    const known = field(await mimir('GetAllRegisteredPlayers', { event_ids: [1] }), 'players') || [];
+    pool = known.filter((p) => p.id !== admin.personId).slice(0, wanted);
+    if (pool.length < wanted) {
+      throw new Error(`only ${pool.length} players available in event 1 — run \`make seed\` in the Pantheon checkout`);
+    }
   }
 
   for (const p of pool) {
@@ -155,6 +209,16 @@ async function main(argv) {
     throw new Error(`${missing.length} of ${back.length} players still have no local_id after the update`);
   }
   ok(`local_id 1..${back.length} assigned and read back`);
+
+  if (credentials) {
+    console.log('\n  Sign-in credentials (development instance only):\n');
+    console.log('    local_id  person_id  email                              password');
+    for (const [i, c] of credentials.entries()) {
+      console.log(
+        `    ${String(i + 1).padEnd(8)}  ${String(c.personId).padEnd(9)}  ${c.email.padEnd(33)}  ${c.password}`
+      );
+    }
+  }
 
   console.log(`
   The event is ready. Point the draw at it:

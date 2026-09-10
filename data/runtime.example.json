@@ -13,6 +13,8 @@
   },
   "pantheon": {
     "frey_base_url": "http://frey.pantheon.local:4004",
+    "_frey_public_url": "Where the BROWSER should reach Frey, if that is not frey_base_url. The backend calls Frey from the server, where localhost is correct; the browser calls it too (PANTHEON-INTEGRATION.md §2) from a device on which localhost is that device. Leave it out when frey_base_url is publicly resolvable. Whatever ends up here must also appear in the proxy's CSP connect-src.",
+    "frey_public_url": null,
     "mimir_base_url": "http://mimir.pantheon.local:4001",
     "twirp_path_template": "/v2/{service}/{method}",
     "frey_service": "common.Frey",

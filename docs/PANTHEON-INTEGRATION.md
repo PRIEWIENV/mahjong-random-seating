@@ -28,6 +28,45 @@ The requirement is that only players registered to a specific event can sign in.
 
 Checking against both the live Pantheon roster and the frozen snapshot is deliberate. The live check is the authorisation; the frozen check makes sure a roster edit made after the freeze cannot quietly enlarge or alter the field of twelve.
 
+### What the credential actually is
+
+"This app never handles a Pantheon password" is true and worth keeping true, but it is not the whole statement, because the thing the app *does* handle is stronger than the phrase suggests.
+
+Frey's `Authorize` takes the raw password and does the hashing itself (`Frey/app/models/auth.ts`):
+
+```ts
+const authToken = makeClientHash(payload.password, personData[0].auth_salt);
+await verifyHash(authToken, personData[0].auth_hash);
+return { personId: personData[0].id, authToken };
+```
+
+`makeClientHash` is `sha384(password + auth_salt)`, and `verifyHash` bcrypt-compares it against the stored hash. Two things follow.
+
+**The password crosses the network in the request body.** Only TLS protects it. Frey exposes no way to hash first — that would need the account's salt, and an endpoint handing out a salt for any email is an account-enumeration oracle. So this is the only path Pantheon offers, and the security of it is exactly the security of the transport. It is also the strongest single reason the deployment must not run on plain HTTP: the password crossing in the clear is not this event's to risk, it is the player's Pantheon account.
+
+**The returned `auth_token` is password-equivalent.** It is a deterministic function of the password and a per-account salt: it does not expire, does not rotate, and is accepted by `QuickAuthorize` and by Frey's own access checks (`models/access.ts`) for as long as the password stands. Anyone holding it can act as that person. So the backend does not receive a password, but it does receive something that opens the same door.
+
+What the backend does with it, and what any reimplementation must keep doing:
+
+- **Use it once, then drop it.** It goes to `QuickAuthorize` and falls out of scope. It is never written to the database. `Store.createSession` takes `local_id` and `person_id` and nothing else.
+- **Never log it.** The success line records `local_id` and the player's title. Not the token, not the email.
+- **Issue an unrelated cookie.** The session cookie is 32 fresh random bytes, stored as a hash, with its own expiry. Compromising the app's session store yields no Pantheon credential.
+- **Never send it back.** No endpoint echoes it. The one endpoint that returns a token pair is `/api/dev-authorize`, which exists only under the stub and 404s in production.
+
+The operational counterpart is in `deploy/README.md`: TLS, and a reverse proxy that does not log request bodies. One `log_format` with `$request_body` in it puts every player's Pantheon password in a file on disk.
+
+Step 1 is the reason Frey has **two** addresses in `runtime.json`. `frey_base_url` is the backend's, reached from the server where localhost is correct and normal; `frey_public_url` is the browser's, and on a phone localhost is the phone. They were one field until a deployment set the localhost form and every player was told their password was wrong — the browser had received a connection refused, and the page called it a credential failure. The server now warns at boot when the browser-facing URL is loopback or private, `/admin` carries a row for it, and the sign-in page names the difference between "Frey said no" and "Frey never answered".
+
+Those are the only two outcomes a player can act on. The wire-level ones are distinguishable and worth knowing:
+
+| Frey answers | Means |
+|---|---|
+| `400 invalid_argument` `Password check failed` | the password |
+| `404 not_found` `Person not found in database` | the email |
+| `404 bad_route` | wrong service name or path template |
+| a 404 that is not JSON | the request missed Twirp entirely; nginx answered |
+| nothing at all | CSP, mixed content, DNS, firewall |
+
 Relevant Frey methods: `Authorize`, `QuickAuthorize`, `Me`, `GetPersonalInfo`.
 Relevant Mimir method: `GetAllRegisteredPlayers`.
 
@@ -51,6 +90,17 @@ Before the freeze, make sure every one of the twelve has a `local_id` assigned (
 ## 3. Pushing the seat plan back: the prescript
 
 Pantheon supports *prescripted* events, where the seating for every session is written out in advance. That is exactly our case.
+
+**The winds only survive if the caller says so.** Writing the prescript is not the whole story: the winds it specifies are applied when a session is *started*, by `MakePrescriptedSeating`, and that request carries its own `wind_shuffle_mode`. The field is optional in the proto, and Mimir does **not** fall back to the event's stored setting — `helpers/Seating.php` sends every unrecognised value, UNSPECIFIED included, to `_randomWindShuffle`:
+
+```php
+default:
+    // fallback to random
+    // this includes empty and UNSPECIFIED values
+    return self::_randomWindShuffle($seating);
+```
+
+Forseti reads `eventConfig.windShuffleMode` and passes it, so the organiser pressing the button in the UI is safe as long as the event itself was created with `WIND_SHUFFLE_MODE_PRESCRIPTED` — which is also what hard rule 5 requires and what `tools/pantheon-fixture.js` sets. Any *other* caller, a script or a curl, must send the mode explicitly. Omitting it keeps the tables and scrambles the seats, reports success, and looks exactly like a bug in this project's draw. Verified against a live instance: same request with the mode stated seats all twelve as drawn; without it, three of twelve.
 
 **Format.** Mimir stores the prescript as a single string and unpacks it like this (`EventPrescript::unpackScript`):
 
@@ -180,6 +230,8 @@ Five things cost an hour between them and are invisible from the documentation:
   faithfully, and the only symptom is that `GetAllRegisteredPlayers` returns no local
   ids — because Mimir only fills them in for prescripted events. RUNBOOK step 8's event
   must be `EVENT_TYPE_TOURNAMENT`.
+
+`tools/pantheon-fixture.js --accounts` additionally creates the twelve players through Frey's `CreateAccount`, with an email and a password it prints, so the real sign-in path can be walked instead of assumed. Without it the players are borrowed from the instance's seed data and nobody knows their passwords — enough for the draw, which only handles person ids, but not for the one request a player makes first. Re-running is safe: Frey answers `409 already_exists` for an email it has seen and the fixture recovers the person id by signing in as that account.
 
 `tools/pantheon-fixture.js` does the rest of RUNBOOK step 8 over the API: copies a
 ruleset from the instance (`CreateEvent` refuses without a full one), creates the

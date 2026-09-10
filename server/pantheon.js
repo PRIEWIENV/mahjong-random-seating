@@ -218,7 +218,10 @@ class StubPantheon {
    * @param {object} o
    * @param {object} o.roster            frozen roster.json, used to seed the event
    * @param {Array}  [o.extraAccounts]   [{person_id, auth_token, title}] valid but unregistered
-   * @param {Map}    [o.tokens]          person_id -> auth_token (defaults to "token-<person_id>")
+   * @param {number} [o.eventId]        the event these players are registered to
+   *
+   * Tokens default to "token-<person_id>"; a test that needs a specific one writes it
+   * into `accounts` after construction.
    */
   constructor({ roster, extraAccounts = [], eventId } = {}) {
     this.eventId = eventId ?? roster?.pantheon_event_id ?? 42;

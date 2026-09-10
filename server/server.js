@@ -23,6 +23,14 @@
  *
  * The server never sees a Pantheon password: the browser authenticates against Frey
  * directly and posts only the resulting token pair (PANTHEON-INTEGRATION.md §2).
+ *
+ * That token is not a session token, though, and the distinction decides how it has to
+ * be handled here. Frey derives it as sha384(password + account_salt) and goes on
+ * accepting it until the password changes, so it is password-equivalent. It is
+ * therefore verified once and dropped: never stored (createSession takes local_id and
+ * person_id, nothing else), never logged, never echoed back. The cookie issued in
+ * exchange is 32 unrelated random bytes kept as a hash, so var/ holds nothing that can
+ * be turned back into a Pantheon credential.
  */
 
 const crypto = require('node:crypto');
@@ -39,6 +47,7 @@ const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
 const { readIndex, ROUNDS_DIR } = require('./rounds');
+const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
 
 /** How long before the cutoff the page switches to its lively cadence. */
 const LIVELY_BEFORE_CUTOFF_MS = 3 * 60_000;
@@ -216,7 +225,9 @@ function createServer(opts = {}) {
       // Tells the sign-in stage which path to use. "stub" means no real Frey is
       // reachable and the dev stand-in is in play; it can never be true in production.
       auth_mode: isStub ? 'stub' : 'pantheon',
-      frey_base_url: cfg.runtime.pantheon.frey_base_url,
+      // The BROWSER's Frey, which is not always the backend's. See runtime.js:
+      // localhost is this machine here and the player's own device there.
+      frey_base_url: freyPublicUrl(cfg.runtime),
       // The path too, not just the host. Which URL Frey answers on is operational
       // (§4.2) and it moved: a live instance serves /v2/common.Frey/Authorize, not the
       // /twirp/frey.Frey/... the protos suggested. Serving it keeps the correction a
@@ -597,6 +608,17 @@ if (require.main === module) {
     console.info(`[server] event ${cfg.roster.pantheon_event_id}, ${cfg.protocol.total_slots} slots, ` +
       `quorum ${cfg.protocol.quorum}, round ${cfg.protocol.target_round}, cutoff ${cfg.protocol.submission_cutoff_utc}`);
     console.info(`[server] pantheon: ${pantheon.constructor.name}`);
+    // The browser is told where Frey is, and then calls it itself. A loopback or
+    // private address works from here and from nowhere a player will ever be, and the
+    // symptom is a sign-in page reporting a wrong password. Say it at boot rather than
+    // letting twelve people discover it at once.
+    if (pantheon.constructor.name !== 'StubPantheon' && freyPublicUrlIsLocal(cfg.runtime)) {
+      console.warn(
+        `[server] WARNING: browsers are told Frey is at ${freyPublicUrl(cfg.runtime)}, which is ` +
+        'not an address they can reach. Set pantheon.frey_public_url in data/runtime.json ' +
+        'to the URL players resolve, and add that origin to the CSP connect-src of the proxy.'
+      );
+    }
     console.info(
       process.env.ADMIN_TOKEN
         ? `[server] admin dashboard at /admin?token=… (RUNBOOK C/D)`

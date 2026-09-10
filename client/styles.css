@@ -150,6 +150,12 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
 .note.bad { background: var(--bad-soft); color: var(--bad); }
 .note.info { background: var(--t1-soft); color: var(--t1); }
 .note a { color: inherit; }
+/* The technical line under a failure a player cannot act on: present so it can be
+   forwarded to an organiser, quiet enough not to read as the message itself. */
+.note .detail {
+  display: block; margin-top: 8px; font-size: 0.78rem; line-height: 1.45;
+  font-family: var(--mono); opacity: 0.75; word-break: break-word;
+}
 
 button.primary, button.secondary, form.signin button, .card button[type="submit"] {
   width: 100%; min-height: 48px; padding: 13px 20px; border-radius: 12px; border: 0;

@@ -43,18 +43,68 @@ export async function authorize({ email, password, personId, authMode, freyBaseU
   // Served by /api/status rather than compiled in: a live Pantheon answers on
   // /v2/common.Frey/Authorize, and where it answers is operational configuration.
   const path = freyAuthorizePath || '/v2/common.Frey/Authorize';
-  const res = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!res.ok) {
-    const err = new Error('Pantheon did not recognise that email and password.');
-    err.code = 'bad_credentials';
+  let res;
+  try {
+    res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch (cause) {
+    // fetch only rejects when the request never got an answer: DNS, refused connection,
+    // a CSP that omits this origin, or mixed content on an https page. None of those is
+    // a wrong password, and calling them one sends the operator hunting in the wrong
+    // place — the request never reached a server, so no log anywhere will hold it.
+    const err = new Error(`Could not reach Pantheon at ${base}`);
+    err.code = 'pantheon_unreachable';
+    err.detail = `${cause.name}: ${cause.message}`;
     throw err;
   }
-  const j = await res.json();
-  return { person_id: j.person_id ?? j.personId, auth_token: j.auth_token ?? j.authToken };
+
+  // Twirp answers errors as JSON with a machine-readable code, and the codes separate
+  // the three cases that used to look identical here (verified against Frey 1.28):
+  //   400 invalid_argument  "Password check failed"
+  //   404 not_found         "Person not found in database"
+  //   404 bad_route         "no handler for path POST /v2/..."  ← a misconfiguration
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const code = body?.code;
+    const err = new Error('');
+    if (!body) {
+      // Not a Twirp answer at all. A path that misses the Twirp router entirely — the
+      // wrong version prefix, say — is answered by whatever sits in front of Frey, and
+      // Pantheon's nginx returns an HTML 404. There is no credential in that exchange
+      // to be wrong about.
+      err.code = 'pantheon_misconfigured';
+      err.message = `Pantheon returned HTTP ${res.status} with no Twirp response at ${path}`;
+    } else if (code === 'bad_route') {
+      err.code = 'pantheon_misconfigured';
+      err.message = `Pantheon has no handler at ${path}`;
+    } else if (code === 'not_found') {
+      err.code = 'unknown_account';
+      err.message = 'Pantheon has no account with that email address.';
+    } else if (res.status >= 500) {
+      err.code = 'pantheon_error';
+      err.message = `Pantheon returned HTTP ${res.status}`;
+    } else {
+      err.code = 'bad_credentials';
+      err.message = 'Pantheon did not recognise that email and password.';
+    }
+    err.detail = `HTTP ${res.status}${code ? ` ${code}` : ''}${body?.msg ? `: ${body.msg}` : ''}`;
+    throw err;
+  }
+  const person_id = body?.person_id ?? body?.personId;
+  const auth_token = body?.auth_token ?? body?.authToken;
+  if (!person_id || !auth_token) {
+    // A 200 that carries neither is not a login. It is what a captive portal, a proxy
+    // error page, or a Frey behind the wrong path returns, and it must not be reported
+    // as a credential problem.
+    const err = new Error('Pantheon accepted the request but returned no login.');
+    err.code = 'pantheon_misconfigured';
+    err.detail = `200 without personId/authToken: ${JSON.stringify(body).slice(0, 120)}`;
+    throw err;
+  }
+  return { person_id, auth_token };
 }
 
 /**

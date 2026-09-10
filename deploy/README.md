@@ -1,6 +1,6 @@
 # Deployment (PROTOCOL.md §10)
 
-A small Node process behind Caddy, SQLite for state, and a systemd timer for the
+A small Node process behind a reverse proxy, SQLite for state, and a systemd timer for
 finalisation job. The app and Pantheon share a host, so backend-to-Pantheon calls go
 over localhost.
 
@@ -48,8 +48,8 @@ NODE_ENV=production
 # Optional overrides for operational settings (PROTOCOL.md §4.2). The same values can
 # go in data/runtime.json; neither is frozen, and changing either needs no re-tag.
 # DRAND_API=https://api2.drand.sh
-# PANTHEON_FREY_URL=http://localhost:4001
-# PANTHEON_MIMIR_URL=http://localhost:4002
+# PANTHEON_FREY_URL=http://frey.pantheon.local:4004
+# PANTHEON_MIMIR_URL=http://mimir.pantheon.local:4001
 PANTHEON_MODE=twirp                  # the default; "stub" is for local runs only
 
 # Mirroring: ciphertexts become public, timestamped by a third party, as they arrive.
@@ -115,20 +115,73 @@ Once a sync *failure* has been recorded, the job stops retrying: that path has a
 remedy (RUNBOOK step 15) and a timer hammering Pantheon every five minutes would only
 bury it.
 
-## 4. Caddy
+## 4. The reverse proxy
+
+Pick one. Both configurations do the same three jobs — terminate TLS, forward to
+127.0.0.1:8080, and set the security headers — and they cannot run side by side, because
+only one process can hold :80 and :443.
+
+**nginx** (`deploy/nginx.conf`) if the host already runs it, which it will if Pantheon
+shares the box: every Pantheon container ships its own nginx. Adding Caddy alongside is
+not redundancy, it is a port conflict.
+
+```sh
+cp deploy/nginx.conf /etc/nginx/sites-available/mahjong   # edit the domain first
+ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+```
+
+**Caddy** (`deploy/Caddyfile`) on a host with nothing else on those ports. It obtains
+and renews certificates by itself, which is the whole reason it is still offered here.
 
 ```sh
 cp deploy/Caddyfile /etc/caddy/Caddyfile   # edit the domain first
 systemctl reload caddy
 ```
 
-Two things in that file are load-bearing:
+Two things are load-bearing in whichever you choose:
 
-- `flush_interval -1` on the proxy. Without it the SSE stream is buffered, the waiting
-  stage stops updating, and it silently degrades to 15 s polling.
-- The `connect-src` list. The **browser** authenticates against Frey directly
+- **The stream must not be buffered.** Caddy needs `flush_interval -1`; nginx honours
+  the `X-Accel-Buffering: no` the app already sends (server/events.js) and gets
+  `proxy_buffering off` as well. Without it the waiting stage stops updating and
+  silently degrades to polling.
+- **The `connect-src` list.** The **browser** authenticates against Frey directly
   (PANTHEON-INTEGRATION.md §2), so the Frey origin has to be added there or sign-in is
-  blocked by the CSP.
+  blocked by the CSP — and blocked in a way no server log records, because the request
+  never reaches a server.
+
+### TLS is not optional here
+
+Serve this over plain HTTP and sign-in breaks, in a way that does not look like a TLS
+problem. `NODE_ENV=production` marks the session cookie `Secure` (server/server.js), and
+a browser will not store a `Secure` cookie that arrived over `http://`. The player signs
+in, the page moves on, and every request after it is unauthenticated. Their submission
+fails with a 401 they did nothing to cause.
+
+There is a second reason. The browser posts the player's Pantheon password to Frey
+itself. Over HTTP that password crosses the network in the clear, and it is not a
+password this event owns — it is their Pantheon account.
+
+If a certificate is genuinely not available yet, run the whole thing on HTTP with
+`NODE_ENV=development` for testing only, and understand that the deployment is not fit
+to run a real draw in that state: `/api/dev-authorize` exists there, and it accepts a
+person id with no password at all.
+
+### Do not log request bodies
+
+The browser posts the player's Pantheon email and password to Frey, and the token it
+gets back to `POST /api/session`. Both cross this proxy. nginx does not log bodies by
+default and neither does Caddy — but a `log_format` with `$request_body` in it, added
+one afternoon to debug a sign-in problem, writes every player's Pantheon password to a
+file on disk, in a form that outlives the event and gets copied around with the logs.
+
+The token is no better. Frey derives it as `sha384(password + salt)` and keeps accepting
+it until the password changes, so it is password-equivalent (PANTHEON-INTEGRATION.md
+§2). The app verifies it once, never stores it and never logs it; a proxy log is the one
+place it could still be captured.
+
+If you need to debug sign-in, the failure now names itself on the page and in the table
+above. That is what it is for.
 
 ## 5. Before you tell anyone the URL
 
@@ -151,3 +204,57 @@ need not match anything: it is where that chain is currently reached (§4.2).
 Then sign in yourself with a real Pantheon account that is registered to the event, and
 with one that is not. Both answers must be right, and they must read differently
 (UI-SPEC §3). RUNBOOK step A3 is that check; it is much cheaper now than on the day.
+
+## 6. When sign-in fails
+
+Sign-in is the one request that does not pass through this server. The browser posts the
+email and password to Frey itself (PANTHEON-INTEGRATION.md §2), so a failure leaves no
+trace in any log here, and for a long time the page reported every one of them as "wrong
+email or password" — which sent more than one deployment looking at accounts when the
+fault was a URL. The page now names them apart. What it shows, and where to look:
+
+| What the player sees | What actually happened | Where to look |
+|---|---|---|
+| Pantheon did not recognise that email and password | Frey answered `400 invalid_argument` | It really is the password |
+| Pantheon has no account with that email | Frey answered `404 not_found` | The address they signed up with |
+| This draw is pointed at the wrong Pantheon address | `bad_route`, or a non-Twirp 404 | `runtime.json` → `pantheon.frey_base_url` and `twirp_path_template` |
+| Pantheon could not be reached | The request got no answer at all | CSP `connect-src`, mixed content, DNS, firewall |
+| Pantheon returned an error | A 5xx from Frey | Frey's own logs; Hugin being down does this |
+| That account isn't registered for this event | Frey said yes, this server said no | The account is not in the twelve |
+
+**The one that catches most deployments** is the third row, and it has a specific cause.
+`pantheon.frey_base_url` is what the *backend* uses, and §1 of this file is right to
+point it at localhost when Pantheon shares the host. But the *browser* is handed that
+same URL and calls Frey itself, and on a player's phone localhost is the phone. Set
+`pantheon.frey_public_url` to the address players resolve:
+
+```json
+{
+  "pantheon": {
+    "frey_base_url": "http://localhost:4004",
+    "frey_public_url": "https://pantheon.example.com"
+  }
+}
+```
+
+The server warns at boot when the browser-facing URL is a loopback or private address,
+and `/admin` carries a row for it. That origin also has to be in the proxy's CSP
+`connect-src`, or the request is blocked before it leaves the browser.
+
+Each of the middle four also prints the technical line underneath — the HTTP status and
+the Twirp code — so a player can forward it verbatim.
+
+Reproduce any of them against a live Pantheon before the day:
+
+```sh
+FREY=http://frey.pantheon.local:4004/v2/common.Frey/Authorize
+curl -s -X POST $FREY -H 'content-type: application/json'   -d '{"email":"someone@example.com","password":"wrong"}'
+# {"code":"invalid_argument","msg":"Password check failed"}
+```
+
+A wrong service name answers `{"code":"bad_route",...}` and a wrong version prefix misses
+the Twirp router altogether and gets nginx's HTML 404. Both mean the same thing: the base
+URL or the path template is wrong, and no account change will fix it.
+
+`tools/pantheon-fixture.js --accounts` builds twelve accounts with known passwords on a
+development instance so this whole path can be walked before it matters.

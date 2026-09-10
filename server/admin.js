@@ -32,6 +32,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { readIndex } = require('./rounds');
+const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
@@ -106,6 +107,21 @@ function collect(ctx) {
       ? 'sign-in is a fake and authorises anyone the stub knows — fine locally, never in production'
       : `frey ${cfg.runtime.pantheon.frey_base_url}, mimir ${cfg.runtime.pantheon.mimir_base_url}`
   );
+  // The one Pantheon URL the browser uses itself, so the one that can be right here and
+  // useless there. It fails as "wrong email or password" on the player's screen, which
+  // is why it earns a row of its own rather than living inside the line above.
+  if (!isStub) {
+    const browserFrey = freyPublicUrl(cfg.runtime);
+    const localFrey = freyPublicUrlIsLocal(cfg.runtime);
+    check(
+      localFrey ? (production ? 'fail' : 'warn') : 'ok',
+      'The Frey URL given to browsers',
+      localFrey
+        ? `${browserFrey} is this machine, not the player's — set pantheon.frey_public_url`
+        : `${browserFrey} (also needs to be in the proxy CSP connect-src)`
+    );
+  }
+
   const devAuthLive = isStub && !production;
   check(
     devAuthLive ? 'warn' : 'ok',

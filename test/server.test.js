@@ -31,7 +31,7 @@ async function boot(opts = {}) {
     now: opts.now, rateLimit: opts.rateLimit,
     drand: { latest: async () => ({ round: 123 }) },
     drandPollMs: 0,
-    log: QUIET,
+    log: opts.log || QUIET,
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -67,6 +67,64 @@ async function boot(opts = {}) {
 }
 
 const ct = (protocol) => fakeCiphertext(protocol.target_round, protocol.chain_hash);
+
+/**
+ * The Pantheon auth_token is password-equivalent (PROTOCOL.md §9): Frey derives it as
+ * sha384(password + salt) and keeps accepting it until the password changes. So it may
+ * be verified and then must vanish — no row, no log line, no response. This test uses a
+ * token distinctive enough that a single grep over everything the server wrote settles
+ * whether that held.
+ */
+test('the Pantheon token is verified and then exists nowhere', async () => {
+  const lines = [];
+  const capture = {
+    info: (...a) => lines.push(a.join(' ')),
+    warn: (...a) => lines.push(a.join(' ')),
+    error: (...a) => lines.push(a.join(' ')),
+  };
+  const t = await boot({ log: capture });
+  try {
+  const personId = t.fx.roster.players[0].person_id;
+  const SECRET = 'zzsha384-password-equivalent-do-not-keep-zz';
+  t.pantheon.accounts.set(personId, SECRET);
+
+  const res = await fetch(`${t.base}/api/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ person_id: personId, auth_token: SECRET }),
+  });
+  const body = await res.text();
+  const cookie = res.headers.getSetCookie()[0];
+  assert.equal(res.status, 200);
+
+  // It was actually used, or the rest of this proves nothing.
+  assert.ok(t.pantheon.calls.some(([m, id]) => m === 'verifyToken' && id === personId));
+
+  // Not in the response, and not the cookie either.
+  assert.ok(!body.includes(SECRET), 'the sign-in response echoed the token');
+  assert.ok(!cookie.includes(SECRET), 'the session cookie is derived from the token');
+
+  // Not in any log line.
+  assert.ok(!lines.some((l) => l.includes(SECRET)), `a log line carried the token: ${lines.find((l) => l.includes(SECRET))}`);
+
+  // Not in the database. Every table, not just sessions: a future column would be
+  // caught here rather than by someone reading a backup.
+  const tables = t.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+  for (const { name } of tables) {
+    const rows = t.store.db.prepare(`SELECT * FROM "${name}"`).all();
+    assert.ok(!JSON.stringify(rows).includes(SECRET), `table ${name} stored the token`);
+  }
+
+  // And the session still works, so none of the above was achieved by not signing in.
+  const me = await t.get('/api/me', cookie.split(';')[0]);
+  assert.equal(me.status, 200);
+  assert.equal(me.body.local_id, t.fx.roster.players[0].local_id);
+  } finally {
+    // A failing assertion must not leave the listener open, or the runner hangs on the
+    // handle instead of reporting which invariant broke.
+    await t.close();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // sign-in (§6, PANTHEON-INTEGRATION.md §2)

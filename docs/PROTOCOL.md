@@ -315,6 +315,14 @@ Nothing needs to be trusted about the server: every ciphertext it holds is safe 
 
 A player who never submits has abstained from an outcome nobody could see yet — an absence, not a manoeuvre. Nobody can withhold a *reveal*, because opening is not an action any participant performs.
 
+One boundary is not about the draw at all, and is easy to state too weakly. Players sign in with their Pantheon accounts, and this app is not where that credential lives: the browser posts the email and password to Frey directly, and the backend receives only `{person_id, auth_token}` (PANTHEON-INTEGRATION.md §2). No code path here reads a password field.
+
+But `auth_token` is not a session token. Frey derives it as `sha384(password + account_salt)`, returns it, and accepts it thereafter — it does not expire and does not rotate, so it is password-equivalent until the player changes their password. The backend therefore treats it as a secret in transit and nothing more: verified once against Frey, never written to the database, never logged, never echoed. The cookie it issues in exchange is 32 unrelated random bytes stored as a hash, so nothing in `var/` can be turned back into a Pantheon credential.
+
+That leaves the transport as the whole of the protection, for the password on its way to Frey and for the token on its way here. §10's TLS is not a hardening step on top of a working deployment; without it neither of those is protected and the session cookie is not stored by the browser at all.
+
 ## 10. Deployment
 
-The app and Pantheon run on the same host, so backend-to-Pantheon calls go over localhost. A small backend process (Node or Python), SQLite for state, a mirroring script holding a GitHub PAT, and Caddy in front for reverse proxying and automatic TLS. Write access to `main` is narrowed to the PAT used by the backend.
+The app and Pantheon run on the same host, so backend-to-Pantheon calls go over localhost. A small backend process (Node or Python), SQLite for state, a mirroring script holding a GitHub PAT, and a reverse proxy in front terminating TLS — nginx where the host already runs one, which it does when Pantheon shares the box, and Caddy otherwise. Write access to `main` is narrowed to the PAT used by the backend.
+
+One address does not follow that rule. The browser reaches Frey itself, so the URL it is given has to resolve from the player's device rather than from the host; `runtime.json` keeps the two apart as `pantheon.frey_base_url` and `pantheon.frey_public_url`.

@@ -57,6 +57,10 @@ function makeRuntime(over = {}) {
     pantheon: {
       frey_base_url: 'http://127.0.0.1:14001',
       mimir_base_url: 'http://127.0.0.1:14002',
+      // The backend reaches Frey over loopback; the browser cannot. A deployment that
+      // does not say where the browser should go is not a clean one, so the fixture for
+      // a clean deployment says.
+      frey_public_url: 'https://pantheon.example.com',
     },
     ...over,
   };
