@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../api';
 import { sealSubmission, rollNumber } from '../seal';
+import { useText } from '../i18n';
 
 /**
  * The submission stage (UI-SPEC.md §4) — the focal element of the whole app.
@@ -13,7 +14,48 @@ import { sealSubmission, rollNumber } from '../seal';
  * No edit or withdraw affordance. A submission is final by design, and §4 asks that we
  * say so *before* the button rather than after.
  */
+
+const TEXT = {
+  zh: {
+    greeting: (name) => `你好，${name}`,
+    title: '选一个数字',
+    retry: (n, had, quorum) =>
+      `这是第 ${n} 次开奖。上一次截止时只有 ${had} 位提交，未达到 ${quorum} 位的门槛，按事先定好的规则作废了。`,
+    retryLink: '上一次的全部密文和参数都在这里',
+    retryTail: '，等那一轮的信标公布后任何人都能自己解开核对。',
+    range: (max) => `0 到 ${max} 之间的任意整数——幸运数字、生日，都行。`,
+    inputLabel: (max) => `0 到 ${max} 之间的整数`,
+    roll: '帮我随机选一个',
+    why: '你的数字在你的浏览器里封存，在抽签开启之前任何人都读不到——包括我们。',
+    whyStrong: '你的浏览器里',
+    finality: '提交后不能修改，也不能撤回。',
+    sealing: '正在封存…',
+    posting: '提交中…',
+    submit: '封存并提交',
+    failed: '提交失败，请重试。',
+  },
+  en: {
+    greeting: (name) => `Hello, ${name}`,
+    title: 'Pick a number',
+    retry: (n, had, quorum) =>
+      `This is draw attempt ${n}. Last time only ${had} numbers were sealed by the cutoff, short of the ${quorum} required, so that round was voided under the rule set before it started.`,
+    retryLink: 'Every ciphertext and parameter from that attempt is here',
+    retryTail: ', and once that round’s beacon is out anyone can open them and check.',
+    range: (max) => `Any whole number from 0 to ${max}. A lucky number, a birthday, anything.`,
+    inputLabel: (max) => `A whole number between 0 and ${max}`,
+    roll: 'Pick one for me',
+    why: 'Your number is sealed in your own browser. Nobody can read it before the draw opens, us included.',
+    whyStrong: 'in your own browser',
+    finality: 'Once submitted it cannot be changed or withdrawn.',
+    sealing: 'Sealing…',
+    posting: 'Submitting…',
+    submit: 'Seal and submit',
+    failed: 'Submission failed. Please try again.',
+  },
+};
+
 export default function Submit({ protocol, status, me, onSubmitted }) {
+  const t = useText(TEXT);
   const [value, setValue] = useState('');
   const [phase, setPhase] = useState('idle'); // idle | rolling | sealing | posting
   const [error, setError] = useState(null);
@@ -73,16 +115,18 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
       onSubmitted();
     } catch (err) {
       setPhase('idle');
-      setError(err.code === 'already_submitted' ? err.message : (err.message || '提交失败，请重试。'));
+      setError(err.code === 'already_submitted' ? err.message : (err.message || t.failed));
       if (err.code === 'already_submitted') onSubmitted();
     }
   }
 
+  const [whyBefore, whyAfter] = t.why.split(t.whyStrong);
+
   return (
     <div className="stage centre">
       <form className="card submit" onSubmit={onSubmit}>
-        <p className="eyebrow">你好，{me?.title}</p>
-        <h1>选一个数字</h1>
+        <p className="eyebrow">{t.greeting(me?.title || '')}</p>
+        <h1>{t.title}</h1>
 
         {/*
           §8: a run can take more than one attempt. Someone who was told the last round
@@ -92,13 +136,10 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
         */}
         {status?.attempt > 1 && (
           <p className="note">
-            这是第 {status.attempt} 次开奖。上一次截止时只有 {last?.submitted_count} 位提交，
-            未达到 {last?.quorum} 位的门槛，按事先定好的规则作废了。
+            {t.retry(status.attempt, last?.submitted_count, last?.quorum)}
             {' '}
-            <a href={`/${last?.archive}/manifest.json`} target="_blank" rel="noreferrer">
-              上一次的全部密文和参数都在这里
-            </a>
-            ，等那一轮的信标公布后任何人都能自己解开核对。
+            <a href={`/${last?.archive}/manifest.json`} target="_blank" rel="noreferrer">{t.retryLink}</a>
+            {t.retryTail}
           </p>
         )}
 
@@ -108,7 +149,7 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
             className="bignum-input"
             inputMode="numeric"
             autoComplete="off"
-            aria-label={`0 到 ${max} 之间的整数`}
+            aria-label={t.inputLabel(max)}
             value={value}
             disabled={busy}
             onChange={(e) => setValue(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
@@ -116,21 +157,17 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
           />
         </div>
 
-        <p className="hint range">
-          0 到 {max} 之间的任意整数——幸运数字、生日，都行。
-        </p>
+        <p className="hint range">{t.range(max)}</p>
 
         <button type="button" className="secondary" onClick={roll} disabled={busy}>
-          帮我随机选一个
+          {t.roll}
         </button>
 
-        <p className="why">
-          你的数字在<strong>你的浏览器里</strong>封存，在抽签开启之前任何人都读不到——包括我们。
-        </p>
-        <p className="finality">提交后不能修改，也不能撤回。</p>
+        <p className="why">{whyBefore}<strong>{t.whyStrong}</strong>{whyAfter}</p>
+        <p className="finality">{t.finality}</p>
 
         <button type="submit" className="primary" disabled={!valid || busy}>
-          {phase === 'sealing' ? '正在封存…' : phase === 'posting' ? '提交中…' : '封存并提交'}
+          {phase === 'sealing' ? t.sealing : phase === 'posting' ? t.posting : t.submit}
         </button>
 
         {error && <p className="note bad">{error}</p>}

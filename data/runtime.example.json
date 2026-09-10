@@ -8,7 +8,8 @@
       "https://api3.drand.sh",
       "https://drand.cloudflare.com"
     ],
-    "health_poll_ms": 30000
+    "health_poll_ms": 30000,
+    "health_poll_fast_ms": 3000
   },
   "pantheon": {
     "frey_base_url": "http://frey.pantheon.local:4004",
@@ -18,11 +19,13 @@
     "mimir_service": "common.Mimir"
   },
   "ui": {
-    "status_poll_interval_ms": 15000
+    "status_poll_interval_ms": 5000
   },
   "server": {
     "sse_heartbeat_ms": 25000,
     "session_ttl_days": 30,
-    "rate_limit_per_minute": 30
+    "rate_limit_per_minute": 30,
+    "status_push_ms": 15000,
+    "status_push_fast_ms": 2000
   }
 }

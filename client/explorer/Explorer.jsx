@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import PlayerDetail from './PlayerDetail';
 import RoundTables from './RoundTables';
+import { useLang, useText, WINDS, roundName, tableName } from '../i18n';
 
 /**
  * The seat plan explorer (UI-SPEC.md §7).
@@ -13,8 +14,6 @@ import RoundTables from './RoundTables';
  * Selections are exclusive and always escapable (background click, or Escape). The URL
  * carries the selection so a player can send someone a link to their own schedule.
  */
-
-const WIND_CN = { E: '东', S: '南', W: '西', N: '北' };
 
 function readSelectionFromUrl() {
   const q = new URLSearchParams(location.search);
@@ -34,10 +33,34 @@ function writeSelectionToUrl(sel) {
   history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''));
 }
 
+const TEXT = {
+  zh: {
+    title: '座位表',
+    hint: '点名字看某人的完整赛程，点轮次看那一轮的三张桌子。',
+    clear: '清除选择 (Esc)',
+    player: '玩家',
+    you: '你',
+    legendNote: '格子里的字是那一轮的风位',
+    cellTitle: (round, table, wind) => `${round} · ${table} · ${wind}家`,
+  },
+  en: {
+    title: 'Seat plan',
+    hint: 'Tap a name for that player’s whole schedule, or a round for its three tables.',
+    clear: 'Clear selection (Esc)',
+    player: 'Player',
+    you: 'you',
+    legendNote: 'The letter in each cell is that round’s seat wind',
+    cellTitle: (round, table, wind) => `${round} · ${table} · ${wind}`,
+  },
+};
+
 export default function Explorer({ result, me }) {
+  const lang = useLang();
+  const t = useText(TEXT);
   const [sel, setSel] = useState(() => readSelectionFromUrl());
   const stats = result.stats;
   const rounds = result.seating.rounds;
+  const winds = WINDS[lang];
 
   useEffect(() => { writeSelectionToUrl(sel); }, [sel]);
 
@@ -62,10 +85,10 @@ export default function Explorer({ result, me }) {
   return (
     <section className={`explorer sel-${sel.kind}`}>
       <div className="explorer-head">
-        <h2>座位表</h2>
+        <h2>{t.title}</h2>
         <p className="hint">
-          点名字看某人的完整赛程，点轮次看那一轮的三张桌子。
-          {sel.kind !== 'none' && <button className="linkish" onClick={clear}>清除选择 (Esc)</button>}
+          {t.hint}
+          {sel.kind !== 'none' && <button className="linkish" onClick={clear}>{t.clear}</button>}
         </p>
       </div>
 
@@ -74,7 +97,7 @@ export default function Explorer({ result, me }) {
           <table className="grid">
             <thead>
               <tr>
-                <th className="corner" scope="col">玩家</th>
+                <th className="corner" scope="col">{t.player}</th>
                 {rounds.map((r) => (
                   <th
                     key={r.round}
@@ -95,7 +118,7 @@ export default function Explorer({ result, me }) {
                 return (
                   <tr key={id} className={`${on ? 'on' : ''} ${isMe ? 'me' : ''}`}>
                     <th scope="row" className="name" onClick={() => pickPlayer(id)} title={`local_id ${id}`}>
-                      {p.title}{isMe && <span className="you">你</span>}
+                      {p.title}{isMe && <span className="you">{t.you}</span>}
                     </th>
                     {rounds.map((r) => {
                       const c = cells.get(id)[r.round];
@@ -105,9 +128,9 @@ export default function Explorer({ result, me }) {
                           key={r.round}
                           className={`t${c.table} ${dim ? 'dim' : ''}`}
                           onClick={() => pickRound(r.round)}
-                          title={`第 ${r.round} 轮 · 第 ${c.table} 桌 · ${WIND_CN[c.wind]}家`}
+                          title={t.cellTitle(roundName(lang, r.round), tableName(lang, c.table), winds[c.wind])}
                         >
-                          <span className="wind">{WIND_CN[c.wind]}</span>
+                          <span className="wind">{winds[c.wind]}</span>
                         </td>
                       );
                     })}
@@ -117,10 +140,10 @@ export default function Explorer({ result, me }) {
             </tbody>
           </table>
           <p className="legend">
-            <span className="sw t1" />第 1 桌
-            <span className="sw t2" />第 2 桌
-            <span className="sw t3" />第 3 桌
-            <span className="legend-note">格子里的字是那一轮的风位</span>
+            <span className="sw t1" />{tableName(lang, 1)}
+            <span className="sw t2" />{tableName(lang, 2)}
+            <span className="sw t3" />{tableName(lang, 3)}
+            <span className="legend-note">{t.legendNote}</span>
           </p>
         </div>
 

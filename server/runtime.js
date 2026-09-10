@@ -42,8 +42,12 @@ const DEFAULTS = {
       'https://api3.drand.sh',
       'https://drand.cloudflare.com',
     ],
-    // Background refresh of the liveness figure shown on the waiting screen.
+    // Background refresh of the liveness figure shown on the waiting screen. The fast
+    // cadence takes over in the last minutes before the cutoff: quicknet emits a beacon
+    // every three seconds, and a round number that has not moved in half a minute is
+    // indistinguishable from a page that has stopped working.
     health_poll_ms: 30_000,
+    health_poll_fast_ms: 3_000,
   },
   pantheon: {
     // Pantheon's own docker compose publishes Mimir on 4001 and Frey on 4004. Both
@@ -61,13 +65,19 @@ const DEFAULTS = {
   },
   ui: {
     // UI-SPEC §5's documented fallback cadence when the SSE stream drops. Served to
-    // the browser in /api/status so the number lives in one place, not two.
-    status_poll_interval_ms: 15_000,
+    // the browser in /api/status so the number lives in one place, not two. Only used
+    // when the stream is down, so it can afford to be brisk.
+    status_poll_interval_ms: 5_000,
   },
   server: {
     sse_heartbeat_ms: 25_000, // under the usual 30 s idle timeout of proxies
     session_ttl_days: 30, // the submission window can be days long
     rate_limit_per_minute: 30,
+    // How often the status is pushed down every open stream. The draw's phase is
+    // derived from files that a *different* process writes (§4.3), so this poll is the
+    // only thing that can carry a finished result to a browser.
+    status_push_ms: 15_000,
+    status_push_fast_ms: 2_000,
   },
 };
 
@@ -114,6 +124,7 @@ function validate(r) {
   // different set of endpoints than the one that mattered.
   if (!r.drand.mirrors.includes(r.drand.api)) r.drand.mirrors = [r.drand.api, ...r.drand.mirrors];
   posInt('drand', 'health_poll_ms', r.drand.health_poll_ms);
+  posInt('drand', 'health_poll_fast_ms', r.drand.health_poll_fast_ms);
 
   baseUrl('pantheon', 'frey_base_url', r.pantheon.frey_base_url);
   baseUrl('pantheon', 'mimir_base_url', r.pantheon.mimir_base_url);
@@ -132,6 +143,8 @@ function validate(r) {
   posInt('server', 'sse_heartbeat_ms', r.server.sse_heartbeat_ms);
   posInt('server', 'session_ttl_days', r.server.session_ttl_days);
   posInt('server', 'rate_limit_per_minute', r.server.rate_limit_per_minute);
+  posInt('server', 'status_push_ms', r.server.status_push_ms);
+  posInt('server', 'status_push_fast_ms', r.server.status_push_fast_ms);
   return r;
 }
 

@@ -35,12 +35,15 @@ export const signOut = () => req('/api/session', { method: 'DELETE' });
  * `stub` mode is the development stand-in used when no Frey is reachable; the server
  * refuses that endpoint in production.
  */
-export async function authorize({ email, password, personId, authMode, freyBaseUrl }) {
+export async function authorize({ email, password, personId, authMode, freyBaseUrl, freyAuthorizePath }) {
   if (authMode === 'stub') {
     return req('/api/dev-authorize', { method: 'POST', body: { person_id: Number(personId) } });
   }
   const base = String(freyBaseUrl || '').replace(/\/+$/, '');
-  const res = await fetch(`${base}/twirp/frey.Frey/Authorize`, {
+  // Served by /api/status rather than compiled in: a live Pantheon answers on
+  // /v2/common.Frey/Authorize, and where it answers is operational configuration.
+  const path = freyAuthorizePath || '/v2/common.Frey/Authorize';
+  const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ email, password }),

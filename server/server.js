@@ -39,6 +39,9 @@ const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
 const { readIndex, ROUNDS_DIR } = require('./rounds');
+
+/** How long before the cutoff the page switches to its lively cadence. */
+const LIVELY_BEFORE_CUTOFF_MS = 3 * 60_000;
 const { computeStats } = require('./stats');
 const { collect, render } = require('./admin');
 
@@ -147,10 +150,41 @@ function createServer(opts = {}) {
       drandHealth = { ...drandHealth, healthy: false };
     }
   }
+  /**
+   * How close the draw is, which is what decides how lively this page has to look.
+   *
+   * Away from the cutoff nothing changes for hours and a slow cadence is right. In the
+   * last minutes before it, and until the result lands, the page is the only thing a
+   * player is looking at: a beacon round that has not moved in half a minute reads as a
+   * hung page, and quicknet produces one every three seconds.
+   */
+  function nearTheDraw() {
+    const phase = phaseOf(cfg, store, nowFn());
+    if (phase === 'done' || phase === 'void') return false;
+    return nowFn() > cfg.protocol.cutoff_ms - LIVELY_BEFORE_CUTOFF_MS;
+  }
+
+  /** A timer that re-chooses its own interval each tick. */
+  function pace(fn, slowMs, fastMs) {
+    if (slowMs === 0) return null;
+    let timer = null;
+    const tick = () => {
+      try { fn(); } catch (err) { log.error?.(`[server] ${err.message}`); }
+      timer = setTimeout(tick, nearTheDraw() ? fastMs : slowMs);
+      timer.unref?.();
+    };
+    timer = setTimeout(tick, 0);
+    timer.unref?.();
+    return () => { if (timer) clearTimeout(timer); };
+  }
+
   if (opts.drandPollMs !== 0) {
     refreshDrand();
-    healthTimer = setInterval(refreshDrand, opts.drandPollMs ?? cfg.runtime.drand.health_poll_ms);
-    healthTimer.unref?.();
+    healthTimer = pace(
+      refreshDrand,
+      opts.drandPollMs ?? cfg.runtime.drand.health_poll_ms,
+      cfg.runtime.drand.health_poll_fast_ms
+    );
   }
 
   // ---- GET /api/status ----------------------------------------------------
@@ -183,6 +217,13 @@ function createServer(opts = {}) {
       // reachable and the dev stand-in is in play; it can never be true in production.
       auth_mode: isStub ? 'stub' : 'pantheon',
       frey_base_url: cfg.runtime.pantheon.frey_base_url,
+      // The path too, not just the host. Which URL Frey answers on is operational
+      // (§4.2) and it moved: a live instance serves /v2/common.Frey/Authorize, not the
+      // /twirp/frey.Frey/... the protos suggested. Serving it keeps the correction a
+      // config change rather than a rebuild of a hash-pinned bundle.
+      frey_authorize_path: cfg.runtime.pantheon.twirp_path_template
+        .replace('{service}', cfg.runtime.pantheon.frey_service)
+        .replace('{method}', 'Authorize'),
       // UI-SPEC §5's fallback cadence, served rather than compiled into the bundle, so
       // it can be changed without a rebuild and without touching anything frozen.
       status_poll_interval_ms: cfg.runtime.ui.status_poll_interval_ms,
@@ -203,6 +244,21 @@ function createServer(opts = {}) {
     if (s.phase !== lastPhase) { lastPhase = s.phase; log.info?.(`[server] phase -> ${s.phase}`); }
     return s;
   }
+
+  /**
+   * Push the status on a clock, not only when somebody submits.
+   *
+   * Before this, `pushStatus` had exactly one caller — the submit handler — so a client
+   * holding an open SSE stream heard nothing between submissions. Two things followed,
+   * and a player hit both: the waiting screen sat frozen for the whole window, and when
+   * the finalisation job wrote results.json in a *different process*, nothing told the
+   * page. It stayed on the countdown after the draw was finished and published.
+   *
+   * The phase is derived from files on disk (§4.3), so polling it here is what makes a
+   * result reach the browser at all. The job does not talk to this process and should
+   * not have to: the files are the interface.
+   */
+  const statusTimer = pace(pushStatus, cfg.runtime.server.status_push_ms, cfg.runtime.server.status_push_fast_ms);
 
   // ---- POST /api/session --------------------------------------------------
   async function session(req, res, ip) {
@@ -520,7 +576,9 @@ function createServer(opts = {}) {
   });
 
   server.on('close', () => {
-    if (healthTimer) clearInterval(healthTimer);
+    // Both are paced timers now, so they are stopped by calling what pace() returned.
+    healthTimer?.();
+    statusTimer?.();
     hub.close();
     if (!opts.store) store.close();
   });

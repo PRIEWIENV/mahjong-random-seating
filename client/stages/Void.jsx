@@ -1,3 +1,5 @@
+import { useText } from '../i18n';
+
 /**
  * The void stage (UI-SPEC.md §6).
  *
@@ -6,7 +8,30 @@
  * before the round started, so it is stated as a rule rather than a decision anyone is
  * making now.
  */
+
+const TEXT = {
+  zh: {
+    title: '本轮作废',
+    lede: (had, quorum) => `截止时只有 ${had} 位封存了数字，未达到 ${quorum} 位的门槛。`,
+    body: '按照抽签开始之前就定下的规则，本轮作废。这不是任何人的失误，门槛也不会因为差几个人而临时调整——事后调整规则本身就会让抽签变得可以被操纵。',
+    again: (total) => `组织者会公布新的开奖轮次，届时全部 ${total} 位都需要重新提交（旧的密文绑定在已经过去的那一轮上，不能再用）。`,
+    kept: '这一轮的记录不会被删掉。全部密文、截止时的名册和当时冻结的参数都已',
+    keptLink: '公开存档',
+    keptTail: (round, n) => `，等第 ${round} 轮的信标公布之后，任何人都能自己解开，确认当时确实只有 ${n} 位提交。`,
+  },
+  en: {
+    title: 'This round is void',
+    lede: (had, quorum) => `Only ${had} numbers were sealed by the cutoff, short of the ${quorum} required.`,
+    body: 'Under the rule fixed before the draw opened, the round is void. Nobody made a mistake, and the quorum is not lowered because it was nearly met — adjusting a rule after seeing the outcome is exactly what makes a draw steerable.',
+    again: (total) => `The organiser will announce a new target round. All ${total} players will need to submit again: the old ciphertexts are bound to a round that has already passed.`,
+    kept: 'Nothing from this round is deleted. Every ciphertext, the roster as it stood at the cutoff, and the frozen parameters are ',
+    keptLink: 'published as an archive',
+    keptTail: (round, n) => `. Once round ${round}'s beacon is out, anyone can open them and confirm that only ${n} people had submitted.`,
+  },
+};
+
 export default function Void({ status }) {
+  const t = useText(TEXT);
   // The archive of THIS attempt only exists once the job has written it, which is the
   // same moment the phase becomes void — so by the time this screen renders it is there.
   const mine = status?.previous_rounds?.find((r) => r.target_round === status.target_round);
@@ -17,24 +42,15 @@ export default function Void({ status }) {
   return (
     <div className="stage centre">
       <div className="card void">
-        <h1>本轮作废</h1>
-        <p className="lede">
-          截止时只有 {status?.submitted_count ?? 0} 位封存了数字，未达到 {status?.quorum} 位的门槛。
-        </p>
-        <p>
-          按照抽签开始<em>之前</em>就定下的规则，本轮作废。这不是任何人的失误，
-          门槛也不会因为差几个人而临时调整——事后调整规则本身就会让抽签变得可以被操纵。
-        </p>
-        <p className="hint">
-          组织者会公布新的开奖轮次，届时<strong>全部 {status?.total_slots} 位</strong>都需要重新提交
-          （旧的密文绑定在已经过去的那一轮上，不能再用）。
-        </p>
+        <h1>{t.title}</h1>
+        <p className="lede">{t.lede(status?.submitted_count ?? 0, status?.quorum)}</p>
+        <p>{t.body}</p>
+        <p className="hint">{t.again(status?.total_slots)}</p>
         {mine && (
           <p className="hint">
-            这一轮的记录不会被删掉。全部密文、截止时的名册和当时冻结的参数都已
-            <a href={`/${mine.archive}/manifest.json`} target="_blank" rel="noreferrer">公开存档</a>
-            ，等第 {status.target_round} 轮的信标公布之后，任何人都能自己解开，
-            确认当时确实只有 {mine.submitted_count} 位提交。
+            {t.kept}
+            <a href={`/${mine.archive}/manifest.json`} target="_blank" rel="noreferrer">{t.keptLink}</a>
+            {t.keptTail(status.target_round, mine.submitted_count)}
           </p>
         )}
       </div>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import * as api from './api';
+import { LangContext, initialLang, rememberLang, useText } from './i18n';
 import SignIn from './stages/SignIn';
 import Submit from './stages/Submit';
 import Submitted from './stages/Submitted';
@@ -17,6 +18,11 @@ import Result from './stages/Result';
  * Stage is DERIVED, never stored: /api/status gives the draw's phase and /api/me says
  * whether this player has submitted. A player signing in after the cutoff lands
  * directly on waiting, result or void — same flow, different entry point.
+ *
+ * Because it is derived, a phase change on the server moves the page on its own: the
+ * server pushes a status down the stream on a clock (not only when someone submits),
+ * and the moment the finalisation job publishes a result the next push carries it here.
+ * A player who was watching the countdown does not have to reload to see the draw.
  *
  * The one piece of genuinely local state is `justSubmitted`, the ~2.5 s confirmation.
  * It is a transient acknowledgement of something this browser just did, not a phase of
@@ -58,10 +64,58 @@ function reducer(state, action) {
   }
 }
 
+const TEXT = {
+  zh: { brand: '座位抽签', sub: 'Seating draw', signOut: '退出', lang: '切换到 English', loading: '载入中' },
+  en: { brand: 'Seating draw', sub: '座位抽签', signOut: 'Sign out', lang: '切换到中文', loading: 'Loading' },
+};
+
+function Chrome({ lang, setLang, me, onSignOut, children, stage }) {
+  const t = useText(TEXT);
+  return (
+    <>
+      <header className="site">
+        <div className="brand">
+          <span className="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22">
+              <rect x="3" y="2" width="18" height="20" rx="3" />
+              <circle cx="12" cy="9" r="2.6" className="pip" />
+              <path d="M8.4 16.2h7.2" className="pip-line" />
+            </svg>
+          </span>
+          {t.brand} <span className="en">{t.sub}</span>
+        </div>
+        <div className="who">
+          {me && <span className="who-name">{me.title}</span>}
+          <button
+            className="lang-toggle"
+            onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
+            title={t.lang}
+            aria-label={t.lang}
+          >
+            <span className={lang === 'zh' ? 'on' : ''}>中</span>
+            <span className={lang === 'en' ? 'on' : ''}>EN</span>
+          </button>
+          {me && <button className="linkish" onClick={onSignOut}>{t.signOut}</button>}
+        </div>
+      </header>
+      {/* One <main> that cross-fades between stages. No tab bar anywhere (UI-SPEC §1). */}
+      <main key={stage} className="stage-wrap">{children}</main>
+    </>
+  );
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const [protocol, setProtocol] = useState(null);
   const [result, setResult] = useState(null);
+  const [lang, setLangState] = useState(initialLang);
+
+  const setLang = useCallback((next) => {
+    setLangState(next);
+    rememberLang(next);
+    document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+  }, []);
+  useEffect(() => { document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; }, [lang]);
 
   // Measured once at load so the countdown is driven by server time, not the client's
   // clock (UI-SPEC §5 — "so it never drifts").
@@ -104,11 +158,15 @@ export default function App() {
   const onSignedIn = useCallback((me) => dispatch({ type: 'signedIn', me }), []);
   const onSubmitted = useCallback(() => dispatch({ type: 'submitted' }), []);
   const onRevealDone = useCallback(() => dispatch({ type: 'revealSeen' }), []);
+  const onSignOut = useCallback(
+    () => api.signOut().then(() => dispatch({ type: 'signedOut' })),
+    []
+  );
 
   const body = useMemo(() => {
     switch (stage) {
       case 'loading':
-        return <div className="stage centre"><div className="spinner" aria-label="Loading" /></div>;
+        return <div className="stage centre"><div className="spinner" /></div>;
       case 'signin':
         return <SignIn status={state.status} onSignedIn={onSignedIn} />;
       case 'submit':
@@ -129,20 +187,10 @@ export default function App() {
   }, [stage, state, protocol, result, serverNow, onSignedIn, onSubmitted, onRevealDone]);
 
   return (
-    <>
-      <header className="site">
-        <div className="brand">座位抽签 <span className="en">Seating draw</span></div>
-        {state.me && (
-          <div className="who">
-            {state.me.title}
-            <button className="linkish" onClick={() => api.signOut().then(() => dispatch({ type: 'signedOut' }))}>
-              退出
-            </button>
-          </div>
-        )}
-      </header>
-      {/* One <main> that cross-fades between stages. No tab bar anywhere (UI-SPEC §1). */}
-      <main key={stage} className="stage-wrap">{body}</main>
-    </>
+    <LangContext.Provider value={lang}>
+      <Chrome lang={lang} setLang={setLang} me={state.me} onSignOut={onSignOut} stage={stage}>
+        {body}
+      </Chrome>
+    </LangContext.Provider>
   );
 }
