@@ -86,6 +86,12 @@ const DEFAULTS = {
     // only thing that can carry a finished result to a browser.
     status_push_ms: 15_000,
     status_push_fast_ms: 2_000,
+    // Whether X-Forwarded-For may be believed. Behind a reverse proxy — which is how
+    // §10 deploys this — every connection arrives from 127.0.0.1, so per-IP rate
+    // limiting silently becomes one shared allowance for everybody. Off by default
+    // because believing that header when nothing sets it lets any caller claim any
+    // address and have a limit of its own.
+    trust_proxy: false,
   },
 };
 
@@ -96,6 +102,7 @@ const OPERATIONAL_KEYS = {
   'pantheon.frey_base_url': 'runtime.json → pantheon.frey_base_url',
   'pantheon.mimir_base_url': 'runtime.json → pantheon.mimir_base_url',
   'pantheon.frey_public_url': 'runtime.json → pantheon.frey_public_url',
+  'server.trust_proxy': 'runtime.json → server.trust_proxy',
   'pantheon.twirp_path_template': 'runtime.json → pantheon.twirp_path_template',
   'pantheon.frey_service': 'runtime.json → pantheon.frey_service',
   'pantheon.mimir_service': 'runtime.json → pantheon.mimir_service',
@@ -156,6 +163,9 @@ function validate(r) {
   posInt('server', 'sse_heartbeat_ms', r.server.sse_heartbeat_ms);
   posInt('server', 'session_ttl_days', r.server.session_ttl_days);
   posInt('server', 'rate_limit_per_minute', r.server.rate_limit_per_minute);
+  if (typeof r.server.trust_proxy !== 'boolean') {
+    throw new Error(`runtime.json: server.trust_proxy must be true or false, got ${JSON.stringify(r.server.trust_proxy)}`);
+  }
   posInt('server', 'status_push_ms', r.server.status_push_ms);
   posInt('server', 'status_push_fast_ms', r.server.status_push_fast_ms);
   return r;

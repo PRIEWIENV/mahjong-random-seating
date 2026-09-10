@@ -526,18 +526,79 @@ production.
   players would contradict the verifier participants are invited to run, so there are
   tests pinning both to the same numbers.
 
+## 6g. Three modules that had never been tested
+
+A count of passing tests says nothing about where they point. Three modules had none of
+their own, and the reason each was skipped turned out to be the reason each mattered.
+
+**`server/ciphertext.js`** is the door to the archive: everything it admits is written to
+`events/submissions/` and mirrored to a public repository. It has nine refusals and one
+of them was tested. The untested ones are not exotic — a ciphertext locked to another
+round is what a player produces after §8 voids one and they submit from a stale page.
+That one is refused at the door because after the cutoff it has already been counted
+towards the quorum and cannot be resubmitted. There are now fifteen tests, one per rule,
+including that the chain is checked before the round: both can be wrong at once, and the
+chain's remedy is not "reload and try again".
+
+**`server/mirror.js`** carries more of the fairness argument than any other file — the
+ciphertexts are public and third-party timestamped as they arrive, which is what stops
+an organiser dropping an inconvenient one after seeing the outcome. It was skipped as
+"needs a real PAT", which is true only of the GitHub round trip itself. Everything that
+decides whether a ciphertext reaches GitHub is a queue, a retry and a give-up rule, and
+`fetch` is a global that a test can replace. Fourteen tests now cover them, including
+that a permanently failing file is abandoned after five attempts rather than stranding
+every ciphertext queued behind it.
+
+Writing them turned up a fault in the tests rather than the module, worth recording
+because it is the kind that passes: `enqueue()` starts a flush and deliberately does not
+return it, so a test that only awaited `drain()` left a flush running, and when the stub
+was put back it went to the real api.github.com. The file took 103 seconds and made
+outbound requests. It now ends every such test at a `settle()` helper and takes four.
+
+**`server/events.js`** is the only thing that carries a finished result to an open page,
+because the draw is performed by a different process (§4.3). Its content type was tested
+and nothing else. Fifteen tests now cover the replay to a stream that arrives between
+two broadcasts, the suppression of identical payloads, the heartbeat starting with the
+first client and stopping with the last, and a write to a socket that has gone away
+dropping the client instead of throwing inside a timer.
+
+## 6h. The rate limiter was scoped to the proxy, not to the player
+
+`RateLimiter` keys on `req.socket.remoteAddress`, which is correct for a server facing
+the network and meaningless for this one: §10 puts a reverse proxy in front, so every
+request arrives from 127.0.0.1 and thirty attempts a minute became one allowance shared
+by all twelve. Nothing failed; the limit was simply thirty times smaller than intended,
+in a way that would first show up as several players being told to wait a minute while
+signing in together.
+
+The fix is not to read `X-Forwarded-For` — any caller can send that, and a server with
+nothing in front of it would then hand an allowance to every invented address. It is
+`server.trust_proxy` in `runtime.json`, off by default, and the **rightmost** entry when
+it is on. Both proxies in `deploy/` build the header as "what the client sent, then the
+address we actually saw", so the truth is on the right and a forged prefix sits to the
+left of it. Confirmed against nginx 1.28 rather than assumed: a client sending
+`1.2.3.4` arrives as `1.2.3.4, <its real address>`, and one sending two entries arrives
+with three. The first version of the test encoded the opposite belief — that the proxy
+appends *itself* — and failed, which is the useful direction for a test to be wrong in.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 178 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon | pass |
+| Unit tests (`npm test`) — 243 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
 | A voided attempt is archived, verifies, and the next attempt opens | passes |
 | Tampering with an archived ciphertext is detected, and blocks the reset | passes |
 | No ciphertext reaches the admin page or its JSON | passes |
+| Every one of the nine ciphertext refusals fires, and the chain is checked before the round | passes |
+| Mirroring retries, then gives up after five attempts without stranding the queue | passes |
+| The SSE hub replays to a late stream, suppresses repeats, and stops its heartbeat with the last client | passes |
+| The Pantheon token is verified once and appears in no table, log line or response | passes |
+| Behind a proxy the rate limit is per player, and a forged `X-Forwarded-For` buys nothing | passes |
+| `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |
 | The freeze refuses a roster that would break the sync after the draw | passes |
 | A fresh clone checks out the bundle byte-identically and its digest matches | passes *(after `.gitattributes`)* |
 | RUNBOOK B/C/D end to end (`npm run rehearse`): freeze, tag, 12 submissions, draw, sync, player verification | passes *(against the stub)* |

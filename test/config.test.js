@@ -205,3 +205,40 @@ test('/api/status serves the operational half so the bundle need not embed it', 
   assert.equal(cfg.protocol.pantheon.frey_base_url, undefined);
   cleanup(fx.dir);
 });
+
+// ---------------------------------------------------------------------------
+// trust_proxy (§4.2)
+// ---------------------------------------------------------------------------
+
+test('trust_proxy defaults to off', () => {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mahjong-rt-'));
+  try {
+    // Believing X-Forwarded-For when nothing in front sets it lets any caller claim any
+    // address and collect a rate-limit allowance for each one.
+    assert.equal(loadRuntime(dir, {}).server.trust_proxy, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('trust_proxy has to be a boolean, not a string that looks like one', () => {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mahjong-rt-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
+    const write = (v) => fs.writeFileSync(
+      path.join(dir, 'data', 'runtime.json'),
+      JSON.stringify({ server: { trust_proxy: v } })
+    );
+    write(true);
+    assert.equal(loadRuntime(path.join(dir, 'data'), {}).server.trust_proxy, true);
+    // "false" is truthy, and a deployment that wrote it would be trusting the header
+    // while believing it had turned the setting off.
+    write('false');
+    assert.throws(() => loadRuntime(path.join(dir, 'data'), {}), /trust_proxy must be true or false/);
+    write(1);
+    assert.throws(() => loadRuntime(path.join(dir, 'data'), {}), /trust_proxy must be true or false/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('trust_proxy is operational, so the frozen file may not carry it', () => {
+  const { OPERATIONAL_KEYS } = require('../server/runtime');
+  assert.ok(OPERATIONAL_KEYS['server.trust_proxy']);
+});

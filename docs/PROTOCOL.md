@@ -135,9 +135,11 @@ The split is not tidiness. Freezing something that fails the test makes the run 
     "mimir_service": "mimir.Mimir"
   },
   "ui":     { "status_poll_interval_ms": 15000 },
-  "server": { "sse_heartbeat_ms": 25000, "session_ttl_days": 30, "rate_limit_per_minute": 30 }
+  "server": { "sse_heartbeat_ms": 25000, "session_ttl_days": 30, "rate_limit_per_minute": 30, "trust_proxy": false }
 }
 ```
+
+`trust_proxy` deserves a word, because its default is wrong for the deployment §10 describes and right everywhere else. The rate limit is per source address, and behind a reverse proxy every request arrives from 127.0.0.1 — so the limit becomes one allowance shared by all twelve. Turning it on makes the server read `X-Forwarded-For` instead, taking the rightmost entry, which is the address the proxy itself observed rather than anything a caller can claim. It stays off by default because a server with nothing in front of it would otherwise hand an allowance to every invented address.
 
 The file is optional and so is every key in it; anything absent falls back to the defaults shown, which are the ones compiled into `server/runtime.js`. None of this is a promise to players, and all of it may be changed mid-window without voiding anything — that is the whole point of it being here.
 

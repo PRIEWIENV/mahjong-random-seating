@@ -13,6 +13,11 @@ example.com {
 
 	# Server-Sent Events must not be buffered or the waiting stage stops updating and
 	# silently falls back to 15 s polling. flush_interval -1 disables response buffering.
+	#
+	# Caddy appends the address it saw to X-Forwarded-For, the same way nginx does, so
+	# the rightmost entry is the trustworthy one. The app ignores the header unless
+	# data/runtime.json sets server.trust_proxy — without it every request looks like
+	# 127.0.0.1 and the per-source rate limit is shared by everybody.
 	reverse_proxy 127.0.0.1:8080 {
 		flush_interval -1
 	}

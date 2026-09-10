@@ -25,11 +25,18 @@ const path = require('node:path');
 const API = 'https://api.github.com';
 
 class Mirror {
-  constructor(env = process.env, log = console) {
+  /**
+   * @param {object} env   MIRROR_REPO / MIRROR_BRANCH / MIRROR_TOKEN
+   * @param {object} log
+   * @param {object} [opts]
+   * @param {number} [opts.retryBaseMs]  backoff step; a test needs this to not be 2 s
+   */
+  constructor(env = process.env, log = console, opts = {}) {
     this.repo = env.MIRROR_REPO || null;
     this.branch = env.MIRROR_BRANCH || 'main';
     this.token = env.MIRROR_TOKEN || null;
     this.log = log;
+    this.retryBaseMs = opts.retryBaseMs ?? 2000;
     this.enabled = Boolean(this.repo && this.token);
     this.queue = [];
     this.flushing = false;
@@ -117,7 +124,7 @@ class Mirror {
             this.queue.shift();
             this.log.error?.(`[mirror] giving up on ${job.repoPath}; mirror it by hand before publishing results`);
           } else {
-            await new Promise((r) => setTimeout(r, 2000 * job.attempts));
+            await new Promise((r) => setTimeout(r, this.retryBaseMs * job.attempts));
           }
         }
       }

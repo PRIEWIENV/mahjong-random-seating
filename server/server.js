@@ -482,8 +482,34 @@ function createServer(opts = {}) {
 
   const DATA_FILES = new Set(['protocol.json', 'roster.json', 'schedule_template.json']);
 
+  /**
+   * Who to charge a request to, for rate limiting.
+   *
+   * Behind a reverse proxy every connection arrives from 127.0.0.1, so the socket
+   * address makes the per-IP limiter one shared allowance — twelve people signing in at
+   * once can exhaust it between them. X-Forwarded-For fixes that and is also a header
+   * any caller can invent, so it is believed only when runtime.json says a proxy is in
+   * front (§4.2).
+   *
+   * The RIGHTMOST entry is the one to take. Both proxies in deploy/ append the address
+   * they actually saw to whatever the client sent — nginx's $proxy_add_x_forwarded_for
+   * is literally "$http_x_forwarded_for, $remote_addr" — so a forged prefix ends up to
+   * the left of the truth and taking the last element steps over it.
+   */
+  const trustProxy = opts.trustProxy ?? cfg.runtime.server.trust_proxy;
+  function clientIp(req) {
+    if (trustProxy) {
+      const fwd = req.headers['x-forwarded-for'];
+      if (typeof fwd === 'string' && fwd.trim() !== '') {
+        const last = fwd.split(',').pop().trim();
+        if (last) return last;
+      }
+    }
+    return req.socket.remoteAddress || 'unknown';
+  }
+
   const server = http.createServer(async (req, res) => {
-    const ip = req.socket.remoteAddress || 'unknown';
+    const ip = clientIp(req);
     let url;
     try { url = new URL(req.url, 'http://localhost'); }
     catch { return send(res, 400, 'Bad request', { 'content-type': 'text/plain' }); }
@@ -612,6 +638,18 @@ if (require.main === module) {
     // private address works from here and from nowhere a player will ever be, and the
     // symptom is a sign-in page reporting a wrong password. Say it at boot rather than
     // letting twelve people discover it at once.
+    // Listening only on loopback means something is proxying, and then every request
+    // carries the proxy's address. The limiter is not broken so much as scoped wrong:
+    // one allowance for the whole event instead of one per player.
+    const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+    if (loopback && !cfg.runtime.server.trust_proxy) {
+      console.warn(
+        `[server] note: rate limiting is by source address, and behind a proxy every request ` +
+        `looks like ${host}. Set server.trust_proxy in data/runtime.json once the proxy sets ` +
+        'X-Forwarded-For, or the limit of ' +
+        `${cfg.runtime.server.rate_limit_per_minute}/minute is shared by everybody.`
+      );
+    }
     if (pantheon.constructor.name !== 'StubPantheon' && freyPublicUrlIsLocal(cfg.runtime)) {
       console.warn(
         `[server] WARNING: browsers are told Frey is at ${freyPublicUrl(cfg.runtime)}, which is ` +

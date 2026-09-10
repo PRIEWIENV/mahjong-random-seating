@@ -149,6 +149,15 @@ Two things are load-bearing in whichever you choose:
   (PANTHEON-INTEGRATION.md §2), so the Frey origin has to be added there or sign-in is
   blocked by the CSP — and blocked in a way no server log records, because the request
   never reaches a server.
+- **`server.trust_proxy` in `data/runtime.json`.** Behind a proxy every request arrives
+  from 127.0.0.1, so the per-source rate limit becomes one allowance shared by all
+  twelve — enough that a few people signing in at the same moment can spend it between
+  them. Set it to `true` once the proxy sets `X-Forwarded-For`; both configurations in
+  this directory do. It is off by default because believing that header with nothing in
+  front would let any caller invent an address and collect an allowance for each one.
+  The app reads the **rightmost** entry, which is the address the proxy itself observed,
+  so a forged prefix is stepped over rather than believed. The server prints a note at
+  boot when it is listening on loopback with the setting off.
 
 ### TLS is not optional here
 

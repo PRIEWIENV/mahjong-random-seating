@@ -28,7 +28,7 @@ async function boot(opts = {}) {
   const { server, hub } = createServer({
     cfg, store, mirror, pantheon,
     publicDir: path.join(ROOT, 'public'),
-    now: opts.now, rateLimit: opts.rateLimit,
+    now: opts.now, rateLimit: opts.rateLimit, trustProxy: opts.trustProxy,
     drand: { latest: async () => ({ round: 123 }) },
     drandPollMs: 0,
     log: opts.log || QUIET,
@@ -447,4 +447,69 @@ test('the rate limiter caps repeated sign-in attempts', async () => {
   }
   assert.ok(codes.includes(429), `expected a 429 among ${codes.join(',')}`);
   await s.close();
+});
+
+/** Repeatedly fail sign-in, optionally claiming a forwarded address. */
+async function attempts(s, n, forwardedFor) {
+  const codes = [];
+  for (let i = 0; i < n; i++) {
+    const r = await s.call('/api/session', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(forwardedFor ? { 'x-forwarded-for': forwardedFor } : {}),
+      },
+      body: JSON.stringify({ person_id: 1001, auth_token: 'wrong' }),
+    });
+    codes.push(r.status);
+  }
+  return codes;
+}
+
+test('behind a proxy the limit is per player, not one shared between them', async () => {
+  // Every request arrives from the proxy, so without trust_proxy twelve people signing
+  // in at the same moment spend one allowance between them.
+  const s = await boot({ rateLimit: 3, trustProxy: true });
+  try {
+    // What nginx sends for a client at 203.0.113.7 that forwarded nothing itself:
+    // $proxy_add_x_forwarded_for appends the address IT saw, which is the client's.
+    assert.equal((await attempts(s, 3, '203.0.113.7')).includes(429), false);
+    assert.ok((await attempts(s, 2, '203.0.113.7')).includes(429), 'that address was not capped');
+    // A different player is unaffected by the first one hitting the wall.
+    assert.equal((await attempts(s, 3, '203.0.113.8')).includes(429), false);
+  } finally { await s.close(); }
+});
+
+test('a forged X-Forwarded-For cannot buy a fresh allowance', async () => {
+  // Both proxies in deploy/ append the address they saw, so the rightmost entry is the
+  // one they observed and anything to the left of it is the caller's own claim.
+  const s = await boot({ rateLimit: 3, trustProxy: true });
+  try {
+    // The same client, at 203.0.113.9, first honest and then inventing a prefix. The
+    // proxy appends what it saw either way, so the real address stays on the right.
+    await attempts(s, 3, '203.0.113.9');
+    const spoofed = await attempts(s, 2, '198.51.100.1, 203.0.113.9');
+    assert.ok(spoofed.includes(429), 'a forged prefix bought a fresh allowance');
+  } finally { await s.close(); }
+});
+
+test('with trust_proxy off the header is ignored entirely', async () => {
+  // The default. Nothing sets that header in front of this server, so believing it
+  // would hand every caller an allowance of its own just for inventing an address.
+  const s = await boot({ rateLimit: 4, trustProxy: false });
+  try {
+    const codes = [];
+    for (let i = 0; i < 6; i++) codes.push(...await attempts(s, 1, `198.51.100.${i}`));
+    assert.ok(codes.includes(429), `every invented address got its own allowance: ${codes.join(',')}`);
+  } finally { await s.close(); }
+});
+
+test('trust_proxy with no header falls back to the socket address', async () => {
+  // A direct request to the app while the setting is on — a health check, or a proxy
+  // that was not configured to forward. It must still be limited, not exempt.
+  const s = await boot({ rateLimit: 3, trustProxy: true });
+  try {
+    const codes = await attempts(s, 5);
+    assert.ok(codes.includes(429), `unforwarded requests went unlimited: ${codes.join(',')}`);
+  } finally { await s.close(); }
 });

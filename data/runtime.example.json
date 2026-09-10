@@ -28,6 +28,8 @@
     "session_ttl_days": 30,
     "rate_limit_per_minute": 30,
     "status_push_ms": 15000,
-    "status_push_fast_ms": 2000
+    "status_push_fast_ms": 2000,
+    "_trust_proxy": "Set true once a reverse proxy sets X-Forwarded-For. Behind one, every request arrives from 127.0.0.1 and rate_limit_per_minute becomes a single allowance shared by all twelve players. Left false, the header is ignored entirely — believing it with nothing in front lets any caller invent an address and collect an allowance per address.",
+    "trust_proxy": false
   }
 }

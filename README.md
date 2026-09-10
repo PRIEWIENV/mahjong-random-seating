@@ -24,8 +24,9 @@ Start with [`docs/seating-design.md`](docs/seating-design.md): it explains the w
 
 **Outstanding**
 
-- The Twirp client **has** now been run against a real Pantheon (`cdda3fc`, in Docker under WSL 2): the roster snapshot, the sign-in gate in all three directions, and the prescript written, read back and applied with `MakePrescriptedSeating`, seat order intact. Six things were wrong and none of them failed loudly — see [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) §5.1 and §6. What is still outstanding is narrower: **the instance you actually deploy against**. Pantheon moves, §5.1 is a fact about one commit, and `tools/pantheon-fixture.js` plus §6 make re-checking it a half-hour job rather than a research project.
+- The Twirp client **has** now been run against a real Pantheon (`cdda3fc`, in Docker under WSL 2), twice: once against a borrowed event, and once end to end against a fresh one where all twelve players signed in with an email and a password (`tools/pantheon-fixture.js --accounts`), sealed real ciphertexts, and had the resulting seat plan read back out of Pantheon seat by seat. Nine things were wrong across the two rounds and not one of them failed loudly — see [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) §2, §3, §5.1 and §6. Three are worth knowing before you deploy: Frey needs **two** addresses, because the browser calls it as well as the backend; a sign-in that fails for any reason used to be reported to the player as a wrong password; and `MakePrescriptedSeating` randomises the winds unless the caller states the mode, which Forseti does and a script might not. What is still outstanding is narrower: **the instance you actually deploy against**. Pantheon moves, §5.1 is a fact about one commit, and the fixture plus §6 make re-checking it a half-hour job rather than a research project.
 - **The operational half of the RUNBOOK has been rehearsed, not performed.** `npm run rehearse` runs sections B, C and D end to end in a throwaway repository — roster snapshot, freeze, tag, twelve sealed submissions, the chase list, the draw, the sync, and the check a player does afterwards — against the Pantheon stub and a real drand round. Every step passes. What is left is doing it for an actual event, with real registrations and a deployment, and with the stub replaced by the instance in the first bullet.
+- **Nothing here has run a draw for people who did not know it was a test.** Everything above is reproducible and checked; none of it has yet been the thing twelve players were waiting on. That is the only item on this list that cannot be closed by writing more code.
 
 **Read [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) before freezing.** One item there is about what "verified" actually means:
 
@@ -39,7 +40,7 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 178 unit tests, offline, ~6s
+npm test                  # 243 unit tests, offline, ~6s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~5 min
