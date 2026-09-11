@@ -38,7 +38,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { load } = require('./config');
+const { load, loadEnvFile } = require('./config');
 const { Store } = require('./db');
 const { assertAdmissible, CiphertextError } = require('./ciphertext');
 const { Mirror, writeLocal } = require('./mirror');
@@ -832,11 +832,21 @@ const SHUTDOWN_GRACE_MS = 3000;
  *
  * The draw child, if one is mid-flight, is deliberately left alone — a half-published
  * round is worse than an orphaned process, and server/schedule.js says why.
+ *
+ * The mirror queue is waited for, though, and that requirement arrived with the fix
+ * above. A ciphertext is accepted, stored, and queued for the repository, and the push
+ * happens a moment later; while stopping took forever the queue always emptied on the
+ * way out by accident. Now that it takes milliseconds, a submission taken seconds before
+ * a restart would be durable locally and absent from the repository — and PROTOCOL.md §5
+ * is exactly the claim that it is not: public the moment it arrives, timestamped by
+ * somebody the organiser does not control.
  */
 function shutdown(o) {
-  const { server, hub, scheduler, log = console, graceMs = SHUTDOWN_GRACE_MS, exit = process.exit } = o;
+  const { server, hub, scheduler, mirror, log = console, graceMs = SHUTDOWN_GRACE_MS, exit = process.exit } = o;
   let grace = null;
   let done = false;
+  let socketsClosed = false;
+  let queueSettled = false;
   // Both paths below can arrive, and on the second signal `close` calls back with an
   // ERR_SERVER_NOT_RUNNING it would rather we ignored. One exit, whoever gets here.
   const finish = () => {
@@ -845,11 +855,29 @@ function shutdown(o) {
     if (grace) clearTimeout(grace);
     exit(0);
   };
+  const finishIfReady = () => { if (socketsClosed && queueSettled) finish(); };
 
   scheduler?.stop();
   hub?.close();
-  server.close(finish);
+  server.close(() => { socketsClosed = true; finishIfReady(); });
   server.closeIdleConnections?.();
+
+  if (typeof mirror?.drain === 'function') {
+    // Bounded by the same grace: an unreachable GitHub must not be able to hold the
+    // process open. What is left is named, because the ciphertexts are still in var/ and
+    // under events/, so an operator who is told can push them by hand.
+    Promise.resolve(mirror.drain(graceMs))
+      .then((ok) => {
+        if (ok === false) {
+          log.warn?.('[server] some submissions were still queued for the repository and did not go out; ' +
+            'they are on disk under events/submissions — mirror them by hand (PROTOCOL.md §5)');
+        }
+      })
+      .catch((err) => log.warn?.(`[server] the mirror queue could not be settled: ${err.message}`))
+      .then(() => { queueSettled = true; finishIfReady(); });
+  } else {
+    queueSettled = true;
+  }
 
   grace = setTimeout(() => {
     log.warn?.(`[server] still connected after ${graceMs}ms; dropping what is left and exiting`);
@@ -865,6 +893,10 @@ function shutdown(o) {
 module.exports.shutdown = shutdown;
 
 if (require.main === module) {
+  // Before anything reads the environment, `listenOn` included. deploy/README.md §2 has
+  // the operator put the deployment's whole configuration in .env, and until now only
+  // the systemd unit was reading it.
+  const envFile = loadEnvFile();
   let port;
   let host;
   try {
@@ -873,7 +905,7 @@ if (require.main === module) {
     console.error(`[server] ${err.message}`);
     process.exit(2);
   }
-  const { server, cfg, pantheon, store, hub } = createServer();
+  const { server, cfg, pantheon, store, hub, mirror } = createServer();
   let scheduler = null;
   let stopping = false;
   for (const sig of ['SIGINT', 'SIGTERM']) {
@@ -887,7 +919,7 @@ if (require.main === module) {
       }
       stopping = true;
       console.info('[server] stopping');
-      shutdown({ server, hub, scheduler, log: console });
+      shutdown({ server, hub, scheduler, mirror, log: console });
     });
   }
   server.on('error', (err) => {
@@ -912,6 +944,12 @@ if (require.main === module) {
     console.info(`[server] event ${cfg.roster.pantheon_event_id}, ${cfg.protocol.total_slots} slots, ` +
       `quorum ${cfg.protocol.quorum}, round ${cfg.protocol.target_round}, cutoff ${cfg.protocol.submission_cutoff_utc}`);
     console.info(`[server] pantheon: ${pantheon.constructor.name}`);
+    // Said out loud either way. A deployment whose .env was never read looks entirely
+    // healthy from here — it serves, it accepts submissions, it mirrors nothing — and
+    // this line is the only place that difference is visible before the event.
+    console.info(envFile
+      ? `[server] configuration read from ${path.relative(cfg.root, envFile)}`
+      : '[server] no .env found; using the environment as given');
     // The browser is told where Frey is, and then calls it itself. A loopback or
     // private address works from here and from nowhere a player will ever be, and the
     // symptom is a sign-in page reporting a wrong password. Say it at boot rather than

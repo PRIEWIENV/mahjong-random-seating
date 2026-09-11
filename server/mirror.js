@@ -152,11 +152,36 @@ class Mirror {
   }
 }
 
-/** Also keep a local copy, so the repository layout of §10 exists even without a PAT. */
+/**
+ * Also keep a local copy, so the repository layout of §10 exists even without a PAT.
+ *
+ * Through a temporary file and a rename, which is atomic on POSIX and on Windows. A
+ * plain write has a window in which what is on disk is half a file, and `results.json`
+ * is the worst file in this system to catch in that state: `phaseOf` decides the draw is
+ * finished from that file's mere existence, so a truncated one settles the event as
+ * done, is never retried, and turns `GET /api/result` into a 500 for every player, with
+ * the seat plan surviving nowhere but the memory of the process that just died.
+ *
+ * The window is one small synchronous write. The ways into it are ordinary: systemd
+ * stopping the unit while the draw runs, the `MemoryMax` in `deploy/mahjong-relay.service`
+ * firing on the one process that holds a dozen ciphertexts and their plaintexts at once,
+ * a power cut. After a rename there is either no file or the whole file, and "no file"
+ * is a state this system already knows how to recover from — it draws again and gets the
+ * same answer, because the beacon and the snapshot are both already fixed.
+ */
 function writeLocal(root, repoPath, content) {
   const dest = path.join(root, repoPath);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, content);
+  // Beside the destination, so the rename cannot cross a filesystem boundary and quietly
+  // degrade into a copy. The pid keeps two writers from choosing the same scratch name.
+  const tmp = `${dest}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never created, or already gone */ }
+    throw err;
+  }
   return dest;
 }
 

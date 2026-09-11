@@ -143,3 +143,90 @@ test('the interval comes from the runtime settings when none is passed', async (
   assert.equal(s.runs, 1);
   s.stop();
 });
+
+// ---------------------------------------------------------------------------
+// one draw at a time, across processes
+// ---------------------------------------------------------------------------
+
+/**
+ * The guard above is a variable in one process's memory, which decides nothing once two
+ * processes exist. That is no longer hypothetical: the draw job now survives the signal
+ * that stops the unit, so `systemctl restart` during a draw routinely leaves the old job
+ * running while a new server starts and schedules another. Both would compute the same
+ * seat plan, from the same fixed beacon and the same fixed snapshot, and then race each
+ * other over the Pantheon prescript and the mirror queue.
+ *
+ * The opposite failure is worse and shapes every case below: a lock nobody holds must
+ * never be able to stop the draw for good. An event that never draws at all is not an
+ * improvement on a race nobody has hit.
+ */
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { takeLock, releaseLock, lockPath } = require('../server/finalise');
+
+const tempRoot = () => ({ root: fs.mkdtempSync(path.join(os.tmpdir(), 'mahjong-lock-')) });
+
+test('the second draw job finds the lock taken and leaves', () => {
+  const cfg = tempRoot();
+  try {
+    const held = takeLock(cfg);
+    assert.ok(held, 'the first job must get the lock');
+    assert.equal(takeLock(cfg), null, 'the second job must not');
+    releaseLock(held);
+    assert.ok(takeLock(cfg), 'and the next one gets it once the first is done');
+  } finally {
+    fs.rmSync(cfg.root, { recursive: true, force: true });
+  }
+});
+
+test('a lock left by a process that is gone is taken over', () => {
+  // A SIGKILL, an OOM, a power cut: the file outlives the process that wrote it. Every
+  // subsequent run refusing to draw would turn one lost process into a lost event.
+  const cfg = tempRoot();
+  try {
+    fs.mkdirSync(path.dirname(lockPath(cfg)), { recursive: true });
+    // A pid that cannot be running: the kernel does not hand out 0x7FFFFFFF.
+    fs.writeFileSync(lockPath(cfg), JSON.stringify({ pid: 2147483647, at: new Date().toISOString() }));
+    assert.ok(takeLock(cfg), 'a dead holder must not hold anything');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath(cfg), 'utf8')).pid, process.pid);
+  } finally {
+    fs.rmSync(cfg.root, { recursive: true, force: true });
+  }
+});
+
+test('a lock older than any real draw is taken over, whoever holds it', () => {
+  // Pids are reused. Without an age ceiling, a lock whose number has been handed to some
+  // unrelated long-lived process would refuse the draw forever.
+  const cfg = tempRoot();
+  try {
+    fs.mkdirSync(path.dirname(lockPath(cfg)), { recursive: true });
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    fs.writeFileSync(lockPath(cfg), JSON.stringify({ pid: process.pid, at: hourAgo }));
+    assert.ok(takeLock(cfg), 'an hour-old lock is not a running draw');
+  } finally {
+    fs.rmSync(cfg.root, { recursive: true, force: true });
+  }
+});
+
+test('a lock this process really does hold, taken moments ago, is respected', () => {
+  const cfg = tempRoot();
+  try {
+    fs.mkdirSync(path.dirname(lockPath(cfg)), { recursive: true });
+    fs.writeFileSync(lockPath(cfg), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    assert.equal(takeLock(cfg), null);
+  } finally {
+    fs.rmSync(cfg.root, { recursive: true, force: true });
+  }
+});
+
+test('a half-written lock file is not a claim', () => {
+  const cfg = tempRoot();
+  try {
+    fs.mkdirSync(path.dirname(lockPath(cfg)), { recursive: true });
+    fs.writeFileSync(lockPath(cfg), '{"pid":12');
+    assert.ok(takeLock(cfg), 'unparseable is not held');
+  } finally {
+    fs.rmSync(cfg.root, { recursive: true, force: true });
+  }
+});

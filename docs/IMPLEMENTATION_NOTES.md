@@ -895,12 +895,166 @@ That is the bug, faithfully. The SSE test that existed all along never caught th
 because it cancels its reader before closing, which is the one thing a player sitting on
 the waiting page never does.
 
+## 6m. What a stop during the draw was allowed to take with it
+
+Fixing Ctrl+C (§6l) made the relay stop in milliseconds and turned the next question up:
+what else was that stop signal reaching, and what did it cost. The draw job, it turned
+out, and rather a lot.
+
+### A file that exists is a claim, so it must never exist half-written
+
+`results.json` was written with a plain `writeFileSync`. `phaseOf` decides the draw is
+finished from that file's **existence** — not its contents, by design, because a
+published result has to outrank a lost database (§6). Put those two together and a
+process killed inside that one write leaves a file that settles the event as done,
+is never retried, and makes `GET /api/result` throw on every request for every player,
+with the seat plan surviving nowhere but the memory of the process that just died.
+Recovery means deleting the file by hand, and no runbook said so.
+
+The window is one small synchronous write, and the ways into it are ordinary: systemd
+stopping the unit mid-draw, the unit's own `MemoryMax` firing on the one process that
+holds a dozen ciphertexts and their plaintexts at once, a power cut. Everything published
+now goes through a temporary name beside the destination and a rename, which is atomic on
+POSIX and on Windows. There is either no file or the whole file, and "no file" is a state
+this system already knows how to recover from: it draws again and gets the same answer,
+because the beacon and the snapshot are both already fixed.
+
+### The push that nobody noticed had not happened
+
+More likely than the above, and quieter. The result is written to disk and queued for the
+mirror in the same breath, but the queue lives in memory and the push happens at the end
+of the run, with the Pantheon sync in between — seconds, or tens of seconds if Pantheon is
+slow. A process that stops in that gap leaves the result on the organiser's disk and
+absent from the public repository, which is the file the README tells a player to verify
+against. The next tick sees `results.json`, reports *already done*, and resumes only the
+sync.
+
+Writing that fix turned up two worse instances of the same shape, and one of them was not
+conditional on being interrupted at all.
+
+`events/void.json` and `events/snapshot.json` were enqueued and then **returned past**.
+`enqueue` starts a flush it does not await; `run()` returns; the command-line entry point
+calls `process.exit` as soon as it resolves. So on every void round the notice raced the
+exit and generally lost, and at every cutoff the roll did the same. The roll is the worse
+of the two by a distance: it is written once and guarded against ever being written
+again, so a push lost there was lost permanently — and a roll that is not public before
+the beacon is the whole of §9, which is to say it proves nothing.
+
+The shape of the fix is therefore not "re-push results.json". Every durable artefact goes
+through one function that writes it locally, queues it, and records that the repository is
+now behind; every path out of `run()` works the queue and records whether it emptied; and
+a run that starts while that record is missing offers the files on disk again, roll first,
+so a reader never finds a result published without the file needed to audit its roll-call.
+The bytes come from disk rather than from the database, because what the database holds
+has the derived statistics merged in and pushing those would publish a file that does not
+reproduce (§4.3).
+
+There is a third instance, and it is one that §6l created. Submissions are queued by the
+server rather than by the draw job, and while stopping took forever the queue always
+emptied on the way out by accident. Stopping in milliseconds removed that accident: a
+ciphertext taken seconds before a restart would have been durable locally and absent from
+the repository, which is precisely the claim §5 makes about it. The shutdown now waits for
+the queue as well as for the sockets, under the same bounded grace, and names what did not
+go out — the files are still under `events/submissions/`, so an operator who is told can
+push them by hand.
+
+A drain that reports failure records nothing, in all of these. Writing *published* on a
+push that did not happen would take away the one later run that could still fix it.
+
+### The knob that looked right was the wrong one
+
+Under systemd's default `KillMode=control-group` the stop signal goes to every process in
+the unit, the draw job included, and Node's default action is to die on the spot. The
+obvious remedy is `KillMode=mixed`, which sends SIGTERM only to the main process.
+
+Measured on systemd 255, with a child that logs what it receives:
+
+| KillMode | the child receives | `systemctl stop` takes | the child |
+|---|---|---|---|
+| `control-group` (default) | SIGTERM | 0s | survives it, if it chooses to, and finishes |
+| `mixed` | nothing | 0s | SIGKILL the instant the main process exits |
+
+`mixed` is strictly worse: SIGKILL cannot be handled at all. The default is the better of
+the two *provided the job survives SIGTERM*, and the unit counts as stopped once the main
+process exits, so nothing comes back for the child afterwards. The job therefore ignores
+the first stop signal and finishes the draw; a second exits anyway, because an operator
+who asks twice means it. Both unit files say all of this where somebody would otherwise
+reach for the knob, and both now set `TimeoutStopSec` deliberately rather than inheriting
+ninety seconds.
+
+### One draw at a time, across processes
+
+That fix creates a situation that did not exist before: `systemctl restart` during a draw
+leaves the old job running while a new server starts and schedules another. The
+scheduler's guard against overlap is a variable in one process's memory, which decides
+nothing once there are two.
+
+`var/finalise.lock` settles it, and the failure it must **not** have shapes every line of
+it. A lock nobody holds must never be able to stop an event drawing at all, so a lock is
+taken over when its process is gone, when it is older than any real run could be (pids
+get reused), and when it is unreadable. Trading a race nobody has hit for an event that
+never draws would be a bad bargain.
+
+## 6n. The deployment was documented for a machine you own
+
+Two things a reader following `deploy/README.md` exactly would have got wrong.
+
+### `.env` was read by exactly one launcher
+
+That document has the operator write a `.env` holding everything that makes a deployment
+real rather than a demo: the Pantheon base URLs and the admin account for the seat-plan
+sync, the mirror repository and its token, `ADMIN_TOKEN`, `NODE_ENV=production`. Only the
+systemd unit read it, through `EnvironmentFile=`. Every other launcher in the same
+document — tmux, `nohup`, a crontab, a terminal — and the command the README's own
+Production section gives, started a process that had never seen any of it.
+
+Nothing about that looks wrong from outside. The server serves the right pages, signs
+people in, accepts every ciphertext, and mirrors **none** of them, which quietly removes
+the §5 property the fairness argument leans on hardest. `NODE_ENV` unset also leaves the
+session cookie without `Secure`.
+
+The process reads the file itself now, through Node's own loader, so this costs no
+dependency — and it says which file it read in its first few log lines, because the whole
+failure was one of silence. A variable already in the environment still wins over the
+file, so `PORT=9000 node server/server.js` keeps meaning what it says. A `.env` that
+cannot be read is fatal rather than partial: running with half the settings is the same
+failure in a smaller size.
+
+### The install still opened with `adduser`
+
+`adduser --system --group` and a `chown` were the first two lines, which makes the whole
+document read as something you need root for. Nothing in the relay needs one. It binds a
+high port because something else terminates TLS in front of it, it writes only inside its
+own checkout, it opens no device and joins no group, and the two credentials it holds are
+a GitHub PAT and a Pantheon account — secrets belonging to the organiser rather than to
+the machine, which is exactly why a dedicated system account buys less here than it
+usually does. What protects them is the mode on `.env`, either way.
+
+So the rootless path is the documented one, including the part people assume needs root:
+surviving a reboot. systemd runs an instance per user, and registering a service with your
+own needs nothing from an administrator — verified on systemd 255 as an ordinary user.
+`loginctl enable-linger` is the one piece that depends on the machine, and it is governed
+by a polkit action that ships allowed for any user on Ubuntu and Debian; the document says
+how to check rather than asserting it will work. `deploy/mahjong-relay.user.service` is
+the unit, with the hardening that genuinely needs root dropped and the part that matters
+kept. The system unit stays for anyone who wants the isolation and has root to enforce it.
+
+### The rest
+
+Links had no colour. There was no rule for `a` anywhere in the stylesheet, so every
+anchor the app renders fell back to the browser default: `#0000EE` on the parchment, the
+same blue against `#131518` in dark mode, and `#551A8B` once visited. The visited colour
+was the worse half — a player who has downloaded the sealed ciphertexts once saw a
+different colour from the eleven who had not, on the one control the page asks all twelve
+of them to use and compare. Two places had already patched around it locally; those
+patches are one rule now.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 315 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown | pass |
+| Unit tests (`npm test`) — 336 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -940,6 +1094,15 @@ the waiting page never does.
 | The generated explanation page is deterministic: a fresh clone at the tag rebuilds the bundle byte-identically | passes |
 | `THIRD-PARTY-NOTICES.md` covers every one of the seventeen libraries in the bundle, and `--check` fails if it has fallen behind | passes |
 | Ctrl+C stops the relay while a player is attached to the stream, and a stream nothing releases is dropped rather than waited on | passes |
+| A published file is renamed into place: a failed write leaves the previous one intact and no scratch file behind | passes |
+| A draw whose push never completed is re-mirrored on the next tick, with the bytes that are on disk | passes |
+| A void round and a roll taken at the cutoff both work the queue before the process exits, and are offered again if it did not empty | passes |
+| The roll goes out before the result, so a reader never finds one without the other | passes |
+| The shutdown waits for a queued submission, and an unreachable repository still cannot hold the process open | passes |
+| A second draw job finds the lock taken; a lock whose holder is gone, or older than any real run, is taken over | passes |
+| `.env` is read by the process itself, the environment still wins over it, and an unreadable one is fatal | passes |
+| systemd 255, measured: the default KillMode lets a job that survives SIGTERM finish, and `mixed` SIGKILLs it | measured |
+| A rootless install, including a systemd **user** unit, on systemd 255 as an ordinary user | passes |
 | RUNBOOK A2/A3/A6 against a real Pantheon instance (`cdda3fc`, local Docker) | passes *(after six fixes — §6f)* |
 | Roster snapshot from a live event, through `tools/freeze.js` | passes |
 | Sign-in gate live: correct token, wrong token, unknown person | passes, three distinct answers |

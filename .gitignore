@@ -44,6 +44,10 @@ results.json
 decrypted.json
 my-results.json
 independent.json
+# Scratch names from the atomic write in server/mirror.js. One of these surviving means a
+# process was killed mid-publish; the real file is either absent or complete, which is
+# the point of writing it this way.
+*.tmp
 
 # Note: public/app.js, public/app.css and public/app.js.sha256 MUST be committed. The
 # submission stage is where plaintext numbers exist, so the code running there is part

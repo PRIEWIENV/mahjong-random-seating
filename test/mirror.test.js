@@ -268,3 +268,57 @@ test('writeLocal lays out the repository path under the root, creating directori
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * The published files are written through a temporary name and a rename, so that a
+ * process killed mid-write leaves either nothing or the whole file.
+ *
+ * This matters far more for `results.json` than the name suggests. `phaseOf` decides the
+ * draw is finished from that file's mere existence, so a truncated one settles the event
+ * as done, is never retried, and turns `GET /api/result` into a 500 for every player,
+ * with the seat plan surviving only in the memory of the process that just died. The
+ * ways into that are ordinary: systemd stopping the unit during the draw, the unit's own
+ * `MemoryMax` firing, a power cut.
+ */
+test('a published file is renamed into place, not written over the old one', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mahjong-atomic-'));
+  const realRename = fs.renameSync;
+  try {
+    writeLocal(dir, 'results.json', '{"the":"previous result"}');
+    const dest = path.join(dir, 'results.json');
+
+    // The rename is the step that publishes. Break it, and the previous file must be
+    // exactly as it was: not truncated, not half the new content.
+    fs.renameSync = () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); };
+    assert.throws(() => writeLocal(dir, 'results.json', '{"the":"new one"}'), /disk full/);
+    fs.renameSync = realRename;
+
+    assert.equal(fs.readFileSync(dest, 'utf8'), '{"the":"previous result"}', 'the old file was damaged');
+    // And the scratch file is cleaned up rather than left for git to find.
+    const strays = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'));
+    assert.deepEqual(strays, [], `left behind: ${strays.join(', ')}`);
+  } finally {
+    fs.renameSync = realRename;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the scratch file sits beside its destination, so the rename cannot cross a filesystem', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mahjong-atomic-'));
+  const seen = [];
+  const realWrite = fs.writeFileSync;
+  try {
+    fs.writeFileSync = (file, ...rest) => { seen.push(String(file)); return realWrite(file, ...rest); };
+    writeLocal(dir, 'events/snapshot.json', '{}');
+    fs.writeFileSync = realWrite;
+
+    assert.equal(seen.length, 1);
+    // Across a mount point, rename() degrades into copy-and-delete and stops being
+    // atomic. events/ could well be a volume of its own.
+    assert.equal(path.dirname(seen[0]), path.join(dir, 'events'));
+    assert.match(path.basename(seen[0]), /^snapshot\.json\..*\.tmp$/);
+  } finally {
+    fs.writeFileSync = realWrite;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

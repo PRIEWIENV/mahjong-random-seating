@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-315%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-336%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -62,7 +62,7 @@ flowchart LR
 ```sh
 git clone <本仓库> && cd mahjong-random-seating
 npm ci
-npm test                  # 315 个单元测试，完全离线，约 12 秒
+npm test                  # 336 个单元测试，完全离线，约 12 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
 ```
 
@@ -86,7 +86,7 @@ npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分�
 
 ```sh
 npm ci
-npm test                  # 315 个单元测试，离线，约 12 秒
+npm test                  # 336 个单元测试，离线，约 12 秒
 npm run verify-template   # 重新推导冻结模板的每一条不变量
 npm run e2e               # 对着真实 drand 跑 RUNBOOK A2-A7，约 90 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
@@ -149,7 +149,9 @@ ADMIN_TOKEN=$(openssl rand -hex 16) PANTHEON_MODE=stub npm run serve
 node server/server.js
 ```
 
-没有别的东西要装，也不需要 root。服务器会用自己的定时器派生 `server/finalise.js`（`server.finalise_interval_seconds`，默认 60 秒），所以开奖不需要 systemd 单元也不需要 cron 条目——如果你更想自己调度，把 `server.run_finalise` 设为 `false` 就交还给你。
+这就是整个部署，而它唯一的前提值得明说：进程启动时会读取 checkout 根目录下的 `.env`，并在最初几行日志里报出它读了哪个文件。所有让一次部署成为真部署而不是演示的东西都在那里面——Pantheon 的基础 URL、用于座位同步的管理员账号、镜像仓库和它的 token、`ADMIN_TOKEN`、`NODE_ENV=production`。其中大部分没有命令行参数，也不需要有。文件内容见 [`deploy/README.zh.md`](deploy/README.zh.md) §2。
+
+没有别的东西要装，也不需要 root——进程不需要，让它熬过重启不需要，一开始安装它也不需要。服务器会用自己的定时器派生 `server/finalise.js`（`server.finalise_interval_seconds`，默认 60 秒），所以开奖不需要 systemd 单元也不需要 cron 条目——如果你更想自己调度，把 `server.run_finalise` 设为 `false` 就交还给你。
 
 真实部署的其余部分——冻结检出、`.env`、反向代理与 TLS、在 Linux 或 Windows 上让这一个进程活着，以及万一没人开奖你怎么发现——都在 **[`deploy/README.zh.md`](deploy/README.zh.md)** 里。
 

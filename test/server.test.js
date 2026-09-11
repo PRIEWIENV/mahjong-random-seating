@@ -723,3 +723,62 @@ test('a port that is not a port is refused before anything opens a socket', () =
   }
   assert.throws(() => listenOn([], { PORT: 'nope' }), /--port must be a whole number/);
 });
+
+/**
+ * The queue has to empty before the process does, and that requirement arrived with the
+ * fix above. A ciphertext is accepted, stored, and queued for the repository, and the
+ * push happens a moment later. While stopping took forever the queue emptied on the way
+ * out by accident; now that it takes milliseconds, a submission taken seconds before a
+ * restart would be durable locally and absent from the repository — which is the one
+ * claim PROTOCOL §5 makes about it.
+ */
+test('a submission still queued for the repository is not abandoned by the shutdown', async () => {
+  const s = await boot();
+  let drainedWith = null;
+  let released = null;
+  const mirror = {
+    enabled: true,
+    drain: (ms) => { drainedWith = ms; return new Promise((r) => { released = r; }); },
+  };
+
+  const codes = [];
+  let exited = false;
+  const stopped = new Promise((done) => {
+    shutdown({
+      server: s.server,
+      hub: s.hub,
+      mirror,
+      log: { warn() {} },
+      exit: (c) => { codes.push(c); exited = true; done(); },
+    });
+  });
+
+  // The sockets are long gone by now; the queue is what is left.
+  await new Promise((r) => setImmediate(r));
+  assert.equal(exited, false, 'the process left while a ciphertext was still queued');
+  assert.equal(typeof drainedWith, 'number', 'the drain must be bounded, or GitHub can hold it open');
+
+  released(true);
+  await stopped;
+  assert.deepEqual(codes, [0]);
+  await s.close();
+});
+
+test('and an unreachable repository still cannot hold the process open', async () => {
+  const s = await boot();
+  const warned = [];
+  const codes = [];
+  await new Promise((done) => {
+    shutdown({
+      server: s.server,
+      hub: s.hub,
+      // Never settles: GitHub is down, or the network is gone.
+      mirror: { enabled: true, drain: () => new Promise(() => {}) },
+      log: { warn: (m) => warned.push(m) },
+      graceMs: 40,
+      exit: (c) => { codes.push(c); done(); },
+    });
+  });
+  assert.deepEqual(codes, [0]);
+  await s.close();
+});

@@ -1,0 +1,40 @@
+# The rootless half of deploy/README.md §3. Install it into your own systemd instance:
+#
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service \
+#     > ~/.config/systemd/user/mahjong-relay.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mahjong-relay
+#   loginctl enable-linger        # or it stops when you log out
+#
+# Nothing above needs an administrator. Compared with mahjong-relay.service this gives
+# up the filesystem sandboxing, which only root can enforce, and gives up nothing else:
+# the relay opens no device, joins no group, and binds a high port because something
+# else terminates TLS in front of it.
+
+[Unit]
+Description=Mahjong seating relay (accepts tlock ciphertexts, and runs the draw)
+Documentation=file://@CHECKOUT@/docs/PROTOCOL.md
+
+[Service]
+Type=simple
+WorkingDirectory=@CHECKOUT@
+# The process reads .env itself (server/config.js), so this line is belt and braces —
+# and it is harmless if the file is absent, which is what the dash means.
+EnvironmentFile=-@CHECKOUT@/.env
+ExecStart=/usr/bin/node server/server.js
+Restart=always
+RestartSec=3
+
+# A stop must not cut a draw in half. The relay itself is gone in milliseconds, but it
+# spawns server/finalise.js, and under the default KillMode the stop signal reaches that
+# too. The job ignores the first one and finishes — the beacon has landed and twelve
+# ciphertexts are open by then — so give it room before systemd loses patience.
+#
+# Do NOT set KillMode=mixed here, however much it sounds like the right knob. It sends
+# SIGKILL to whatever is left the instant the main process exits, and SIGKILL cannot be
+# ignored, so the draw dies where the default lets it finish.
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target

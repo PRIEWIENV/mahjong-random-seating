@@ -81,6 +81,20 @@ body {
   min-height: 100dvh;
 }
 
+/* Links, everywhere, in the palette.
+ *
+ * There was no rule here at all, so every anchor the app renders fell back to the
+ * browser default: #0000EE on the parchment, and the same blue against #131518 in dark
+ * mode, where it is close to unreadable. The visited colour was the worse half — a
+ * player who has downloaded the sealed ciphertexts once saw a different colour from the
+ * eleven who had not, on the one control the page asks all twelve of them to use and
+ * compare. Two places had already patched around it locally; those patches are now this
+ * rule, in one place, applying to the download links as well. */
+a { color: var(--accent); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:visited { color: var(--accent); }
+a:hover { color: var(--accent-deep); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
 /* ---- chrome ---------------------------------------------------------- */
 header.site {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -149,7 +163,7 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
   color: var(--accent); font: inherit; font-size: 0.9em; cursor: pointer;
   text-decoration: underline; text-underline-offset: 2px;
 }
-.linkish:hover { filter: brightness(1.15); }
+.linkish:hover { color: var(--accent-deep); }  /* same move as a real link */
 
 /* ---- stages ---------------------------------------------------------- */
 .stage-wrap { animation: stage-in 340ms cubic-bezier(.2,.8,.2,1) both; }
@@ -191,6 +205,9 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
 }
 .roll-ask { margin: 0 0 10px; font-weight: 600; }
 .roll-files { display: flex; gap: 16px; flex-wrap: wrap; margin: 14px 0 0; }
+/* The two files are the only thing on this card a reader takes away, so they get weight.
+   Not a button: UI-SPEC §1 gives one focal element per stage, and it is not this. */
+.roll-files a { font-weight: 600; }
 
 /* The technical line under a failure a player cannot act on: present so it can be
    forwarded to an organiser, quiet enough not to read as the message itself. */
@@ -670,7 +687,6 @@ table.opponents tr.imperfect { color: var(--warn); }
 .proof-how-title { margin: 14px 0 4px; font-size: 0.86rem; font-weight: 600; }
 .proof-how { margin: 0; padding-left: 1.3em; font-size: 0.86rem; color: var(--muted); }
 .proof-how li { margin: 3px 0; }
-.proof-how a { color: var(--accent); }
 .roll-card .fineprint { margin-top: 10px; }
 
 /* ---- the explanation page ---------------------------------------------- */
@@ -684,7 +700,6 @@ table.opponents tr.imperfect { color: var(--warn); }
 .doc-body h3 { font-size: 1.02rem; margin: 26px 0 8px; scroll-margin-top: 80px; }
 .doc-body p { margin: 0 0 14px; }
 .doc-body code { font-family: var(--mono); font-size: 0.9em; background: var(--bg-tint); padding: 1px 5px; border-radius: 5px; }
-.doc-body a { color: var(--accent); }
 .doc-list { margin: 0 0 16px; padding-left: 1.4em; }
 .doc-list li { margin: 6px 0; }
 

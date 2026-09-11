@@ -270,4 +270,37 @@ function load(opts = {}) {
   };
 }
 
-module.exports = { MIN_REVEAL_GAP_SECONDS, load, readJson, ROOT, ENCODING_LIMITS };
+/**
+ * Read `.env` from the checkout root, the way the systemd unit's `EnvironmentFile=` does.
+ *
+ * `deploy/README.md` §2 has the operator write that file, and it holds everything that
+ * makes a deployment a real one rather than a demo: the Pantheon base URLs and admin
+ * credentials, the mirror repository and its token, `ADMIN_TOKEN`, `NODE_ENV`. Only
+ * systemd was reading it. Every other way of starting the process that the same document
+ * recommends — tmux, nohup, a `@reboot` crontab, `node server/server.js` at a prompt —
+ * started a server that had never seen any of it, and the symptom is not a crash. It is
+ * a relay that serves the right pages, accepts submissions, and mirrors none of them,
+ * which removes the one property (§5) that stops the organiser dropping an inconvenient
+ * ciphertext after the fact.
+ *
+ * Node's own loader, so this costs no dependency. A variable already in the environment
+ * wins over the file, which keeps `PORT=9000 node server/server.js` behaving as written.
+ *
+ * Absence is normal and silent: development runs have no `.env`, and the freeze does not
+ * contain one.
+ */
+function loadEnvFile(root = ROOT, log = console) {
+  const file = path.join(root, '.env');
+  if (!fs.existsSync(file)) return null;
+  try {
+    process.loadEnvFile(file);
+    return file;
+  } catch (err) {
+    // A malformed .env is worth dying on. Continuing means running with half the
+    // settings, and the half that goes missing is not announced anywhere.
+    log.error?.(`[config] ${file} could not be read: ${err.message}`);
+    throw err;
+  }
+}
+
+module.exports = { MIN_REVEAL_GAP_SECONDS, load, readJson, loadEnvFile, ROOT, ENCODING_LIMITS };

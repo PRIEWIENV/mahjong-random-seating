@@ -13,15 +13,50 @@ the seat-plan sync — and the worst either can do is write somewhere.
 
 ## 1. Install
 
+No root, and no new user. Everything lives in one directory that you already own:
+
 ```sh
-adduser --system --group --home /opt/mahjong mahjong
-git clone <repo> /opt/mahjong/app && cd /opt/mahjong/app
+git clone <repo> ~/mahjong && cd ~/mahjong
 git checkout frozen-v1                     # the tag from RUNBOOK step 11
 npm ci --omit=dev
 node tools/build-client.js --verify-hash   # committed bundle matches its committed hash
 node tools/verify-template.js              # re-derive the template invariants
-chown -R mahjong:mahjong /opt/mahjong
+chmod 600 .env                             # once §2 has written it
 ```
+
+Nothing on that list needs a privilege, and that is a property of the design rather than
+a convenience. The process listens on a high port, because something else terminates TLS
+in front of it (§4). It writes only inside its own checkout. It opens no device, joins no
+group and registers nothing with the system. The two credentials it holds are a GitHub
+PAT and a Pantheon account, and both are secrets belonging to **you** rather than to the
+machine — which is why a dedicated system account buys less here than it usually does:
+the thing worth protecting is in `.env` either way, and file mode does that.
+
+So an organiser who has been given an ordinary account on a club's box can run the whole
+event from `$HOME`, including the part that survives a reboot (§3).
+
+<details>
+<summary><b>A dedicated system account, if you have root and want one anyway</b></summary>
+
+<br>
+
+It is a reasonable thing to want: a separate account means a compromise of the relay
+reaches nothing else of yours, and it lets the systemd hardening in
+[`mahjong-relay.service`](mahjong-relay.service) apply, which a user unit cannot use.
+
+```sh
+sudo adduser --system --group --home /opt/mahjong mahjong
+sudo -u mahjong git clone <repo> /opt/mahjong/app
+cd /opt/mahjong/app && sudo -u mahjong git checkout frozen-v1
+sudo -u mahjong npm ci --omit=dev
+sudo -u mahjong node tools/build-client.js --verify-hash
+sudo chown -R mahjong:mahjong /opt/mahjong
+```
+
+Paths in the rest of this document assume the rootless layout; substitute
+`/opt/mahjong/app` throughout if you took this path.
+
+</details>
 
 `<repo>` is **your** repository, not the one the code was developed in. The freeze is a
 commitment to an event you are running: `data/protocol.json` and `data/roster.json` hold
@@ -48,7 +83,8 @@ and diffs the result; run that on a dev machine or in CI **before** the freeze c
 
 ## 2. Environment
 
-`/opt/mahjong/app/.env` — mode 600, owned by `mahjong`, covered by `.gitignore`:
+`.env` at the root of the checkout — mode 600, covered by `.gitignore`, and **read by the
+process itself** whatever starts it:
 
 ```sh
 PORT=8080
@@ -77,6 +113,16 @@ PANTHEON_ADMIN_TOKEN=...
 # The organiser's dashboard. Without this the /admin route does not exist.
 ADMIN_TOKEN=...                      # openssl rand -hex 16
 ```
+
+**Who reads this file.** The process does, at startup, and it says which file it read in
+its first few log lines. That used to be the systemd unit's job alone, through
+`EnvironmentFile=`, which meant every other way of starting the relay in §3 — tmux,
+`nohup`, a crontab, a terminal — produced a server that had never seen any of the above.
+Nothing about that looked wrong: it served the page, it signed people in, it took their
+ciphertexts, and it mirrored **none** of them, quietly removing the one property (§5)
+that stops an organiser dropping an inconvenient submission after seeing the outcome.
+A variable already set in the environment still wins over the file, so
+`PORT=9000 node server/server.js` keeps meaning what it says.
 
 `PORT` and `HOST` can also be given on the command line, and the flag wins:
 `node server/server.js --port 9000 --host 127.0.0.1`. Useful when 8080 is already taken,
@@ -127,11 +173,39 @@ that served the page perfectly and never drew.
 **Keeping the one process alive** is whatever your box offers, and none of it is
 special:
 
-| | |
-|---|---|
-| Linux, no root | `tmux new -d -s mahjong 'node server/server.js'`, or `nohup node server/server.js >> var/server.log 2>&1 &` |
-| Linux, with root | `cp deploy/mahjong-relay.service /etc/systemd/system/ && systemctl enable --now mahjong-relay` |
-| Windows | run it in a terminal, or Task Scheduler with a trigger at log on |
+| | | survives a reboot |
+|---|---|---|
+| Linux, no root | `tmux new -d -s mahjong 'node server/server.js'`, or `nohup node server/server.js >> var/server.log 2>&1 &` | no |
+| Linux, no root | a **user** unit — see below | yes |
+| Linux, with root | `sudo cp deploy/mahjong-relay.service /etc/systemd/system/ && sudo systemctl enable --now mahjong-relay` | yes |
+| Windows | run it in a terminal, or Task Scheduler with a trigger at log on | with the trigger |
+
+**The rootless unit.** systemd runs a whole instance per user, and registering a service
+with your own instance needs nothing from an administrator:
+
+```sh
+mkdir -p ~/.config/systemd/user
+sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service \
+  > ~/.config/systemd/user/mahjong-relay.service
+systemctl --user daemon-reload
+systemctl --user enable --now mahjong-relay
+systemctl --user status mahjong-relay
+loginctl enable-linger          # keep it running when you are not logged in
+```
+
+Everything there except the last line was verified on systemd 255 as an ordinary user.
+`enable-linger` is the one piece that depends on the machine: it is governed by the
+polkit action `org.freedesktop.login1.set-self-linger`, which ships allowed for any user
+on Ubuntu and Debian, so enabling it **for yourself** normally needs no sudo. Check with
+`loginctl show-user "$USER" -p Linger` — if it says `Linger=no` after you ran it, that
+box has a stricter policy and an administrator has to run
+`loginctl enable-linger "$USER"` once. Without linger the relay stops when you log out,
+which for an event running over days is the same as not running.
+
+The user unit cannot use the sandboxing in the system unit (`ProtectSystem`,
+`ReadWritePaths` and the rest need root to enforce), and it drops `User=`/`Group=`
+because it already is your user. What it keeps is the part that matters: restart on
+failure, and a stop that lets a draw in flight finish.
 
 The draw job restarting with the server is fine and is the point of it running on a
 clock. Every run is a no-op until the cutoff, and after it the cadence is also the
@@ -155,12 +229,18 @@ Set `server.run_finalise` to `false` in `data/runtime.json` and schedule it your
 user crontab needs no root either:
 
 ```
-* * * * * cd /opt/mahjong/app && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
+* * * * * cd $HOME/mahjong && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
 ```
 
 Do not run both. Two draws in flight would agree with each other — the job is
 deterministic, which is the whole point of the protocol — but they would stamp the roll
 twice and write to Pantheon twice, and external side effects are worth not doing twice.
+
+The job now also refuses to start while another holds `var/finalise.lock`, so a
+misconfiguration here costs you a log line rather than a duplicate write. That is a
+backstop, not permission: a lock whose holder has died or that is older than any real run
+is taken over, because a lock nobody holds must never be able to stop an event drawing
+at all.
 
 ### How you find out if nothing is drawing
 

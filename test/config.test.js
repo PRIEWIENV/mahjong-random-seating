@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { load } = require('../server/config');
+const { load, loadEnvFile } = require('../server/config');
 const { loadRuntime, DEFAULTS } = require('../server/runtime');
 const { ENCODING_LIMITS } = require('../generate.js');
 const { makeDataDir, cleanup } = require('./helpers');
@@ -298,4 +298,77 @@ test('the shipped example carries an interval, so a copy of it is not silently w
     Date.parse(example.target_round_utc) - Date.parse(example.submission_cutoff_utc),
     600_000
   );
+});
+
+// ---------------------------------------------------------------------------
+// .env, which only systemd was reading
+// ---------------------------------------------------------------------------
+
+/**
+ * deploy/README.md section 2 has the operator write a `.env` holding everything that
+ * makes a deployment real rather than a demo: the Pantheon base URLs and admin
+ * credentials, the mirror repository and its token, ADMIN_TOKEN, NODE_ENV. Only the
+ * systemd unit read it, through `EnvironmentFile=`. Every other launcher the same
+ * document recommends (tmux, nohup, a reboot crontab, or just running the command the
+ * README's Production section gives) started a process that had never seen any of it.
+ *
+ * The symptom is not a crash. It is a relay that serves the right pages, accepts every
+ * submission, and mirrors none of them, which quietly removes the section 5 property
+ * that stops an organiser dropping an inconvenient ciphertext after the fact.
+ */
+
+const os = require('node:os');
+const envDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mahjong-env-'));
+
+test('a .env beside the checkout is read', () => {
+  const dir = envDir();
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'MIRROR_REPO=someone/their-event\nADMIN_TOKEN=abc123\n');
+    delete process.env.MIRROR_REPO;
+    delete process.env.ADMIN_TOKEN;
+    assert.equal(loadEnvFile(dir), path.join(dir, '.env'));
+    assert.equal(process.env.MIRROR_REPO, 'someone/their-event');
+    assert.equal(process.env.ADMIN_TOKEN, 'abc123');
+  } finally {
+    delete process.env.MIRROR_REPO;
+    delete process.env.ADMIN_TOKEN;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('what is already in the environment wins over the file', () => {
+  // `PORT=9000 node server/server.js` is documented and has to keep meaning what it
+  // says, and an operator overriding one value at a prompt is doing it deliberately.
+  const dir = envDir();
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'PANTHEON_MODE=twirp\n');
+    process.env.PANTHEON_MODE = 'stub';
+    loadEnvFile(dir);
+    assert.equal(process.env.PANTHEON_MODE, 'stub');
+  } finally {
+    delete process.env.PANTHEON_MODE;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('no .env is normal, and silent', () => {
+  // Development runs have none, and the freeze contains none.
+  const dir = envDir();
+  try {
+    assert.equal(loadEnvFile(dir), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a .env that cannot be read stops the process rather than half-configuring it', () => {
+  // Continuing would mean running with some of the settings, and the half that went
+  // missing is announced nowhere.
+  const dir = envDir();
+  try {
+    fs.mkdirSync(path.join(dir, '.env')); // a directory where a file should be
+    assert.throws(() => loadEnvFile(dir, { error() {} }));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

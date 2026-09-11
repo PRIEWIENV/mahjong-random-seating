@@ -8,15 +8,40 @@
 
 ## 1. 安装
 
+不需要 root，也不需要新建用户。所有东西都在一个你本来就拥有的目录里：
+
 ```sh
-adduser --system --group --home /opt/mahjong mahjong
-git clone <repo> /opt/mahjong/app && cd /opt/mahjong/app
+git clone <repo> ~/mahjong && cd ~/mahjong
 git checkout frozen-v1                     # RUNBOOK 第 11 步打的那个 tag
 npm ci --omit=dev
 node tools/build-client.js --verify-hash   # 已提交的 bundle 与其已提交的哈希一致
 node tools/verify-template.js              # 重新推导模板不变量
-chown -R mahjong:mahjong /opt/mahjong
+chmod 600 .env                             # §2 写出它之后
 ```
+
+这份清单里没有一步需要特权，而这是设计的性质，不是图省事。进程监听一个高位端口，因为 TLS 由前面的东西终结（§4）。它只在自己的 checkout 里写文件。它不打开任何设备、不加入任何用户组、不向系统注册任何东西。它持有的两份凭证是一个 GitHub PAT 和一个 Pantheon 账号，而两者都是**你的**秘密，不是这台机器的秘密——这也正是为什么一个专用系统账号在这里买到的东西比通常少：要保护的东西无论如何都在 `.env` 里，而文件权限位就能做到。
+
+所以一个只在俱乐部机器上拿到普通账号的组织者，可以完全在 `$HOME` 里跑完整场活动，包括熬过重启的那部分（§3）。
+
+<details>
+<summary><b>如果你有 root 并且仍然想要一个专用系统账号</b></summary>
+
+<br>
+
+这是个合理的诉求：独立账号意味着 relay 被攻破时波及不到你别的东西，而且它能让 [`mahjong-relay.service`](mahjong-relay.service) 里那套 systemd 加固生效，而用户单元用不了那些。
+
+```sh
+sudo adduser --system --group --home /opt/mahjong mahjong
+sudo -u mahjong git clone <repo> /opt/mahjong/app
+cd /opt/mahjong/app && sudo -u mahjong git checkout frozen-v1
+sudo -u mahjong npm ci --omit=dev
+sudo -u mahjong node tools/build-client.js --verify-hash
+sudo chown -R mahjong:mahjong /opt/mahjong
+```
+
+本文其余部分的路径按无 root 的布局来写；如果你走了这条路，通篇把路径换成 `/opt/mahjong/app`。
+
+</details>
 
 `<repo>` 是**你的**仓库，不是这份代码被开发出来的那个。冻结是对你正在运行的一场活动做出的承诺：`data/protocol.json` 和 `data/roster.json` 装着你的目标轮次和你的十二位选手，它们在上游被 gitignore 正是为此，而 `tools/freeze.js` 会把它们强制加进你打 tag 并推送的那棵树里。fork 它，或者把它克隆到一个你能推送的地方，然后在那里冻结。选手拿到的是那个 tag 和那个 commit id；一个除你之外谁也拉不到的 tag 不构成承诺（`PROTOCOL.zh.md` §9）。
 
@@ -28,7 +53,7 @@ chown -R mahjong:mahjong /opt/mahjong
 
 ## 2. 环境变量
 
-`/opt/mahjong/app/.env` —— 权限 600，属主 `mahjong`，已被 `.gitignore` 覆盖：
+checkout 根目录下的 `.env` —— 权限 600，已被 `.gitignore` 覆盖，而且**由进程自己读取**，无论是谁启动它：
 
 ```sh
 PORT=8080
@@ -58,6 +83,8 @@ PANTHEON_ADMIN_TOKEN=...
 ADMIN_TOKEN=...                      # openssl rand -hex 16
 ```
 
+**是谁在读这个文件。** 是进程自己，在启动时读，并且在最初几行日志里报出它读了哪个文件。这件事以前只有 systemd 单元通过 `EnvironmentFile=` 在做，也就是说 §3 里其他每一种启动方式——tmux、`nohup`、crontab、直接开个终端——跑出来的服务器从来没见过上面任何一项。而这看上去哪里都不像出了问题：它照常供页面、照常让人登录、照常收下密文，然后**一份也不镜像**，于是那条阻止组织者在看到结果之后丢掉一份碍事提交的性质（§5）就这么悄悄没了。环境里已经设好的变量仍然优先于文件，所以 `PORT=9000 node server/server.js` 还是它字面的意思。
+
 `PORT` 和 `HOST` 也可以在命令行给出，且命令行优先：`node server/server.js --port 9000 --host 127.0.0.1`。8080 已被占用时很有用，而在同时跑着 Pantheon 的机器上它经常被占。无论用哪种，§4 里的反向代理都必须指向同一个端口号；端口已被占用会被如实报出，并告诉你改用哪个参数。
 
 `NODE_ENV=production` 的意义不止于日志：它给会话 cookie 标上 `Secure`，并让 `/api/dev-authorize` 返回 404。那个端点是 Frey 的开发替身；它绝不能存在于这里。
@@ -82,11 +109,28 @@ node server/server.js
 
 **让这一个进程活着**用你机器上有的任何办法，没有一种是特别的：
 
-| | |
-|---|---|
-| Linux，无 root | `tmux new -d -s mahjong 'node server/server.js'`，或 `nohup node server/server.js >> var/server.log 2>&1 &` |
-| Linux，有 root | `cp deploy/mahjong-relay.service /etc/systemd/system/ && systemctl enable --now mahjong-relay` |
-| Windows | 在终端里跑，或者用任务计划程序配一个登录时触发 |
+| | | 熬得过重启吗 |
+|---|---|---|
+| Linux，无 root | `tmux new -d -s mahjong 'node server/server.js'`，或 `nohup node server/server.js >> var/server.log 2>&1 &` | 否 |
+| Linux，无 root | 一个**用户**单元 —— 见下 | 是 |
+| Linux，有 root | `sudo cp deploy/mahjong-relay.service /etc/systemd/system/ && sudo systemctl enable --now mahjong-relay` | 是 |
+| Windows | 在终端里跑，或者用任务计划程序配一个登录时触发 | 配了触发器就行 |
+
+**无 root 的单元。** systemd 为每个用户各跑一个实例，而向你自己那个实例注册一个服务，不需要管理员给任何东西：
+
+```sh
+mkdir -p ~/.config/systemd/user
+sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service \
+  > ~/.config/systemd/user/mahjong-relay.service
+systemctl --user daemon-reload
+systemctl --user enable --now mahjong-relay
+systemctl --user status mahjong-relay
+loginctl enable-linger          # 你没登录的时候也让它继续跑
+```
+
+除最后一行外，以上都在 systemd 255 上以普通用户身份实测通过。`enable-linger` 是唯一一处取决于机器的：它由 polkit 动作 `org.freedesktop.login1.set-self-linger` 管辖，而该动作在 Ubuntu 和 Debian 的出厂策略里对任何用户都是允许的，所以**给你自己**开启通常不需要 sudo。用 `loginctl show-user "$USER" -p Linger` 确认——如果跑完之后它仍然说 `Linger=no`，说明那台机器的策略更严，需要管理员执行一次 `loginctl enable-linger "$USER"`。没有 linger，你一登出 relay 就停，而对一场要跨天运行的活动来说，那和没跑是一回事。
+
+用户单元用不了系统单元里那套沙箱（`ProtectSystem`、`ReadWritePaths` 之类都需要 root 才能强制执行），也去掉了 `User=`/`Group=`，因为它本来就是你这个用户。它保留的是要紧的那部分：失败重启，以及一次不会打断正在进行的开奖的停止。
 
 开奖任务随服务器重启是没问题的，而这正是让它按时钟运行的意义。截止之前每一次运行都是空操作，截止之后这个节奏同时也是恢复路径，对付三种不同的失败：
 
@@ -101,10 +145,12 @@ node server/server.js
 在 `data/runtime.json` 里把 `server.run_finalise` 设为 `false`，然后自己调度。用户级 crontab 同样不需要 root：
 
 ```
-* * * * * cd /opt/mahjong/app && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
+* * * * * cd $HOME/mahjong && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
 ```
 
 不要两个都开。两场同时进行的开奖会得出一致的结果——任务是确定性的，这正是协议的全部要点——但它们会把提交名单盖两次戳，往 Pantheon 写两次，而外部副作用值得不做两遍。
+
+现在开奖任务在另一个进程持有 `var/finalise.lock` 时也会直接退出，所以这里配错的代价是一行日志，而不是一次重复写入。这是兜底，不是许可：持有者已经死掉的锁、或者比任何真实运行都更久的锁，会被接管——因为一把没人持有的锁绝不能导致一场活动彻底开不了奖。
 
 ### 万一没人在开奖，你怎么发现
 

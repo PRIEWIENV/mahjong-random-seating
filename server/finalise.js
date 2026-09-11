@@ -21,7 +21,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { load } = require('./config');
+const { load, loadEnvFile } = require('./config');
 const { Store } = require('./db');
 const { Drand } = require('./drand');
 const { decryptPayload } = require('./tlock');
@@ -41,10 +41,52 @@ const KEY_ROLL = 'roll_published';
 const KEY_PHASE = 'phase';
 const KEY_RESULT = 'result';
 const KEY_SYNC = 'pantheon_sync';
+// Whether the repository has everything this job has written. Cleared by each local
+// write and set again once the queue has been worked through, so its absence means a run
+// was cut short between the two and the repository a player is pointed at may be missing
+// a file they were told to check. It covers what this job publishes; the ciphertexts are
+// queued by the server, which settles its own queue when it stops.
+const KEY_PUBLISHED = 'results_mirrored';
 // Proof that the scheduled job exists and is firing. Nothing else in the system can
 // tell the difference between "drand is late" and "nobody ever installed the timer",
 // and those have opposite remedies: wait, or go and start something.
 const KEY_TICK = 'finalise_tick';
+
+/**
+ * Write a durable artefact locally and queue it for the repository, and record that the
+ * repository is now behind until something says it has caught up.
+ *
+ * The two halves have to happen together. The queue lives in memory and the push happens
+ * later in the run, so every local write opens a window in which the file exists here and
+ * not there — and the file that matters most, `events/snapshot.json`, is written once and
+ * guarded against ever being written again, so a push lost in that window was lost for
+ * good. That one is the whole of PROTOCOL.md §9: the roll is public before the beacon, or
+ * it proves nothing.
+ */
+function publish(cfg, store, mirror, repoPath, body, message) {
+  writeLocal(cfg.root, repoPath, body);
+  store.set(KEY_PUBLISHED, false);
+  mirror?.enqueue?.(repoPath, body, message);
+  return body;
+}
+
+/**
+ * Work the queue, and record whether it emptied.
+ *
+ * "Emptied" is not "every push succeeded" — the mirror gives up on a path after five
+ * attempts, loudly, with a manual remedy (server/mirror.js). What this distinguishes is
+ * the case that had no remedy because nobody knew it had happened: a process that exited
+ * with files still sitting in the queue.
+ */
+async function settle(store, mirror, log) {
+  const drained = await mirror?.drain?.();
+  if (drained === false) {
+    log?.warn?.('[finalise] the mirror queue did not empty; the next run will offer it again');
+    return false;
+  }
+  store.set(KEY_PUBLISHED, true);
+  return true;
+}
 
 const resultsPath = (cfg) => path.join(cfg.root, 'results.json');
 const voidPath = (cfg) => path.join(cfg.root, 'events', 'void.json');
@@ -109,8 +151,7 @@ const rollDigest = (body) => crypto.createHash('sha256').update(body, 'utf8').di
 async function publishRoll(cfg, store, snap, { mirror, log, stampFn } = {}) {
   const body = rollBody(snap);
   const digest = rollDigest(body);
-  writeLocal(cfg.root, 'events/snapshot.json', body);
-  mirror?.enqueue?.('events/snapshot.json', body, `roll taken at the cutoff (${snap.local_ids.length} submissions)`);
+  publish(cfg, store, mirror, 'events/snapshot.json', body, `roll taken at the cutoff (${snap.local_ids.length} submissions)`);
   const record = {
     digest,
     published_at: new Date().toISOString(),
@@ -133,8 +174,7 @@ async function publishRoll(cfg, store, snap, { mirror, log, stampFn } = {}) {
 
   try {
     const out = await stampFn(Buffer.from(body, 'utf8'));
-    writeLocal(cfg.root, 'events/snapshot.json.ots', out.ots);
-    mirror?.enqueue?.('events/snapshot.json.ots', out.ots, 'opentimestamps proof for the roll');
+    publish(cfg, store, mirror, 'events/snapshot.json.ots', out.ots, 'opentimestamps proof for the roll');
     record.ots = { calendars: out.calendars, at: new Date().toISOString(), bytes: out.ots.length };
     store.set(KEY_ROLL, record);
     log.info?.(`[finalise] roll anchored with ${out.calendars.length} calendar(s)`);
@@ -245,8 +285,7 @@ function publishVoid(cfg, store, mirror, reason, detail, log) {
       `and cannot be reused. The quorum itself is frozen and is not adjusted in response to this.`,
   };
   const body = JSON.stringify(notice, null, 2) + '\n';
-  writeLocal(cfg.root, 'events/void.json', body);
-  mirror.enqueue('events/void.json', body, `void: ${reason} (round ${cfg.protocol.target_round})`);
+  publish(cfg, store, mirror, 'events/void.json', body, `void: ${reason} (round ${cfg.protocol.target_round})`);
   store.set(KEY_PHASE, 'void');
 
   // Archive now, while the attempt is still live and consistent (§8, server/rounds.js).
@@ -274,11 +313,135 @@ function publishVoid(cfg, store, mirror, reason, detail, log) {
  * result of a network call made after that file already existed, so a results.json
  * holding it could never be recomputed.
  */
-function publishSync(cfg, mirror, sync, roundUsed) {
+function publishSync(cfg, store, mirror, sync, roundUsed) {
   const body = JSON.stringify({ round_used: roundUsed, ...sync }, null, 2) + '\n';
-  writeLocal(cfg.root, 'events/sync.json', body);
-  mirror.enqueue('events/sync.json', body, `pantheon sync ${sync.status} (round ${roundUsed})`);
+  publish(cfg, store, mirror, 'events/sync.json', body, `pantheon sync ${sync.status} (round ${roundUsed})`);
   return body;
+}
+
+// A draw that has been running for longer than this is not running. The slowest honest
+// path is a decrypt, three Pantheon attempts with backoff and a two-minute mirror drain,
+// so fifteen minutes is far past anything real and still short enough that an operator
+// who kills the job does not find the next event refusing to draw.
+const LOCK_STALE_MS = 15 * 60_000;
+const lockPath = (cfg) => path.join(cfg.root, 'var', 'finalise.lock');
+
+/** Whether the process named in a lock file is still there. */
+function lockHeld(file, now = Date.now()) {
+  let held;
+  try {
+    held = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false; // unreadable or half-written: not a claim anyone is making
+  }
+  if (!Number.isInteger(held.pid)) return false;
+  const at = Date.parse(held.at);
+  if (Number.isFinite(at) && now - at > LOCK_STALE_MS) return false;
+  try {
+    // Signal 0 delivers nothing and only asks whether the process exists.
+    process.kill(held.pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM is somebody else's process, which is still a process.
+    return err.code === 'EPERM';
+  }
+}
+
+/**
+ * Claim the right to be the only draw job running, or return null.
+ *
+ * The server's scheduler already refuses to start a second job, but it does that with a
+ * variable in its own memory, which decides nothing once two servers exist. That is not
+ * hypothetical any more: the draw job now survives the signal that stops the unit, so a
+ * `systemctl restart` mid-draw routinely leaves the old job running while a new server
+ * starts and schedules another. Both would compute the same seat plan, from the same
+ * fixed beacon and the same fixed snapshot, and then race each other over the Pantheon
+ * prescript and the mirror queue.
+ *
+ * A lock nobody holds must never be able to stop the draw permanently, which would trade
+ * a race nobody has hit for an event that never draws at all. So a lock is taken over
+ * when its process is gone or when it is older than any real run could be.
+ */
+function takeLock(cfg, now = Date.now()) {
+  const file = lockPath(cfg);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      // 'wx' fails rather than truncates when the file is already there, which is what
+      // makes this a claim rather than a request.
+      const fd = fs.openSync(file, 'wx');
+      try {
+        fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date(now).toISOString() }));
+      } finally {
+        fs.closeSync(fd);
+      }
+      return file;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (lockHeld(file, now)) return null;
+      try { fs.unlinkSync(file); } catch { /* another job got there first */ }
+    }
+  }
+  return null;
+}
+
+function releaseLock(file) {
+  if (!file) return;
+  try { fs.unlinkSync(file); } catch { /* already gone */ }
+}
+
+/**
+ * Put back on the mirror queue anything the public repository ought to hold and might
+ * not, when the last run did not get as far as saying it had pushed.
+ *
+ * Each file is written to disk and queued in the same breath, but the queue lives in
+ * memory (`server/mirror.js`) and the push happens later in the run. A process that dies
+ * in that gap leaves the file on the organiser's disk and absent from the repository, and
+ * nothing notices: the next tick sees the file and reports the round already settled.
+ *
+ * `events/snapshot.json` is the one that would hurt most. It is written once and guarded
+ * against ever being written again, so a push lost there is lost permanently — and a roll
+ * that was not public before the beacon is §9's entire claim, which is to say it proves
+ * nothing. `results.json` is what a player is told to verify against. The void notice is
+ * how a round that did not happen is visible at all.
+ *
+ * The bytes come from disk rather than from the store, deliberately. What is in the
+ * store has the derived statistics merged in; what has to be mirrored is the artefact
+ * that reproduces byte for byte (§4.3).
+ */
+async function republishIfUnmirrored(cfg, store, mirror, log) {
+  if (store.get(KEY_PUBLISHED)) return false;
+  if (!mirror?.enabled) {
+    // Nothing to push to, so nothing can be outstanding. Recording it keeps a later run
+    // — after a PAT is finally configured — from re-pushing a draw that is long over.
+    store.set(KEY_PUBLISHED, true);
+    return false;
+  }
+
+  const ev = (name) => path.join(cfg.root, 'events', name);
+  const wanted = [
+    // The roll first, and not only for tidiness: a reader must never find a result
+    // published without the file needed to audit its roll-call.
+    ['events/snapshot.json', ev('snapshot.json'), 'utf8'],
+    ['events/snapshot.json.ots', ev('snapshot.json.ots'), null],
+    ['results.json', resultsPath(cfg), 'utf8'],
+    ['events/void.json', ev('void.json'), 'utf8'],
+    ['events/sync.json', ev('sync.json'), 'utf8'],
+  ];
+  const sent = [];
+  for (const [repoPath, file, encoding] of wanted) {
+    if (!fs.existsSync(file)) continue;
+    mirror.enqueue(repoPath, fs.readFileSync(file, encoding), `re-publishing ${repoPath} after an interrupted run`);
+    sent.push(repoPath);
+  }
+  if (!sent.length) {
+    // Nothing published yet, so the repository is not behind anything.
+    store.set(KEY_PUBLISHED, true);
+    return false;
+  }
+
+  log.warn?.(`[finalise] the last run never confirmed a push; re-mirroring ${sent.join(', ')}`);
+  return settle(store, mirror, log);
 }
 
 /**
@@ -366,6 +529,12 @@ async function run(opts = {}) {
   // completely different explanations. The dashboard reads it to tell them apart.
   store.set(KEY_TICK, { at: new Date(now).toISOString(), waited: wait });
 
+  // Before any branch. Something written locally by a previous run and never confirmed
+  // pushed is offered again here, whatever state this round is in — the snapshot lost at
+  // the cutoff matters more than the result lost after the draw, and only this placement
+  // catches it, because every later path returns before reaching the other one.
+  const republished = await republishIfUnmirrored(cfg, store, mirror, log);
+
   // "Has this round already been settled AND published?" — deliberately not phaseOf,
   // which also *predicts* a state the job has yet to act on. phaseOf answers 'void' for
   // a round that is below quorum but whose notice has not been written yet, so guarding
@@ -384,6 +553,19 @@ async function run(opts = {}) {
     const results = store.get(KEY_RESULT) || readPublishedResults(cfg);
     store.set(KEY_PHASE, 'done'); // reconcile the database with the published file
 
+    // A results.json that exists and cannot be read used to end here in silence: phase
+    // done, no result, /api/result answering 500 to every player, and no run that would
+    // ever try again. It should not be reachable now that the file is written through a
+    // rename, so if it happens it is somebody's editor or a failing disk, and the one
+    // useful thing to do is say which file and what to do about it.
+    if (!results && fs.existsSync(resultsPath(cfg))) {
+      log.error?.(
+        `[finalise] ${resultsPath(cfg)} exists but could not be parsed. The draw is being reported ` +
+        'as finished on the strength of that file alone, and players are getting an error instead of ' +
+        'a result. Restore it from the mirror, or move it aside and let this job draw again — the ' +
+        'beacon and the snapshot are both fixed, so it recomputes the same seat plan.');
+    }
+
     // The sync is the one step that can still be outstanding once the draw is over: it
     // runs after results.json is published and after the phase is already 'done', so a
     // crash or a restart in between left it undone with nothing to pick it up. Writing
@@ -399,10 +581,11 @@ async function run(opts = {}) {
       log.warn?.('[finalise] draw is done but no Pantheon sync was ever recorded — running it now');
       const sync = await syncToPantheon(cfg, results, pantheon, log, opts.sync);
       store.set(KEY_SYNC, sync);
-      publishSync(cfg, mirror, sync, results.round_used);
-      await mirror.drain?.();
-      return { phase: 'done', results, sync, resumed: true };
+      publishSync(cfg, store, mirror, sync, results.round_used);
+      await settle(store, mirror, log);
+      return { phase: 'done', results, sync, resumed: true, republished };
     }
+    if (republished) return { phase: 'done', results, republished };
     log.info?.('[finalise] already done — nothing to do');
     return { phase: 'done', results };
   }
@@ -431,6 +614,7 @@ async function run(opts = {}) {
     const notice = publishVoid(cfg, store, mirror, 'quorum not met at the cutoff',
       { received: snapshot.local_ids.length, submitted_local_ids: snapshot.local_ids }, log);
     onPhase('void');
+    await settle(store, mirror, log);
     return { phase: 'void', notice };
   }
 
@@ -449,12 +633,18 @@ async function run(opts = {}) {
       if (String(err.message).includes('disagree')) throw err; // mirrors disagreeing is fatal
       if (!wait) {
         log.info?.(`[finalise] round ${cfg.protocol.target_round} not published yet; re-run later`);
+        // The roll was published a few lines above and its push is still in the queue.
+        // This return is the common one — the beacon is not out yet and the job is
+        // called again in a minute — so exiting here with the snapshot unsent is the
+        // likeliest way for §9's public roll to quietly not be public.
+        await settle(store, mirror, log);
         return { phase: 'awaiting_round' };
       }
       if (Date.now() > deadline) {
         // §8: a delay, not a failure. Leave the phase alone and let the next run pick
         // it up; the outcome is already determined by the frozen snapshot.
         log.error?.(`[finalise] gave up waiting for round ${cfg.protocol.target_round}: ${err.message}`);
+        await settle(store, mirror, log);
         return { phase: 'awaiting_round', error: err.message };
       }
       const nap = retryNapMs(cfg.protocol.target_round_ms, Date.now(), pollMs);
@@ -524,6 +714,7 @@ async function run(opts = {}) {
     const notice = publishVoid(cfg, store, mirror, 'quorum not met once undecryptable submissions were excluded',
       { snapshot_size: snapshot.local_ids.length, decrypted: decrypted.length, excluded }, log);
     onPhase('void');
+    await settle(store, mirror, log);
     return { phase: 'void', notice };
   }
 
@@ -556,13 +747,9 @@ async function run(opts = {}) {
   // restored from a backup, say — so a result is still never readable without the
   // file needed to audit its roll-call.
   if (!store.get(KEY_ROLL)) {
-    const snapBody = rollBody(snapshot);
-    writeLocal(cfg.root, 'events/snapshot.json', snapBody);
-    mirror.enqueue('events/snapshot.json', snapBody, `snapshot at cutoff (round ${beacon.round})`);
+    publish(cfg, store, mirror, 'events/snapshot.json', rollBody(snapshot), `snapshot at cutoff (round ${beacon.round})`);
   }
-  const body = serialise(results);
-  writeLocal(cfg.root, 'results.json', body);
-  mirror.enqueue('results.json', body, `results for drand round ${beacon.round}`);
+  const body = publish(cfg, store, mirror, 'results.json', serialise(results), `results for drand round ${beacon.round}`);
 
   const stats = computeStats(results.seating, cfg.roster.players);
   store.set(KEY_RESULT, { ...results, stats });
@@ -571,10 +758,10 @@ async function run(opts = {}) {
 
   const sync = await syncToPantheon(cfg, results, pantheon, log, opts.sync);
   store.set(KEY_SYNC, sync);
-  publishSync(cfg, mirror, sync, beacon.round);
+  publishSync(cfg, store, mirror, sync, beacon.round);
   store.set(KEY_RESULT, { ...results, stats });
 
-  await mirror.drain?.();
+  await settle(store, mirror, log);
   log.info?.(`[finalise] DONE — R = ${results.R.slice(0, 16)}…, pi = [${results.permutation.join(', ')}]`);
   return { phase: 'done', results, stats, beacon, sync };
 }
@@ -582,16 +769,61 @@ async function run(opts = {}) {
 module.exports = {
   run, phaseOf, takeSnapshot, publishRoll, rollBody, rollDigest, decryptSnapshot, syncToPantheon, publishSync,
   retryNapMs, BeaconNotReadyError,
-  readPublishedResults, KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC, KEY_TICK,
+  readPublishedResults, republishIfUnmirrored, takeLock, releaseLock, lockPath,
+  KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC, KEY_TICK, KEY_PUBLISHED,
 };
 
 if (require.main === module) {
+  loadEnvFile();
+  const cfg = load();
+
+  // One draw at a time. The server's scheduler guards this with a variable in its own
+  // memory, which stops nothing once there are two servers — and after the signal
+  // handling below there routinely are, for a minute: `systemctl restart` starts a new
+  // one while the old one's draw is deliberately still finishing. Two runs would agree
+  // about the seat plan, since both recompute it from the same fixed beacon and the same
+  // fixed snapshot, but they would race over the Pantheon prescript and the mirror.
+  const lock = takeLock(cfg);
+  if (!lock) {
+    console.info('[finalise] another draw job holds the lock; leaving it to finish');
+    process.exit(0);
+  }
+
+  // Signals do not interrupt a draw.
+  //
+  // Under systemd's default KillMode the stop signal goes to every process in the unit,
+  // this one included, and Node's default action is to die on the spot. Measured on
+  // systemd 255: the unit counts as stopped the moment the main process exits, and a
+  // child that survives SIGTERM is left alone to finish rather than being killed later.
+  // So surviving it is both possible and sufficient. (KillMode=mixed is the trap here —
+  // it sends SIGKILL to whatever is left the instant the main process goes, which cannot
+  // be handled at all.)
+  //
+  // Being killed is no longer corrupting — writeLocal renames into place — so this is
+  // about not throwing away work that is nearly done: the beacon has landed, twelve
+  // ciphertexts are open, and the Pantheon sync is mid-flight. A second signal exits
+  // anyway, because an operator who asks twice means it.
+  let signalled = false;
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.on(sig, () => {
+      if (signalled) {
+        console.warn(`[finalise] ${sig} again — leaving the draw unfinished, as asked`);
+        releaseLock(lock);
+        process.exit(130);
+      }
+      signalled = true;
+      console.warn(`[finalise] ${sig} received; the draw is mid-flight and will finish first`);
+    });
+  }
+
+  const leave = (code) => { releaseLock(lock); process.exit(code); };
+
   // The real stamper, here and nowhere else: PROTOCOL.md §9's anchor belongs to a
   // deployment, not to every caller of run().
-  run({ wait: !process.argv.includes('--no-wait'), stamp })
-    .then((out) => process.exit(['done', 'void', 'open', 'awaiting_round'].includes(out.phase) ? 0 : 1))
+  run({ cfg, wait: !process.argv.includes('--no-wait'), stamp })
+    .then((out) => leave(['done', 'void', 'open', 'awaiting_round'].includes(out.phase) ? 0 : 1))
     .catch((err) => {
       console.error(`[finalise] ERROR ${err.stack || err.message}`);
-      process.exit(1);
+      leave(1);
     });
 }

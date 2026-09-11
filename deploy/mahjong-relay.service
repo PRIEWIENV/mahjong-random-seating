@@ -14,6 +14,17 @@ ExecStart=/usr/bin/node server/server.js
 Restart=always
 RestartSec=3
 
+# A stop must not cut a draw in half. The relay itself is gone in milliseconds, but it
+# spawns server/finalise.js, and under the default KillMode the stop signal reaches that
+# process too. The job ignores the first one and finishes — by then the beacon has landed
+# and twelve ciphertexts are open — so give it room before systemd loses patience and
+# reaches for SIGKILL.
+#
+# Do NOT set KillMode=mixed here, however much it sounds like the knob for this. Measured
+# on systemd 255: it sends SIGKILL to whatever is left the instant the main process exits,
+# and SIGKILL cannot be ignored, so the draw dies where the default lets it finish.
+TimeoutStopSec=180
+
 # Optional. Only for a box you have root on; the app needs none of this to run, and
 # deploy/README.md §3 has the ways that need no privileges at all.
 #

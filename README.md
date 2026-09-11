@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-315%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-336%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -86,7 +86,7 @@ one of which admits the "opposite once" condition. The design is not chosen; it 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 315 unit tests, fully offline, ~12 s
+npm test                  # 336 unit tests, fully offline, ~12 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 ```
 
@@ -113,7 +113,7 @@ performs the check a player does afterwards. Nothing is simulated except Pantheo
 
 ```sh
 npm ci
-npm test                  # 315 unit tests, offline, ~12 s
+npm test                  # 336 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -208,10 +208,20 @@ One process, and it draws as well as serves:
 node server/server.js
 ```
 
-There is nothing else to install and no root needed. The server spawns
-`server/finalise.js` on a timer of its own (`server.finalise_interval_seconds`, default
-60), so the draw happens without a systemd unit or a cron entry — and if you would rather
-schedule it yourself, `server.run_finalise: false` hands it back.
+That is the whole deployment, and the one thing it assumes is worth stating plainly: it
+reads `.env` from the root of the checkout at startup, and names the file it read in its
+first few log lines. Everything that makes a deployment real rather than a demo lives
+there — the Pantheon base URLs and the admin account used for the seat-plan sync, the
+mirror repository and its token, `ADMIN_TOKEN`, `NODE_ENV=production`. There is no flag
+for most of it, and there does not need to be. [`deploy/README.md`](deploy/README.md) §2
+is the file's contents.
+
+There is nothing else to install and no root needed — not for the process, not to keep it
+alive across a reboot, and not to install it in the first place.
+The server spawns `server/finalise.js` on a timer of its own
+(`server.finalise_interval_seconds`, default 60), so the draw happens without a systemd
+unit or a cron entry — and if you would rather schedule it yourself,
+`server.run_finalise: false` hands it back.
 
 Everything else about a real deployment — the frozen checkout, the `.env`, the reverse
 proxy and TLS, keeping the one process alive on Linux or Windows, and how you find out if

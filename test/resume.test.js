@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { run, phaseOf, KEY_PHASE, KEY_SYNC, KEY_TICK } = require('../server/finalise');
+const { run, phaseOf, KEY_PHASE, KEY_SYNC, KEY_TICK, KEY_PUBLISHED } = require('../server/finalise');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
@@ -286,5 +286,182 @@ test('the heartbeat is written before the work, so a crash still proves the job 
                  setPrescript: async () => { throw new Error('Pantheon is down'); } };
   await invoke(c).catch(() => {});
   assert.ok(c.store.get(KEY_TICK), 'the run left no trace');
+  cleanup(c.fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// the push that never happened
+// ---------------------------------------------------------------------------
+
+/**
+ * results.json is written to disk and queued for the mirror in the same breath, but the
+ * queue lives in memory and the push happens at the end of the run, with the Pantheon
+ * sync in between. A process that dies in that gap leaves the result on the organiser's
+ * disk and absent from the public repository — and that file is exactly what the README
+ * tells a player to verify against. Nothing noticed, because the next tick sees
+ * results.json on disk and reports "already done".
+ */
+
+/** The same fixture, with a mirror that is switched on and records what it is given. */
+function finishedWithMirror(opts = {}) {
+  const c = finished(opts);
+  const pushed = [];
+  c.pushed = pushed;
+  c.mirror = {
+    enabled: true,
+    enqueue: (p, body, msg) => pushed.push({ p, body, msg }),
+    flush: async () => {},
+    drain: async () => opts.drains !== false,
+  };
+  return c;
+}
+
+test('a draw whose push never completed is re-mirrored on the next tick', async () => {
+  const c = finishedWithMirror();
+  const out = await invoke(c);
+  assert.equal(out.phase, 'done');
+  assert.equal(out.republished, true);
+
+  const paths = c.pushed.map((x) => x.p);
+  assert.ok(paths.includes('results.json'), `results.json was not re-pushed: ${paths.join(', ')}`);
+
+  // The bytes must be the ones on disk. What the store holds has the derived statistics
+  // merged in, and pushing those would publish a file that does not reproduce (§4.3).
+  const onDisk = fs.readFileSync(path.join(c.fx.dir, 'results.json'), 'utf8');
+  assert.equal(c.pushed.find((x) => x.p === 'results.json').body, onDisk);
+  cleanup(c.fx.dir);
+});
+
+test('and once it has been pushed, it is not pushed again every minute', async () => {
+  const c = finishedWithMirror();
+  await invoke(c);
+  const after = c.pushed.length;
+  await invoke(c);
+  assert.equal(c.pushed.length, after, 'the second tick re-pushed a settled draw');
+  cleanup(c.fx.dir);
+});
+
+test('a queue that will not drain leaves the job knowing it still owes a push', async () => {
+  // Recording success on a drain that failed would be worse than not recording at all:
+  // the one run that could still fix it would decide there was nothing to fix.
+  const c = finishedWithMirror({ drains: false });
+  const out = await invoke(c);
+  assert.ok(!out.republished, 'a drain that failed is not a push that happened');
+  assert.ok(!c.store.get(KEY_PUBLISHED), 'a failed drain must not count as published');
+  cleanup(c.fx.dir);
+});
+
+test('with no mirror configured there is nothing outstanding to re-push', async () => {
+  const c = finished(); // mirror.enabled === false
+  await invoke(c);
+  assert.equal(c.store.get(KEY_PUBLISHED), true, 'nothing to push is not the same as unpushed');
+  assert.ok(!c.mirrored.includes('results.json'), 'there is nowhere to re-push it to');
+  cleanup(c.fx.dir);
+});
+
+test('a results.json that cannot be parsed is said out loud, not swallowed', async () => {
+  // Unreachable now that the file is renamed into place, so reaching it means an editor
+  // or a failing disk. It used to end here in silence: phase done, no result, and every
+  // player getting a 500 from /api/result forever.
+  const c = finished();
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'), '{"seating": [tru');
+  const errors = [];
+  const out = await invoke(c, { log: { info() {}, warn() {}, error: (m) => errors.push(m) } });
+  assert.equal(out.phase, 'done');
+  assert.equal(out.results, null);
+  assert.match(errors.join('\n'), /could not be parsed/);
+  assert.match(errors.join('\n'), /draw again/, 'the message has to say what to do about it');
+  cleanup(c.fx.dir);
+});
+
+/**
+ * The same gap, on the two files where it costs more.
+ *
+ * `events/snapshot.json` is written once at the cutoff and guarded against ever being
+ * written again, so a push lost between that write and the end of the run was lost for
+ * good — and that file is the whole of PROTOCOL §9: the roll is public before the beacon,
+ * or it proves nothing. `events/void.json` had the same shape, on the path where a round
+ * is void in the API and invisible in the repository.
+ */
+
+/** A mirror that records what it is given and can be told the queue did not empty. */
+const watcher = (opts = {}) => {
+  const pushed = [];
+  return {
+    pushed,
+    mirror: {
+      enabled: true,
+      enqueue: (p, body) => pushed.push({ p, body }),
+      flush: async () => {},
+      drain: async () => opts.drains !== false,
+    },
+  };
+};
+
+test('a void round works the queue before the process is allowed to exit', async () => {
+  // publishVoid enqueued and returned. enqueue starts a flush it does not await, and the
+  // command-line entry point calls process.exit as soon as run() resolves, so on a real
+  // void round the notice was raced against the exit and usually lost.
+  const c = belowQuorum(7);
+  const w = watcher();
+  c.mirror = w.mirror;
+  let drained = 0;
+  c.mirror.drain = async () => { drained += 1; return true; };
+
+  const out = await invoke(c);
+  assert.equal(out.phase, 'void');
+  assert.ok(w.pushed.some((x) => x.p === 'events/void.json'));
+  assert.ok(drained >= 1, 'the void path returned without working the queue');
+  assert.equal(c.store.get(KEY_PUBLISHED), true);
+
+  // And the write itself marked the repository behind, so that a process dying between
+  // the write and the drain leaves a record for the next run rather than a stale 'done'.
+  const c2 = belowQuorum(7);
+  c2.mirror = watcher().mirror;
+  c2.store.set(KEY_PUBLISHED, true);          // a previous run had caught up
+  c2.mirror.drain = async () => { throw new Error('killed before the queue was worked'); };
+  await invoke(c2).catch(() => {});
+  assert.ok(!c2.store.get(KEY_PUBLISHED), 'writing the notice must mark the repository behind');
+  cleanup(c2.fx.dir);
+  cleanup(c.fx.dir);
+});
+
+test('a roll published at the cutoff and never pushed is offered again next tick', async () => {
+  const c = belowQuorum(12);           // quorum met, so the job takes the roll and waits
+  const w = watcher();
+  c.mirror = w.mirror;
+  // No beacon yet: the run publishes the roll and returns awaiting_round. That return is
+  // the common one, and it is where the snapshot used to be abandoned in the queue.
+  c.drand = { round: async () => { throw new Error('not out yet'); } };
+
+  const first = await invoke(c, { maxWaitMs: 0 });
+  assert.equal(first.phase, 'awaiting_round');
+  assert.ok(w.pushed.some((x) => x.p === 'events/snapshot.json'), 'the roll was never queued');
+  assert.ok(fs.existsSync(path.join(c.fx.dir, 'events', 'snapshot.json')));
+
+  // Now simulate the process having died before the queue emptied: the file is on disk,
+  // nothing recorded a push.
+  c.store.set(KEY_PUBLISHED, false);
+  w.pushed.length = 0;
+
+  await invoke(c, { maxWaitMs: 0 });
+  assert.ok(
+    w.pushed.some((x) => x.p === 'events/snapshot.json'),
+    'the next tick left the roll unpublished, and nothing else ever writes it again');
+  cleanup(c.fx.dir);
+});
+
+test('the roll is offered before the result, so a reader never finds one without the other', async () => {
+  const c = finished();
+  fs.mkdirSync(path.join(c.fx.dir, 'events'), { recursive: true });
+  fs.writeFileSync(path.join(c.fx.dir, 'events', 'snapshot.json'), '{"local_ids":[1]}');
+  const w = watcher();
+  c.mirror = w.mirror;
+
+  await invoke(c);
+  const order = w.pushed.map((x) => x.p);
+  assert.ok(
+    order.indexOf('events/snapshot.json') < order.indexOf('results.json'),
+    `the result went out before the file needed to audit it: ${order.join(', ')}`);
   cleanup(c.fx.dir);
 });
