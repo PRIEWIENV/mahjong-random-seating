@@ -807,6 +807,63 @@ function listenOn(argv = process.argv.slice(2), env = process.env) {
 
 module.exports.listenOn = listenOn;
 
+// Long enough for a submission that is already in flight to finish writing, short
+// enough that nobody standing at the terminal concludes it has hung.
+const SHUTDOWN_GRACE_MS = 3000;
+
+/**
+ * Stop, on the first Ctrl+C.
+ *
+ * `server.close()` refuses to call back until every open connection has ended, and the
+ * waiting stage holds a stream that by design never ends (server/events.js). Those
+ * streams are released by `hub.close()` — which runs on the server's own 'close' event,
+ * the very event that is waiting for them. The two waited for each other, so Ctrl+C did
+ * nothing at all: a handler was installed, which also cost us Node's default of exiting
+ * on the signal, and the only ways out were Ctrl+Break and the task manager. The same
+ * cycle held for SIGTERM, so `systemctl restart` sat there until systemd lost patience
+ * and sent SIGKILL ninety seconds later.
+ *
+ * Ending the streams first is therefore not tidiness, it is what breaks the cycle. Then
+ * the sockets they leave behind: a browser keeps a spare connection open, and an idle
+ * keep-alive socket holds the close open exactly as firmly as a live request does.
+ *
+ * Whatever is still attached after the grace period is not going to finish on its own,
+ * and somebody pressing Ctrl+C has not asked to wait for it.
+ *
+ * The draw child, if one is mid-flight, is deliberately left alone — a half-published
+ * round is worse than an orphaned process, and server/schedule.js says why.
+ */
+function shutdown(o) {
+  const { server, hub, scheduler, log = console, graceMs = SHUTDOWN_GRACE_MS, exit = process.exit } = o;
+  let grace = null;
+  let done = false;
+  // Both paths below can arrive, and on the second signal `close` calls back with an
+  // ERR_SERVER_NOT_RUNNING it would rather we ignored. One exit, whoever gets here.
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (grace) clearTimeout(grace);
+    exit(0);
+  };
+
+  scheduler?.stop();
+  hub?.close();
+  server.close(finish);
+  server.closeIdleConnections?.();
+
+  grace = setTimeout(() => {
+    log.warn?.(`[server] still connected after ${graceMs}ms; dropping what is left and exiting`);
+    server.closeAllConnections?.();
+    finish();
+  }, graceMs);
+  // If the sockets do go on their own, `finish` gets there first and this timer must not
+  // be the reason the process is still running.
+  grace.unref?.();
+  return grace;
+}
+
+module.exports.shutdown = shutdown;
+
 if (require.main === module) {
   let port;
   let host;
@@ -816,14 +873,21 @@ if (require.main === module) {
     console.error(`[server] ${err.message}`);
     process.exit(2);
   }
-  const { server, cfg, pantheon, store } = createServer();
+  const { server, cfg, pantheon, store, hub } = createServer();
   let scheduler = null;
+  let stopping = false;
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
-      // The draw child, if one is mid-flight, is left to finish: a half-published round
-      // is worse than a few extra seconds of shutdown.
-      scheduler?.stop();
-      server.close(() => process.exit(0));
+      // A second press means the first one did not look to the operator like it worked.
+      // Take them at their word; 130 is what a shell reports for a program killed by
+      // Ctrl+C, which is what this now is.
+      if (stopping) {
+        console.warn('[server] second signal — exiting now');
+        process.exit(130);
+      }
+      stopping = true;
+      console.info('[server] stopping');
+      shutdown({ server, hub, scheduler, log: console });
     });
   }
   server.on('error', (err) => {

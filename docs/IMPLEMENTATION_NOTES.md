@@ -860,12 +860,47 @@ they had to do it by.
 
 The password field has a reveal toggle, off by default.
 
+## 6l. Ctrl+C did nothing
+
+Not *slowly*. At all, on any number of presses, with nothing printed.
+
+Three lines, each defensible on its own. The signal handler called `server.close()` and
+exited from its callback. `close` calls back when the last connection has ended. The
+streams the waiting stage holds never end on their own, and are released by `hub.close()`
+— which was registered on the server's own `close` event, the event waiting for those
+streams. Each step waits for the next, and installing a handler is also what removed
+Node's default of exiting on the signal, so there was nothing underneath to catch it.
+
+The cost was not a slow shutdown. On Windows the way out was Ctrl+Break or the task
+manager. Under systemd, where the same cycle held for SIGTERM, every `systemctl restart`
+would sit for the full ninety-second `TimeoutStopSec` and end in SIGKILL — which is to
+say that every deploy killed the relay mid-request instead of stopping it, and the unit's
+careful note about not interrupting a draw described something that was not happening.
+
+The order is now streams, then sockets, then the wait. `hub.close()` ends the responses;
+`closeIdleConnections()` drops the spare keep-alive socket a browser leaves lying around,
+which holds the close open exactly as firmly as a live request does; only then is there
+nothing left to wait for. Measured at 15 ms with a player attached, and confirmed against
+the real program with a real console Ctrl+C: the stream ended, the client saw it end, and
+the process was gone. Anything still attached after three seconds is dropped with a line
+in the log, because somebody standing at a terminal has not asked to wait for it. A
+second press exits immediately, on the assumption that the first one did not look like it
+worked.
+
+The draw child is still left alone on purpose. A half-published round is worse than an
+orphaned process.
+
+The test is worth noting for how it fails: with the bug back it does not fail, it hangs.
+That is the bug, faithfully. The SSE test that existed all along never caught this
+because it cancels its reader before closing, which is the one thing a player sitting on
+the waiting page never does.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 313 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices | pass |
+| Unit tests (`npm test`) — 315 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -904,6 +939,7 @@ The password field has a reveal toggle, off by default.
 | The two language versions have the same sections, figures and diagrams | passes |
 | The generated explanation page is deterministic: a fresh clone at the tag rebuilds the bundle byte-identically | passes |
 | `THIRD-PARTY-NOTICES.md` covers every one of the seventeen libraries in the bundle, and `--check` fails if it has fallen behind | passes |
+| Ctrl+C stops the relay while a player is attached to the stream, and a stream nothing releases is dropped rather than waited on | passes |
 | RUNBOOK A2/A3/A6 against a real Pantheon instance (`cdda3fc`, local Docker) | passes *(after six fixes — §6f)* |
 | Roster snapshot from a live event, through `tools/freeze.js` | passes |
 | Sign-in gate live: correct token, wrong token, unknown person | passes, three distinct answers |

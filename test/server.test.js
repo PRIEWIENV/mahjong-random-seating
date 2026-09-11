@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const path = require('node:path');
 
-const { createServer, listenOn } = require('../server/server');
+const { createServer, listenOn, shutdown } = require('../server/server');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
@@ -54,7 +54,7 @@ async function boot(opts = {}) {
   };
 
   return {
-    base, fx, cfg, store, mirrored, pantheon, hub, call, signIn,
+    base, fx, cfg, store, mirrored, pantheon, hub, server, call, signIn,
     get: (p, cookie) => call(p, cookie ? { headers: { cookie } } : {}),
     submit: (cookie, ciphertext) => call('/api/submit', {
       method: 'POST',
@@ -643,6 +643,76 @@ test('the port comes from a flag, then the environment, then the default', () =>
   // Loopback by default: a reverse proxy terminates TLS in front (§10), and binding
   // every interface is a decision, not something to arrive at by omission.
   assert.equal(listenOn(['--port', '9005'], {}).host, '127.0.0.1');
+});
+
+/**
+ * The waiting stage holds a stream that never ends, and `server.close()` waits for every
+ * connection to end. Before the hub was closed first, those two waited for each other and
+ * Ctrl+C did nothing whatever — no message, no exit, and no default behaviour to fall back
+ * on, because installing the handler is what removed it. The operator's way out was
+ * Ctrl+Break or the task manager, and `systemctl restart` sat there for the full ninety
+ * seconds before systemd gave up and sent SIGKILL.
+ *
+ * Note the failure mode of this test if it regresses: it does not fail, it hangs. That is
+ * the bug, faithfully.
+ */
+test('Ctrl+C stops the server with a waiting page attached', async () => {
+  const s = await boot();
+  const res = await fetch(s.base + '/api/events', { headers: { accept: 'text/event-stream' } });
+  const reader = res.body.getReader();
+  await reader.read(); // attached, and holding — one player sitting on the waiting page
+  assert.equal(s.hub.size, 1);
+
+  const warned = [];
+  const codes = [];
+  const t0 = Date.now();
+  await new Promise((done) => {
+    shutdown({
+      server: s.server,
+      hub: s.hub,
+      log: { warn: (m) => warned.push(m) },
+      exit: (c) => { codes.push(c); done(); },
+    });
+  });
+
+  assert.deepEqual(codes, [0], 'shutdown must exit exactly once, cleanly');
+  // Nowhere near the grace period: the streams were released rather than timed out. A
+  // browser also keeps a spare keep-alive socket, and that counts as much as this one.
+  const ms = Date.now() - t0;
+  assert.ok(ms < 1000, `took ${ms}ms — something waited that should not have`);
+  assert.deepEqual(warned, [], `shutdown had to force something: ${warned.join(' / ')}`);
+
+  await reader.cancel().catch(() => {});
+  await s.close();
+});
+
+test('and a stream nothing releases cannot hold it open indefinitely', async () => {
+  // The same shutdown with the hub withheld, which is the old behaviour exactly: the
+  // stream stays up, closeIdleConnections cannot touch a connection that is mid-response,
+  // and the grace period is the only thing left between the operator and a hang. Forty
+  // milliseconds here; three seconds in the program.
+  const s = await boot();
+  const res = await fetch(s.base + '/api/events', { headers: { accept: 'text/event-stream' } });
+  const reader = res.body.getReader();
+  await reader.read();
+
+  const warned = [];
+  const codes = [];
+  await new Promise((done) => {
+    shutdown({
+      server: s.server,
+      log: { warn: (m) => warned.push(m) },
+      graceMs: 40,
+      exit: (c) => { codes.push(c); done(); },
+    });
+  });
+
+  assert.deepEqual(codes, [0]);
+  assert.match(warned.join('\n'), /still connected/, 'the forced drop must say so out loud');
+
+  await reader.cancel().catch(() => {});
+  s.hub.close();
+  await s.close();
 });
 
 test('a port that is not a port is refused before anything opens a socket', () => {
