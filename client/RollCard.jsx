@@ -84,8 +84,19 @@ export default function RollCard({ roll, sealed = true }) {
   if (!roll?.digest) return null;
 
   const short = roll.digest.slice(0, 16);
+  /**
+   * Copies the sixteen characters on the screen, not the full digest behind them.
+   *
+   * This is the one value the page asks twelve people to read out to each other, and
+   * what gets pasted has to be what everybody else is looking at. Sending all
+   * sixty-four made the comparison harder, not stronger: the recipient then has to find
+   * the first sixteen inside a wall of hex to check it against their own screen, and a
+   * value nobody can compare at a glance is a value nobody compares. The full digest is
+   * still one hover away on the code element, and it is in snapshot.json for anyone
+   * recomputing rather than eyeballing.
+   */
   const copy = () => {
-    navigator.clipboard?.writeText(roll.digest).then(
+    navigator.clipboard?.writeText(short).then(
       () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
       () => {}
     );
@@ -98,7 +109,25 @@ export default function RollCard({ roll, sealed = true }) {
 
       <p className="roll-digest">
         <code title={roll.digest}>{short}</code>
-        <button className="linkish" onClick={copy}>{copied ? t.copied : t.copy}</button>
+        {/* An icon, because the word sat beside a value set at 30px and read as part of
+            it. The tick is the confirmation; the label stays on the button for anyone
+            who cannot see either. */}
+        <button
+          type="button"
+          className={copied ? 'copy-btn done' : 'copy-btn'}
+          onClick={copy}
+          aria-label={copied ? t.copied : t.copy}
+          title={copied ? t.copied : t.copy}
+        >
+          {copied ? (
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" /></svg>
+          ) : (
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <rect x="7.25" y="7.25" width="9.25" height="9.25" rx="2.2" />
+              <path d="M12.75 4.25H5.5a1.75 1.75 0 0 0-1.75 1.75v7.25" />
+            </svg>
+          )}
+        </button>
       </p>
 
       {sealed && <p className="roll-ask">{t.ask}</p>}

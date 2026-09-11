@@ -1199,12 +1199,105 @@ Three things came out of reading that screen again with a player's question in m
 The label moved with the layout: "sealed at" was the protocol's word for what happens to
 the number, not the player's word for what happens to them. It now says entries close.
 
+### Three things the reordering exposed
+
+Looking at the reordered screens turned up three more, all of the same kind: a detail that
+was defensible on its own and wrong beside what is next to it.
+
+**The confirmation was narrower than the thing it confirms.** `.card.submit` is 460px and
+`.card.sealed` was 420px, and sealing replaces one with the other in place. So the moment
+a player committed their number, the card jumped forty pixels narrower. Nothing was wrong
+with either width; what was wrong was that they were two widths for one card at two
+moments. They are now one.
+
+**The fingerprint copied something other than what it showed.** The card prints sixteen
+characters and the copy button put all sixty-four on the clipboard. That reads as the
+stronger choice and is the weaker one: this is the single value the page asks twelve
+people to read out to each other, so what gets pasted has to be what everybody else is
+looking at. Sent in full, the recipient has to find the first sixteen inside a wall of hex
+before they can compare anything, and a value nobody can check at a glance is a value
+nobody checks. It copies the sixteen now. The full digest is still on the element's title,
+and it is in `snapshot.json` for anyone recomputing rather than eyeballing.
+
+The control became an icon at the same time. A word set beside a value in 30px monospace
+gets read as the end of the value.
+
+**The band had two palettes and used both at once.** Its ground was `--bg`, the page's own
+colour, inside a `--panel` card — a hole punched in the card rather than a block on it —
+and the emphasis in it was plain `--ink`. That was survivable while the instants were
+small and unbolded. Once they were neither, the urgent state showed what was wrong with
+it: the background went amber, the countdown went amber, and the two instants stayed cold
+near-black on top of them.
+
+Everything in the band now takes its colour from the state the band is in: accent while
+there is time, warn inside the last half hour, labels and offsets and the drand round
+included. Green to amber is the signal the submission tally already uses for "safe" and
+"not safe yet", so the colour change carries the same meaning in a second place instead of
+being decoration in one.
+
+**A disclosure with two mechanisms that disagreed.** An envelope shows the first ten
+characters of its ciphertext's digest and opens to all sixty-four. Opening was implemented
+twice: React state, set by a click, chose how many characters to render; and a stylesheet
+rule widened the box on hover. So hovering animated the box out to 68ch over 380ms and
+then showed the same ten characters in it. The box arrived without its contents, which is
+what "the animation is not smooth" turned out to mean — there was nothing wrong with the
+easing, the thing being animated was empty.
+
+Hover now does nothing and a click opens the box and its text in the same frame, with no
+width transition to sit through. A second click closes it. `onMouseLeave` went with the
+hover rule: it was the same behaviour under another name, and it took away a fingerprint
+the player had deliberately opened as soon as the cursor drifted off the tile, before they
+could select the text. Click being the only way in means it has to work without a mouse,
+so the tile is focusable and answers Enter and Space, with `aria-expanded` saying which
+way it is. The full digest was already on the element's `aria-label` throughout.
+
+## 6q. Two classes with the same name, and a stub with nothing to say
+
+**The timeline card halved itself at the cutoff.** `.card.sealed { max-width: 460px }`
+belongs to the confirmation a player sees the moment their number is accepted: a small
+centred card, alone on the screen. The waiting stage's timeline card is
+`card timeline-card sealed` once the cutoff has passed. So it matched the same rule, and
+the card that had been the full width of a 1120px dashboard snapped to under half of it
+the instant submissions closed, centred its text and took the confirmation card's shadow.
+
+Nothing in the codebase is wrong on its own here. The markup is right, both rules are
+right, and the word "sealed" means a true thing in both places: this player's number is
+sealed, and the draw's submission window is sealed. They only disagree about what the word
+is scoped to. A component's state modifier shares an element with every other class on it,
+so an unprefixed one is a claim on a word the whole stylesheet can see.
+
+Fixed from both ends, because either alone would leave the trap set for the next pair. The
+timeline's states are now `tl-open`, `tl-sealed`, `tl-drawing`; and a rule that sizes a
+card because of the stage it is the whole of now names that stage —
+`.stage.centre > .card.sealed` — so it cannot reach a card nested inside another one.
+
+`test/styles.test.js` holds both halves as invariants. It is the first test here that
+reads the stylesheet, and it exists because nothing else could have caught this: every
+unit test passed, the bundle reproduced, and the defect was visible only to somebody
+looking at the page after a cutoff. Writing it also turned up a second lesson worth
+keeping — the first version of the check passed on a deliberately broken stylesheet,
+because a regex over CSS sweeps the comment above a rule into that rule's selector, and
+every rule worth checking has a comment above it. A check that has not been watched to
+fail is not a check.
+
+**Stub mode could never show the event's name.** `StubPantheon` defaults its event title to
+null, which is correct for the class: a unit test has to be able to say "Pantheon told us
+nothing", and one does. But `createPantheon`'s stub branch is not a unit test, it is how
+the whole app runs without a Pantheon — and it inherited that null. So the server asked
+for the name at boot, got nothing, and went on asking every five minutes forever, while
+the page fell back to its generic title. The single piece of the page that comes from
+Mimir was the single piece stub mode could not exercise.
+
+The stub branch now answers `Stub event <id>`. It says "Stub" because it is not a real
+event's name and nobody should be able to mistake it for one; `PANTHEON_STUB_EVENT_TITLE`
+replaces it, and an operator's `runtime.json` still wins over both.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 351 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to | pass |
+| Unit tests (`npm test`) — 354 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1248,6 +1341,11 @@ the number, not the player's word for what happens to them. It now says entries 
 | A closed event is not counted as a failed attempt of the next one, and a new event opens at attempt 1 | passes |
 | The round now open is excluded from its own attempt count, so a void screen does not skip a number | passes |
 | Every submission-stage layout rendered to static HTML in both languages, with and without a void notice | passes |
+| The sealed confirmation is the same width as the submit card it replaces | passes |
+| The fingerprint copies the sixteen characters on the screen, and the full digest is still on the element | passes |
+| An envelope opens on click and on Enter or Space, and hover changes nothing | passes |
+| No card is sized by a bare class, and the timeline names its own states — both watched failing on a broken stylesheet | passes |
+| Stub mode serves an event name, checked by booting the real server against the real data directory | passes |
 | A database from another round is refused at startup by both the server and the draw job | passes |
 | A finished event is archived, verified and then cleared; an unfinished one is not closed without saying so | passes |
 | A Frey address that resolves on one machine only is flagged, and a real domain is not | passes |

@@ -350,6 +350,26 @@ test('a Pantheon that answers nothing leaves the page its generic title', async 
   await s.close();
 });
 
+test('stub mode answers with a name, so the page is not stuck on its generic title', async () => {
+  // The class defaults the title to null on purpose — the test above needs to be able to
+  // say "Pantheon told us nothing" — but createPantheon's stub branch is a running app,
+  // not a unit test. Left at null it polled forever and the one piece of the page that
+  // comes from Mimir was the one piece stub mode could never show.
+  const { createPantheon } = require('../server/pantheon');
+  const fx = makeDataDir();
+  const cfg = load({ dataDir: fx.dataDir });
+  const id = cfg.roster.pantheon_event_id;
+
+  const stub = createPantheon(cfg, { PANTHEON_MODE: 'stub' });
+  const title = await stub.getEventTitle(id);
+  assert.match(title, /^Stub event /, 'a stub title must be unmistakably a stub');
+  assert.match(title, new RegExp(String(id)), 'and it should name the event it stands for');
+
+  const named = createPantheon(cfg, { PANTHEON_MODE: 'stub', PANTHEON_STUB_EVENT_TITLE: '本地演练' });
+  assert.equal(await named.getEventTitle(id), '本地演练');
+  cleanup(fx.dir);
+});
+
 test('an event name configured in runtime.json is not asked of Pantheon at all', async () => {
   const s = await boot({
     eventTitle: 'what Mimir would say',

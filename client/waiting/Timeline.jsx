@@ -93,7 +93,13 @@ export default function Timeline({ status, now }) {
   const latest = status.drand?.latest_round;
   const toGo = Number.isFinite(latest) ? status.target_round - latest : null;
 
-  const phaseClass = drawing ? 'drawing' : sealed ? 'sealed' : 'open';
+  // Namespaced, and not merely for tidiness. These were `open` / `sealed` / `drawing`,
+  // and `sealed` is also the class on the submitted stage's card — so `.card.sealed`,
+  // written for a 460px confirmation card, matched this one the moment the cutoff passed
+  // and shrank the timeline to under half the width of the cards above and below it,
+  // centred its text and gave it the wrong shadow. A state modifier shares a namespace
+  // with every other class on the element; a component's states have to say whose.
+  const phaseClass = drawing ? 'tl-drawing' : sealed ? 'tl-sealed' : 'tl-open';
 
   return (
     <section className={`card timeline-card ${phaseClass}`}>

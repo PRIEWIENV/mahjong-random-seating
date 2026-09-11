@@ -308,7 +308,19 @@ function createPantheon(cfg, env = process.env, opts = {}) {
     const seed = env.PANTHEON_STUB_ROSTER
       ? JSON.parse(fs.readFileSync(env.PANTHEON_STUB_ROSTER, 'utf8'))
       : cfg?.roster;
-    return new StubPantheon({ roster: seed, ...opts });
+    return new StubPantheon({
+      roster: seed,
+      // Mimir's answer, stood in for. The class defaults this to null because a unit
+      // test needs to be able to say "Pantheon told us nothing", but that default made
+      // stub mode the one configuration where the event's name could never appear — so
+      // the single piece of the page that depends on Mimir was the single piece stub
+      // mode could not show. It says "Stub" because it is not a real event's name and
+      // nobody should be able to mistake it for one; PANTHEON_STUB_EVENT_TITLE replaces
+      // it, and an operator's runtime.json still wins over both.
+      eventTitle: env.PANTHEON_STUB_EVENT_TITLE
+        || `Stub event ${seed?.pantheon_event_id ?? 42}`,
+      ...opts,
+    });
   }
   return new TwirpPantheon(cfg?.runtime?.pantheon || {}, env, opts);
 }

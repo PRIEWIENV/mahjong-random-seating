@@ -178,7 +178,7 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
   padding: clamp(20px, 5vw, 30px); width: 100%; box-shadow: var(--shadow-sm);
 }
 /* The focal card of a stage earns more presence than the ones around it. */
-.card.submit, .card.signin, .card.sealed, .card.void { box-shadow: var(--shadow-md); }
+.card.submit, .card.signin, .stage.centre > .card.sealed, .card.void { box-shadow: var(--shadow-md); }
 .card h1 { font-size: clamp(1.35rem, 4.2vw, 1.6rem); margin: 0 0 10px; letter-spacing: -0.02em; line-height: 1.3; }
 .card h2 { font-size: 1.05rem; margin: 0; letter-spacing: -0.01em; }
 .eyebrow { color: var(--muted); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.1em; margin: 0 0 8px; }
@@ -203,6 +203,19 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
   font: 700 clamp(20px, 5.5vw, 30px)/1.2 var(--mono);
   letter-spacing: 0.06em; word-break: break-all;
 }
+/* Square, quiet, and 44px on a touch screen. A word here sat next to a 30px monospace
+   value and read as the end of it. */
+.copy-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); color: var(--muted); cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+.copy-btn svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.copy-btn.done { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+@media (pointer: coarse) { .copy-btn { width: 44px; height: 44px; } }
 .roll-ask { margin: 0 0 10px; font-weight: 600; }
 .roll-files { display: flex; gap: 16px; flex-wrap: wrap; margin: 14px 0 0; }
 /* The two files are the only thing on this card a reader takes away, so they get weight.
@@ -240,13 +253,14 @@ input[type="text"], input[type="email"], input[type="password"], .signin input {
 }
 input:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
-input:focus-visible, button:focus-visible, .grid th:focus-visible, .lang-toggle:focus-visible {
+input:focus-visible, button:focus-visible, .grid th:focus-visible, .lang-toggle:focus-visible,
+.env-tile:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 .devnote { background: var(--warn-soft); color: var(--warn); font-size: 0.7rem; padding: 2px 6px; border-radius: 5px; margin-left: 8px; }
 
 /* ---- submit ---------------------------------------------------------- */
-.card.submit { max-width: 460px; text-align: center; }
+.stage.centre > .card.submit { max-width: 460px; text-align: center; }
 /* The heading names the field directly below it, so nothing goes between them and the
    gap is a label's, not a section's. The deadline band and the void notice both sit
    above the greeting for that reason. */
@@ -266,7 +280,12 @@ input:focus-visible, button:focus-visible, .grid th:focus-visible, .lang-toggle:
 .finality { font-size: 0.85rem; color: var(--warn); margin: 0 0 4px; }
 
 /* ---- sealed ---------------------------------------------------------- */
-.card.sealed { max-width: 420px; text-align: center; }
+/* The same width as .card.submit, which it replaces in place. Sealing moved a 460px
+   card to a 420px one, so the confirmation of a submission opened by making the page
+   jump forty pixels narrower — read as a glitch, not as a card closing. */
+/* Scoped to the stage card. `.card.sealed` on its own also matched the timeline card in
+   its sealed state, which is a full-width card in a 1120px stage. */
+.stage.centre > .card.sealed { max-width: 460px; text-align: center; }
 .seal-anim { position: relative; height: 88px; margin-bottom: 12px; }
 .envelope {
   position: absolute; inset: 0 auto auto 50%; translate: -50% 0;
@@ -501,26 +520,43 @@ table.opponents tr.imperfect { color: var(--warn); }
 /* ---- the deadline band on the submission stage ------------------------ */
 /* The time remaining leads, because it is the only number here a player acts on without
    first doing arithmetic. It is still set below .bignum-input, which keeps §4's focal
-   element where it belongs: this band is the loudest support, not a second headline. */
+   element where it belongs: this band is the loudest support, not a second headline.
+
+   One palette, and it is the accent's. The band used to be a hole punched in the card —
+   the page's own ground inside a panel — with its emphasis set in raw --ink, and the
+   urgent state repainted the ground amber while leaving the two instants cold black on
+   it. Everything in here now takes its colour from the state the band is in: accent
+   while there is time, warn inside the last half hour. That is the same green-to-amber
+   the submission tally already uses for "fine" and "not fine yet", so the change of
+   colour is information rather than decoration. */
 .deadline-band {
-  border: 1px solid var(--line); border-radius: var(--r);
-  background: var(--bg); padding: 14px 14px 12px; margin: 0 0 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel));
+  padding: 14px 14px 12px; margin: 0 0 20px;
 }
-.deadline-band.urgent { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); background: var(--warn-soft); }
+.deadline-band.urgent {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warn-soft);
+}
 
 .dl-countdown { text-align: center; }
 .dl-cd-label {
-  display: block; color: var(--muted); font-size: 0.76rem;
+  display: block; color: var(--accent); font-size: 0.76rem;
   text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 2px;
 }
-.deadline-band.urgent .dl-cd-label { color: var(--warn); font-weight: 600; }
 .dl-clock {
   display: inline-flex; align-items: baseline; justify-content: center; flex-wrap: wrap;
   gap: 12px; font-variant-numeric: tabular-nums;
 }
-.cd-seg b { font: 700 clamp(30px, 8.5vw, 40px)/1.05 var(--mono); letter-spacing: -0.01em; }
-.cd-seg i { font-style: normal; font-size: 0.85rem; color: var(--muted); margin-left: 3px; }
-.deadline-band.urgent .cd-seg b { color: var(--warn); }
+.cd-seg b {
+  font: 700 clamp(30px, 8.5vw, 40px)/1.05 var(--mono);
+  letter-spacing: -0.01em; color: var(--accent-deep);
+}
+.cd-seg i {
+  font-style: normal; font-size: 0.85rem; margin-left: 3px;
+  color: color-mix(in srgb, var(--accent-deep) 55%, var(--muted));
+}
 
 /* The two instants, under a rule so they read as reference rather than as more headline.
    One grid for both rows rather than one per row: the labels are different lengths in
@@ -529,22 +565,38 @@ table.opponents tr.imperfect { color: var(--warn); }
    its own class — .quiet is still the second one — while its two cells join the shared
    grid, so the column edge is common and the pair of rows is centred as a block. */
 .dl-times { display: grid; grid-template-columns: auto auto; justify-content: center; align-items: baseline; column-gap: 10px; row-gap: 5px; }
-.dl-countdown + .dl-times { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
-.deadline-band.urgent .dl-countdown + .dl-times { border-top-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.dl-countdown + .dl-times {
+  border-top: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  margin-top: 12px; padding-top: 10px;
+}
 .dl-row { display: contents; font-size: 1rem; }
-.dl-row.quiet { color: var(--muted); font-size: 0.95rem; }
-.dl-name { color: var(--muted); text-align: right; }
-.dl-when { text-align: left; font-variant-numeric: tabular-nums; font-weight: 600; }
-.dl-row.quiet .dl-when { font-weight: 500; }
-.dl-when em { font-style: normal; color: var(--muted); font-size: 0.85em; margin-left: 5px; font-weight: 400; }
-.dl-round { color: var(--muted); font-size: 0.76rem; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+.dl-row.quiet { font-size: 0.95rem; }
+.dl-name { text-align: right; color: color-mix(in srgb, var(--accent-deep) 40%, var(--muted)); }
+.dl-when { text-align: left; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent-deep); }
+.dl-row.quiet .dl-when { font-weight: 500; color: color-mix(in srgb, var(--accent-deep) 70%, var(--muted)); }
+.dl-when em {
+  font-style: normal; font-size: 0.85em; margin-left: 5px; font-weight: 400;
+  color: color-mix(in srgb, var(--accent-deep) 45%, var(--muted));
+}
+.dl-round { font-size: 0.76rem; margin: 8px 0 0; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--accent-deep) 40%, var(--muted)); }
+
+/* Inside the last half hour the whole band moves to the warning colour, text included. */
+.deadline-band.urgent .dl-cd-label { color: var(--warn); font-weight: 600; }
+.deadline-band.urgent .cd-seg b { color: var(--warn); }
+.deadline-band.urgent .cd-seg i,
+.deadline-band.urgent .dl-name,
+.deadline-band.urgent .dl-when em,
+.deadline-band.urgent .dl-round { color: color-mix(in srgb, var(--warn) 55%, var(--muted)); }
+.deadline-band.urgent .dl-when { color: var(--warn); }
+.deadline-band.urgent .dl-row.quiet .dl-when { color: color-mix(in srgb, var(--warn) 75%, var(--muted)); }
+.deadline-band.urgent .dl-countdown + .dl-times { border-top-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
 
 /* ---- the timeline ----------------------------------------------------- */
 .timeline-card { margin-bottom: 18px; }
 .tl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .tl-head h2 { font-size: 1.05rem; }
 .tl-left { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
-.timeline-card.sealed .tl-left, .timeline-card.drawing .tl-head h2 { color: var(--accent); }
+.timeline-card.tl-sealed .tl-left, .timeline-card.tl-drawing .tl-head h2 { color: var(--accent); }
 
 .tl-track {
   position: relative; height: 6px; margin: 18px 0 0;
@@ -573,7 +625,7 @@ table.opponents tr.imperfect { color: var(--warn); }
 /* Now is earlier than the drawn span: the marker is at the edge because there is more
    behind it, not because nothing has happened. */
 .tl-dot.clipped { border-color: var(--muted); box-shadow: none; }
-.timeline-card.drawing .tl-dot { animation: pulse 1.6s ease-in-out infinite; }
+.timeline-card.tl-drawing .tl-dot { animation: pulse 1.6s ease-in-out infinite; }
 
 .tl-labels { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .tl-label { display: flex; flex-direction: column; gap: 1px; font-size: 0.78rem; min-width: 0; }
@@ -657,7 +709,15 @@ table.opponents tr.imperfect { color: var(--warn); }
 .env-when { color: var(--muted); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
 
 /* The fingerprint stretches out of its tile rather than reflowing the grid: a card that
-   pushed its neighbours aside on hover would make the whole page twitch. */
+   pushed its neighbours aside would make the whole page twitch.
+
+   Click, and only click. There used to be a hover rule here that widened the box, but
+   the characters it was widening to hold are rendered from React state that only a click
+   sets — so hovering opened an empty box, animated a width over 380ms, and showed the
+   same ten characters at the end of it. Two mechanisms for one disclosure, and they
+   disagreed. The box now changes size in the same frame the text does, because that is
+   one thing happening rather than a box that arrives before its contents. Only the
+   shadow fades, and it is following the box, not leading it. */
 .env-digest {
   position: relative; z-index: 1;
   display: block; width: 10.5ch; max-width: 100%;
@@ -666,21 +726,13 @@ table.opponents tr.imperfect { color: var(--warn); }
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
   border-radius: 8px; padding: 3px 7px;
   overflow: hidden; white-space: nowrap;
-  transition: width 380ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms ease;
+  transition: box-shadow 200ms ease;
 }
 .env-tile.open { z-index: 4; }
 .env-tile.open .env-digest {
   width: min(68ch, calc(100vw - 4rem));
   white-space: pre-wrap; word-break: break-all;
   box-shadow: var(--shadow-md);
-}
-@media (hover: hover) {
-  .env-tile.sealed:hover { z-index: 4; }
-  .env-tile.sealed:hover .env-digest {
-    width: min(68ch, calc(100vw - 4rem));
-    white-space: pre-wrap; word-break: break-all;
-    box-shadow: var(--shadow-md);
-  }
 }
 
 /* ---- the cutoff has passed and this player did not submit -------------- */

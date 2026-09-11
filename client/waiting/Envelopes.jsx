@@ -35,6 +35,7 @@ const TEXT = {
     missed: '未提交',
     sealedAt: (time) => `${time} 送达`,
     digestHint: '密文指纹（点一下展开）',
+    digestHintOpen: '密文指纹（点一下收起）',
     lede: '每个信封上是我们收到的那份密文的 SHA-256。这是信封外面的编号，不是里面的数字——里面的数字要等信标才能打开，谁也不例外。',
     ledeClosed: '提交已截止。下面是最终封存的十二个位置。',
   },
@@ -49,21 +50,44 @@ const TEXT = {
     missed: 'Never sealed',
     sealedAt: (time) => `arrived ${time}`,
     digestHint: 'ciphertext fingerprint (click to expand)',
+    digestHintOpen: 'ciphertext fingerprint (click to close)',
     lede: 'Each envelope carries the SHA-256 of the ciphertext we hold. That is the number written on the outside, not the one inside: the one inside waits for the beacon, and so does everybody, us included.',
     ledeClosed: 'Submissions are closed. These are the twelve slots as they were sealed.',
   },
 };
 
+/**
+ * Click to open the full fingerprint, click again to close, and the pointer does nothing.
+ *
+ * It used to close on mouseleave, and a stylesheet rule used to widen the box on hover.
+ * Between them a player got a box that grew on hover without gaining a single character —
+ * the extra characters come from `open`, which only a click sets — and then lost the one
+ * they had deliberately opened as soon as the cursor drifted a pixel off the tile, with
+ * no chance to select the text. One gesture, one disclosure, and it stays until dismissed.
+ */
 function Envelope({ player, digest, receivedAt, mine, closed, t, lang }) {
   const [open, setOpen] = useState(false);
   const state = digest ? 'sealed' : closed ? 'missed' : 'waiting';
   const cls = ['env-tile', state, mine ? 'mine' : '', open ? 'open' : ''].filter(Boolean).join(' ');
 
+  const toggle = () => digest && setOpen((v) => !v);
+  // Click is now the only way in, so it has to be reachable without a mouse. The digest
+  // itself is already on the code element's aria-label, so this is for the sighted
+  // keyboard user, who had nothing at all before.
+  const onKeyDown = (e) => {
+    if (!digest || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    setOpen((v) => !v);
+  };
+  const hint = open ? t.digestHintOpen : t.digestHint;
+
   return (
     <li
       className={cls}
-      onClick={() => digest && setOpen((v) => !v)}
-      onMouseLeave={() => setOpen(false)}
+      onClick={toggle}
+      onKeyDown={onKeyDown}
+      tabIndex={digest ? 0 : undefined}
+      aria-expanded={digest ? open : undefined}
     >
       <div className="env-top">
         <span className="env-seal" aria-hidden="true" />
@@ -74,8 +98,8 @@ function Envelope({ player, digest, receivedAt, mine, closed, t, lang }) {
         <>
           <code
             className="env-digest"
-            title={`${t.digestHint}: ${digest}`}
-            aria-label={`${t.digestHint}: ${digest}`}
+            title={`${hint}: ${digest}`}
+            aria-label={`${hint}: ${digest}`}
           >
             {open ? digest : digest.slice(0, SHORT)}
           </code>

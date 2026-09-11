@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-351%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-354%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -86,7 +86,7 @@ one of which admits the "opposite once" condition. The design is not chosen; it 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 351 unit tests, fully offline, ~12 s
+npm test                  # 354 unit tests, fully offline, ~12 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 ```
 
@@ -113,7 +113,7 @@ performs the check a player does afterwards. Nothing is simulated except Pantheo
 
 ```sh
 npm ci
-npm test                  # 351 unit tests, offline, ~12 s
+npm test                  # 354 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -159,7 +159,9 @@ It needs a Pantheon to read, which in development means one of three things:
 - **No Pantheon at all** — `PANTHEON_MODE=stub` with `PANTHEON_STUB_ROSTER` pointing at a
   small JSON file of registrations. The stub deliberately will not seed itself from
   `roster.json`: a fake that agreed with the file step 10 is supposed to write could not
-  exercise step 10 at all.
+  exercise step 10 at all. It answers the event-name query with `Stub event <id>`, so the
+  page shows a name rather than falling back to its generic title; `PANTHEON_STUB_EVENT_TITLE`
+  sets a different one.
 - **Neither, yet** — `npm run rehearse` does the whole of B, C and D in a throwaway
   repository, including this step and its refusals.
 

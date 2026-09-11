@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-351%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-354%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -62,7 +62,7 @@ flowchart LR
 ```sh
 git clone <本仓库> && cd mahjong-random-seating
 npm ci
-npm test                  # 351 个单元测试，完全离线，约 12 秒
+npm test                  # 354 个单元测试，完全离线，约 12 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
 ```
 
@@ -86,7 +86,7 @@ npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分�
 
 ```sh
 npm ci
-npm test                  # 351 个单元测试，离线，约 12 秒
+npm test                  # 354 个单元测试，离线，约 12 秒
 npm run verify-template   # 重新推导冻结模板的每一条不变量
 npm run e2e               # 对着真实 drand 跑 RUNBOOK A2-A7，约 90 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
@@ -112,7 +112,7 @@ PANTHEON_MODE=stub npm run serve                # http://127.0.0.1:8080
 它需要一个可读的 Pantheon，开发环境下有三条路：
 
 - **一个真实实例** —— `PANTHEON_MODE=twirp`，加上 [`deploy/README.zh.md`](deploy/README.zh.md) §2 里的基础 URL 和管理员凭证。`tools/pantheon-fixture.js --accounts` 会在上面建好一场测试活动，连十二个账号一起。
-- **完全没有 Pantheon** —— `PANTHEON_MODE=stub`，用 `PANTHEON_STUB_ROSTER` 指向一个小的报名 JSON 文件。这个桩故意不从 `roster.json` 自举：一个和第 10 步本该写出的文件完全一致的假实现，根本没法用来检验第 10 步。
+- **完全没有 Pantheon** —— `PANTHEON_MODE=stub`，用 `PANTHEON_STUB_ROSTER` 指向一个小的报名 JSON 文件。这个桩故意不从 `roster.json` 自举：一个和第 10 步本该写出的文件完全一致的假实现，根本没法用来检验第 10 步。它回答活动名称查询时给的是 `Stub event <id>`，所以页面会显示一个名字，而不是退回通用标题；`PANTHEON_STUB_EVENT_TITLE` 可以换成别的。
 - **暂时两样都没有** —— `npm run rehearse` 会在一个用完即弃的仓库里跑完 B、C、D 全部内容，包括这一步和它的各种拒绝。
 
 <details>
