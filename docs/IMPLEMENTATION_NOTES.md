@@ -1377,12 +1377,50 @@ The table itself is reordered into the sequence a reader meets them, with the tw
 prerequisites marked in bold where they are: read `PROTOCOL.md` before changing code,
 read `RUNBOOK.md` before running anything for real.
 
+## 6t. The sign-in form's one button, and then its second
+
+Sign-in in stub mode and sign-in against Pantheon are the same card with different
+fields. They did not look it. The production form's password field carried a reveal
+toggle that had been drawn as a 40px icon inside the box and was arriving as a full-width
+block under it, so the two modes did not read as one page with one field swapped.
+
+The toggle's own rule was right. It lost:
+
+```css
+button.primary, button.secondary, form.signin button, .card button[type="submit"] { … }
+```
+
+`form.signin button` was written when the sign-in form had one button. The reveal is the
+second, and `form.signin button` (0,1,2) out-specifies `.pw-reveal` (0,1,0), so the
+toggle's `width: 40px`, `height: 40px`, `padding: 0` and `margin: 0` all lost to
+`width: 100%`, `min-height: 48px`, `padding: 13px 20px` and `margin-top: 12px`. It stayed
+absolutely positioned, because nothing contested that — an icon centred in a full-width
+box, pushed 12px past the bottom of the field it belonged to.
+
+This is [§6q](#6q-two-classes-with-the-same-name-and-a-stub-with-nothing-to-say) again one
+element down. There the collision was a word two components both used; here it is a
+container claiming every button it will ever hold. A selector ending in a bare `button` is
+a promise about the future contents of a container, and that is not a promise a stylesheet
+can keep. `form.signin button` was also redundant — the form is a `.card`, and
+`.card button[type="submit"]` already matched — so it is simply gone. The header nav's
+buttons, which had the same shape of claim and had not yet been bitten, are now
+`.nav-btn`.
+
+`test/styles.test.js` gains the invariant, and it found the nav on its first run.
+
+**The labels are icons now.** A word above each box said nothing an envelope and a padlock
+do not, and cost two lines of a card that has four things on it. The word stays in the
+markup on an `.sr-only` label, so the field is still named to a screen reader; the icon is
+`aria-hidden` and takes its colour from `:focus-within`, so it brightens with the field it
+labels. Stub mode's `person_id` field takes the same shell and a person glyph, which is
+the point: the two modes now differ by their fields and by nothing else.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 362 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents | pass |
+| Unit tests (`npm test`) — 363 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |

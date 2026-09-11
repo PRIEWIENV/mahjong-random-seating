@@ -116,20 +116,20 @@ header.site .site-nav {
   padding: 3px; border: 1px solid var(--line); border-radius: 99px;
   background: var(--panel);
 }
-header.site .site-nav button {
+header.site .site-nav .nav-btn {
   flex: 1; min-height: 34px; padding: 4px 14px; border: 0; border-radius: 99px;
   background: none; color: var(--muted); font: inherit; font-size: 0.85rem; cursor: pointer;
   transition: background 160ms ease, color 160ms ease;
   white-space: nowrap;
 }
-header.site .site-nav button:hover { color: var(--ink); }
-header.site .site-nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+header.site .site-nav .nav-btn:hover { color: var(--ink); }
+header.site .site-nav .nav-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
 /* Wide enough for three groups on one line: the nav returns to the middle. */
 @media (min-width: 720px) {
   header.site { flex-wrap: nowrap; }
   header.site .site-nav { order: 0; width: auto; }
-  header.site .site-nav button { flex: none; }
+  header.site .site-nav .nav-btn { flex: none; }
 }
 header.site .brand {
   display: flex; align-items: center; gap: 9px;
@@ -229,12 +229,17 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
   font-family: var(--mono); opacity: 0.75; word-break: break-word;
 }
 
-button.primary, button.secondary, form.signin button, .card button[type="submit"] {
+/* Every selector here names the button it means. `form.signin button` used to sit in
+   this list, and it also matched the password reveal — a 40px icon inside the field,
+   which it stretched to a full-width 48px block and pushed 12px below the input. A
+   card's submit button is `button[type="submit"]`; a bare `button` in a form is not
+   necessarily one. */
+button.primary, button.secondary, .card button[type="submit"] {
   width: 100%; min-height: 48px; padding: 13px 20px; border-radius: 12px; border: 0;
   font: 600 1rem/1 inherit; cursor: pointer; margin-top: 12px;
   transition: transform 140ms ease, filter 140ms ease, box-shadow 140ms ease;
 }
-button.primary, form.signin button[type="submit"], .card button[type="submit"] {
+button.primary, .card button[type="submit"] {
   background: linear-gradient(180deg, var(--accent), var(--accent-deep));
   color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.16), 0 8px 20px -10px var(--accent);
 }
@@ -245,6 +250,12 @@ button.primary:hover:not(:disabled) { filter: brightness(1.06); transform: trans
 button.primary:active:not(:disabled) { transform: translateY(0); }
 
 label { display: block; font-size: 0.8rem; color: var(--muted); margin: 14px 0 6px; }
+/* A label that is an icon on screen is still a word to a screen reader. Removed from
+   the layout, not from the accessibility tree — `display: none` would take it from both. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 input[type="text"], input[type="email"], input[type="password"], .signin input {
   width: 100%; min-height: 48px; padding: 12px 14px;
   border: 1px solid var(--line); border-radius: 12px;
@@ -257,7 +268,8 @@ input:focus-visible, button:focus-visible, .grid th:focus-visible, .lang-toggle:
 .env-tile:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
-.devnote { background: var(--warn-soft); color: var(--warn); font-size: 0.7rem; padding: 2px 6px; border-radius: 5px; margin-left: 8px; }
+/* Opens the line that explains the stand-in field, so it leads rather than trails. */
+.devnote { background: var(--warn-soft); color: var(--warn); font-size: 0.7rem; padding: 2px 6px; border-radius: 5px; margin-right: 8px; white-space: nowrap; }
 
 /* ---- submit ---------------------------------------------------------- */
 .stage.centre > .card.submit { max-width: 460px; text-align: center; }
@@ -501,11 +513,26 @@ table.opponents tr.imperfect { color: var(--warn); }
 .spinner { width: 24px; height: 24px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 99px; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---- password reveal ------------------------------------------------- */
+/* ---- fields with an icon for a label ---------------------------------- */
+/* Sign-in names its fields with an icon inside the box instead of a word above it
+   (UI-SPEC §3), so both sign-in modes are one card with one field shell and differ
+   only in the fields themselves. The word is still in the markup, as .sr-only. */
+.field { position: relative; margin: 12px 0 0; }
+.field input { padding-left: 44px; }
+.field-icon {
+  position: absolute; left: 13px; top: 50%; translate: 0 -50%;
+  width: 20px; height: 20px; pointer-events: none;
+  color: var(--muted); fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+  transition: color 140ms ease;
+}
+/* :focus-within, not `input:focus ~`, so the icon may stay first in the markup: it is
+   the label, and a label reads before its field. */
+.field:focus-within .field-icon { color: var(--accent); }
+
 /* The field and its toggle are one control, so the button sits inside the box rather
    than beside it — otherwise the input's focus ring draws a line between them. */
-.pw-field { position: relative; }
-.pw-field input { padding-right: 52px; }
+.field.pw input { padding-right: 52px; }
 .pw-reveal {
   position: absolute; top: 50%; right: 6px; translate: 0 -50%;
   display: grid; place-items: center;
@@ -516,6 +543,17 @@ table.opponents tr.imperfect { color: var(--warn); }
 .pw-reveal:hover { color: var(--accent); background: var(--accent-soft); }
 .pw-reveal .eye { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .pw-reveal .eye-slash { stroke-width: 1.9; }
+/* 44px on a thumb, and the text makes room for it. This is the phone-in-a-clubhouse
+   control the field was given a toggle for in the first place. */
+@media (pointer: coarse) {
+  .pw-reveal { width: 44px; height: 44px; }
+  .field.pw input { padding-right: 56px; }
+}
+
+/* The stand-in field's one line of explanation belongs to the field above it, not to
+   the button below: a paragraph's default margin here would make the stub card taller
+   than the production card it stands in for. */
+.card.signin .hint { margin: 10px 0 0; }
 
 /* ---- the deadline band on the submission stage ------------------------ */
 /* The time remaining leads, because it is the only number here a player acts on without

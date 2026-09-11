@@ -120,14 +120,14 @@ function Chrome({ lang, setLang, me, onSignOut, children, stage, view, setView, 
             draw currently is, the right one is the explanation of it. */}
         <nav className="site-nav" aria-label={t.navLabel}>
           <button
-            className={view === 'draw' ? 'on' : ''}
+            className={view === 'draw' ? 'nav-btn on' : 'nav-btn'}
             onClick={() => setView('draw')}
             aria-current={view === 'draw' ? 'page' : undefined}
           >
             {t.navDraw}
           </button>
           <button
-            className={view === 'doc' ? 'on' : ''}
+            className={view === 'doc' ? 'nav-btn on' : 'nav-btn'}
             onClick={() => setView('doc')}
             aria-current={view === 'doc' ? 'page' : undefined}
           >

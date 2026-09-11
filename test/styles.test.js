@@ -57,6 +57,28 @@ test('a card sized by its stage says which stage', () => {
     + '(".stage.centre > .card.x").');
 });
 
+test('a rule that shapes a form button says which button', () => {
+  // The same bug, one element down. `form.signin button` was written for the sign-in
+  // form's one button, and then the password field grew a second one: a 40px icon
+  // inside the box, which the rule stretched to a full-width 48px block and pushed
+  // 12px below the input. It out-specifies `.pw-reveal`, so the toggle's own width,
+  // height, padding and margin all lost, and the control a player taps to see what
+  // they typed ended up under the field instead of in it.
+  //
+  // A selector ending in a bare `button` is a claim on every button a container will
+  // ever hold. Naming the button — `[type="submit"]`, `.primary` — is the fix.
+  const loose = [];
+  for (const { selector, body } of rules(css)) {
+    if (!/(^|[\s>+~])button$/.test(selector)) continue;
+    if (!/(^|[\s;])(width|min-height|height|padding|margin)\s*:/.test(body)) continue;
+    loose.push(selector);
+  }
+  assert.deepEqual(loose, [],
+    `these give a shape to every button inside a container: ${loose.join(', ')}. Say `
+    + 'which button (\'button[type="submit"]\', \'button.primary\'), or the next one '
+    + 'added to that container silently takes the shape too.');
+});
+
 test('the timeline names its own states', () => {
   // The other half of the same fix. A component's state modifier shares an element with
   // every other class on it, so an unprefixed one is a claim on a word the whole

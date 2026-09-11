@@ -11,6 +11,10 @@ import { useText } from '../i18n';
  * The two failure messages must stay distinct and non-confusable. "Not registered for
  * this event" is a normal outcome, not an error state, and is styled as information —
  * a player who is simply not in the twelve should not be made to feel something broke.
+ *
+ * Stub mode swaps the fields and nothing else. It is the same card, the same shell and
+ * the same rhythm, because it is the page a player will meet in production and the only
+ * honest way to look at it in development is for it to be the same page.
  */
 
 const TEXT = {
@@ -24,6 +28,7 @@ const TEXT = {
     devHint: '本机没有可连的 Pantheon 实例，所以走的是开发替代路径；正式部署时这里是邮箱和密码。',
     email: '邮箱',
     password: '密码',
+    pidPlaceholder: 'Pantheon person_id，例如 1001',
     signIn: '登录',
     signingIn: '登录中…',
     rejected: 'Pantheon 不认识这个邮箱和密码。',
@@ -43,6 +48,7 @@ const TEXT = {
     devHint: 'No Pantheon instance is reachable here, so this is the development stand-in. A real deployment asks for an email and password.',
     email: 'Email',
     password: 'Password',
+    pidPlaceholder: 'Pantheon person_id, e.g. 1001',
     signIn: 'Sign in',
     signingIn: 'Signing in…',
     rejected: 'Pantheon did not recognise that email and password.',
@@ -53,6 +59,41 @@ const TEXT = {
     fineprint: 'Your password goes to Pantheon only. It never passes through this app.',
   },
 };
+
+/**
+ * The field labels, as icons inside the box (UI-SPEC §3). An envelope and a padlock are
+ * the two most over-learned glyphs on the web; a word above each box said nothing they
+ * do not, and cost two lines of the card's height.
+ *
+ * Decorative in the accessibility tree — the word itself is on an .sr-only <label>, so
+ * the field is still announced, and stroke and colour come from .field-icon.
+ */
+function MailIcon() {
+  return (
+    <svg className="field-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="5.5" width="18" height="13" rx="2.5" />
+      <path d="M3.8 7.7 12 12.9l8.2-5.2" />
+    </svg>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg className="field-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4.5" y="10.4" width="15" height="9.6" rx="2.4" />
+      <path d="M8.25 10.4V7.6a3.75 3.75 0 0 1 7.5 0v2.8" />
+    </svg>
+  );
+}
+
+function PersonIcon() {
+  return (
+    <svg className="field-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="8.4" r="3.4" />
+      <path d="M4.9 19.6a7.2 7.2 0 0 1 14.2 0" />
+    </svg>
+  );
+}
 
 /** An eye, struck through while the password is visible: the icon shows what tapping
  *  it will do next, which is the convention every password field on a phone uses. */
@@ -134,21 +175,32 @@ export default function SignIn({ status, onSignedIn }) {
 
         {stub ? (
           <>
-            <label htmlFor="pid">Pantheon person_id<span className="devnote">{t.devMode}</span></label>
-            <input id="pid" inputMode="numeric" autoComplete="off" value={personId}
-                   onChange={(e) => setPersonId(e.target.value)} placeholder="1001" required />
-            <p className="hint">{t.devHint}</p>
+            <label className="sr-only" htmlFor="pid">Pantheon person_id</label>
+            <div className="field">
+              <PersonIcon />
+              <input id="pid" inputMode="numeric" autoComplete="off" value={personId}
+                     onChange={(e) => setPersonId(e.target.value)}
+                     placeholder={t.pidPlaceholder} required />
+            </div>
+            <p className="hint"><span className="devnote">{t.devMode}</span>{t.devHint}</p>
           </>
         ) : (
           <>
-            <label htmlFor="email">{t.email}</label>
-            <input id="email" type="email" autoComplete="username" value={email}
-                   onChange={(e) => setEmail(e.target.value)} required />
-            <label htmlFor="pw">{t.password}</label>
-            <div className="pw-field">
+            <label className="sr-only" htmlFor="email">{t.email}</label>
+            <div className="field">
+              <MailIcon />
+              <input id="email" type="email" autoComplete="username" value={email}
+                     onChange={(e) => setEmail(e.target.value)}
+                     placeholder={t.email} required />
+            </div>
+
+            <label className="sr-only" htmlFor="pw">{t.password}</label>
+            <div className="field pw">
+              <LockIcon />
               <input id="pw" type={showPassword ? 'text' : 'password'}
                      autoComplete="current-password" value={password}
-                     onChange={(e) => setPassword(e.target.value)} required />
+                     onChange={(e) => setPassword(e.target.value)}
+                     placeholder={t.password} required />
               <button
                 type="button"
                 className="pw-reveal"

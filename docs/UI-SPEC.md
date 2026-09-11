@@ -41,7 +41,11 @@ A centred card: event name, one line of explanation ("Sign in with your Pantheon
 
 The heading carries the event's own name when Pantheon has given one — "2026 Spring Open seating draw", not "Seating draw". A club runs several of these a year and a player may have two open; a page that cannot be told apart from last month's is a page people submit into by mistake. The name is read from Mimir at boot and is not frozen: it is a label, and no value it can take changes who sits where (PROTOCOL.md §4.2).
 
-The password field carries a reveal toggle, off by default. Typing a password blind on a phone in a noisy clubhouse is how three failed attempts become "Pantheon has forgotten me".
+Each field is labelled by an icon inside its box — an envelope, a padlock — rather than by a word above it. The word stays in the markup for a screen reader. Two over-learned glyphs say what two lines of the card's height were saying.
+
+The password field carries a reveal toggle, off by default, inside the box at the right-hand end. Typing a password blind on a phone in a noisy clubhouse is how three failed attempts become "Pantheon has forgotten me".
+
+Stub mode swaps the fields and nothing else: same card, same shell, same rhythm. It is the page a player will meet in production, and the only honest way to look at it in development is for it to be the same page.
 
 The browser authenticates against Pantheon directly and posts only the returned token pair to our backend (see `PANTHEON-INTEGRATION.md` §2). Two failure messages, distinct and non-confusable:
 
