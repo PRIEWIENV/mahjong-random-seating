@@ -62,6 +62,8 @@ The drand signature for the target round is folded into the seed as well (§7). 
 
 Four files are frozen together and git-tagged before submissions open: `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js`.
 
+In **the operator's** repository. Anyone can run this code for their own event, so the commitment is made where that event is run, not where the code is written: `roster.json` and `protocol.json` are gitignored in the source tree and `tools/freeze.js` adds them with `-f`. A developer's test event committed upstream would publish twelve real Pantheon ids and prove nothing to anybody.
+
 ### 4.1 What belongs in the freeze
 
 One test decides it:

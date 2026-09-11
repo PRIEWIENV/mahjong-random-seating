@@ -336,7 +336,12 @@ async function main(argv) {
     }
   };
 
-  git(['add', ...FROZEN, 'public/app.js', 'public/app.css', 'public/app.js.sha256'], 'git add');
+  // -f because data/roster.json and data/protocol.json are gitignored in the source
+  // repository: they are one event's data, and the developer's tree is not where any
+  // event is committed. In an operator's checkout they must be, and this is the command
+  // that does it. After the first freeze they are tracked, so the ignore stops applying
+  // to them there and the flag becomes a no-op.
+  git(['add', '-f', ...FROZEN, 'public/app.js', 'public/app.css', 'public/app.js.sha256'], 'git add');
 
   // Nothing staged is a legitimate state: the operator may have committed the four by
   // hand already. The tag is what players are told, so it still has to be created — but

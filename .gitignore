@@ -3,8 +3,16 @@ secrets/
 *.env
 .env*
 
-# Note: roster.json and protocol.json MUST be committed and tagged — they are part of the
-# public commitment. Do not add them here.
+# One event's data, not source. These two are the public commitment and they MUST be
+# committed and tagged — in the OPERATOR's repository, by tools/freeze.js, which adds
+# them with -f for exactly this reason. This repository is the code; anyone can run it
+# for their own event, and the target round, the cutoff and twelve real Pantheon ids and
+# names belong to whoever did, in their own tree. Committing a developer's test event
+# here would publish those people and prove nothing to anyone.
+#
+# data/*.example.json is the shape reference and IS committed.
+data/protocol.json
+data/roster.json
 
 # The deliberate opposite: operational settings (PROTOCOL.md §4.2). Nothing in here can
 # change or steer the outcome, and it may need to change mid-window — a dead drand

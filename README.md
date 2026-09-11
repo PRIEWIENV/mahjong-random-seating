@@ -163,6 +163,8 @@ data/
   roster.example.json        # shape reference; the real one is written by tools/freeze.js
   protocol.example.json      # FROZEN parameters: chain, target round, quorum, input range
   runtime.example.json       # operational settings — not frozen, not tagged, optional
+                             # protocol.json and roster.json are gitignored here: they are
+                             # one event's data, frozen in the tree that event is run from
 server/
   server.js                  # the six endpoints of §6, plus the SSE stream
   finalise.js                # the draw job and the Pantheon sync (§5, §8) — a separate
@@ -212,7 +214,7 @@ deploy/
 ## Hard rules
 
 1. **Do not hand-edit `data/schedule_template.json`.** Any change breaks the proved properties. If it must change, re-run `tools/verify_template.py` and repeat the freeze from scratch.
-2. **`roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` are frozen and git-tagged together before submissions open.** After that a single changed byte voids the guarantee and the run restarts.
+2. **`roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` are frozen and git-tagged together before submissions open, in the repository the event is run from.** After that a single changed byte voids the guarantee and the run restarts. The first two are gitignored here on purpose — they are one event's data, and `tools/freeze.js` force-adds them in the tree that event belongs to.
 3. **Those four, and nothing else.** A parameter is frozen if changing it mid-window could change or steer the outcome, and operational otherwise (`PROTOCOL.md` §4.1). Freezing more than that is not extra caution: it means the organiser will eventually have a good reason to edit a tagged file, which is the habit the freeze exists to prevent.
 4. **The quorum rule is frozen too** (see `PROTOCOL.md` §8). It must not be renegotiated when a 7-of-12 situation actually arises — deciding after the fact is itself a manipulable step.
 5. **A voided attempt is archived, never deleted.** Its ciphertexts, the roll at the cutoff and the `protocol.json` it ran under are published under `events/rounds/<target_round>/` so anyone can confirm the round really was short of quorum. Opening the next attempt requires re-freezing first, and `tools/new-round.js` refuses while the archive does not verify.

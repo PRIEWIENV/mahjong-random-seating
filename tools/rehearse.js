@@ -92,9 +92,10 @@ function makeSandbox() {
   // step 10's refusals would run against whatever event this tree was last pointed at
   // and report "0 seated players" instead of the refusal being tested.
   //
-  // They have to be named rather than simply absent. Both are committed in the real
-  // repository — they ARE the public commitment — and this broke the moment they first
-  // were.
+  // They are gitignored in this repository, so here the filter is belt and braces. It
+  // is load-bearing in an operator's tree: once they have frozen an event, freeze.js has
+  // force-added both, `git ls-files` lists them, and a rehearsal for the NEXT event
+  // would silently inherit the last one's roster.
   const MADE_BY_STEPS_9_AND_10 = new Set(['data/protocol.json', 'data/roster.json']);
   const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
     .split('\0').filter(Boolean)

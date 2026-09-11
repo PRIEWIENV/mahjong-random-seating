@@ -21,6 +21,13 @@ node tools/verify-template.js              # re-derive the template invariants
 chown -R mahjong:mahjong /opt/mahjong
 ```
 
+`<repo>` is **your** repository, not the one the code was developed in. The freeze is a
+commitment to an event you are running: `data/protocol.json` and `data/roster.json` hold
+your target round and your twelve players, they are gitignored upstream for that reason,
+and `tools/freeze.js` force-adds them into the tree you tag and push. Fork it or clone it
+somewhere you can push to, and freeze there. Players are given that tag and that commit
+id; a tag nobody but you can fetch is not a commitment (PROTOCOL.md §9).
+
 `npm ci --omit=dev` is deliberate: the server needs `tlock-js`, and nothing else.
 
 If `--verify-hash` fails on a **fresh clone**, suspect the checkout before suspecting
