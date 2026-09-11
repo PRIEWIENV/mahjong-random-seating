@@ -1292,12 +1292,97 @@ The stub branch now answers `Stub event <id>`. It says "Stub" because it is not 
 event's name and nobody should be able to mistake it for one; `PANTHEON_STUB_EVENT_TITLE`
 replaces it, and an operator's `runtime.json` still wins over both.
 
+## 6r. The install was written for someone who had already done it
+
+`deploy/README.md` §1 opened with a block of six commands to paste. The second one was
+
+```sh
+git checkout frozen-v1                     # the tag from RUNBOOK step 11
+```
+
+and there is no tag called that. There never was. RUNBOOK step 11 creates one under
+whatever name the organiser chooses, on a different machine, and pushes it. So a new
+operator following the deployment document from the top stopped on its second line with
+`pathspec 'frozen-v1' did not match any file(s) known to git`, and nothing above that
+line had said the freeze was a prerequisite at all.
+
+The literal name was the smaller half. The document never stated that this step is the
+one that carries the event into the checkout: `data/protocol.json` and `data/roster.json`
+are gitignored, and `tools/freeze.js` force-adds them, so a clone of the default branch
+holds no event whatsoever. Skipping the checkout does not produce a deployment missing a
+label. It produces a deployment with nothing to serve.
+
+And the sixth line, `chmod 600 .env`, fails on a fresh clone too, for the same species of
+reason: the block is written in an order that assumes §2 has already happened. It says so
+in a trailing comment, which is not a thing a paste obeys. It now lives in §2, beside the
+file it protects.
+
+So §1 states the prerequisite before the block, `<tag>` is a placeholder like `<repo>`
+beside it, `git tag -l` is in the block so an operator can see what they may check out,
+and the template verifier is marked as needing Python 3 and as skippable on a box that
+has none.
+
+### The error that was right and unreadable
+
+An operator who gets past the document still meets this if the checkout was skipped, and
+the message they met was worse than the document:
+
+    missing data/protocol.json — copy the .example file, fill it in, and freeze it
+
+That is correct guidance on the machine where the event is prepared and actively harmful
+on a deployment box. Hand-writing `protocol.json` there produces a round that matches no
+tag, which is not a freeze — it is a draw with nothing for a player to check it against,
+and the operator who did it would have no reason to think anything was wrong. The message
+now names both situations, and names hand-writing the file as the wrong one.
+
+It also arrived as an unhandled exception. `server.js` prints `err.message` and exits 2
+for errors marked `operator` and rethrows everything else, and nothing in `config.js` set
+the flag — so a message whose whole job is to say what to run next was delivered in the
+middle of a ten-frame stack trace. Every failure in `load()` is a deployment to fix rather
+than a bug to report, so `load()` marks them all.
+
+Both halves are held by tests. `test/docs.test.js` refuses a `git checkout` of anything
+but a placeholder in the deployment and runbook documents, and refuses a `chmod` of
+`.env` that appears before the section writing it. `test/config.test.js` pins what the
+message has to name, and that the flag is set. Verified as well by the thing none of them
+does: a fresh clone of the default branch, no tag in it, `node server/server.js`, and
+reading what came out.
+
+## 6s. Seven documents and no order between them
+
+The document set was complete and unordered. Each file said what it was about; none said
+when you needed it, and the README's table listed all seven as though a reader would pick
+the right one. Two consequences, and the second is the one that cost an afternoon.
+
+The first is that nobody could tell which documents they could skip. There are three ways
+into this repository — see it work, change it, run a draw for real — and they need three
+different subsets. The README now opens with those three as sequences rather than with a
+single "quick start" that serves the first and abandons the other two.
+
+The second is that **deployment is a step inside the runbook and neither document said
+so**. It belongs between B and C: RUNBOOK step 11 pushes a tag, `deploy/README` §1 checks
+that tag out, and until step 11 has run there is nothing to install. Read in the other
+order — which is the natural order, since a deployment document looks like where you start
+a deployment — the reader gets four lines in before being told to check out a tag that
+cannot exist yet. That is exactly what happened.
+
+It is not a link that was missing, it is a dependency. So it is stated in all three
+places a reader can be standing: the README's operator sequence names the joint, the
+runbook says deployment happens between B and C, and the deployment document opens by
+sending the reader back to the runbook. `test/docs.test.js` holds the last two, in both
+languages, along with a check that every relative link between documents resolves —
+cheap, and easy to break, since half of them cross a directory boundary and half do not.
+
+The table itself is reordered into the sequence a reader meets them, with the two
+prerequisites marked in bold where they are: read `PROTOCOL.md` before changing code,
+read `RUNBOOK.md` before running anything for real.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 354 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope | pass |
+| Unit tests (`npm test`) — 362 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1346,6 +1431,9 @@ replaces it, and an operator's `runtime.json` still wins over both.
 | An envelope opens on click and on Enter or Space, and hover changes nothing | passes |
 | No card is sized by a bare class, and the timeline names its own states — both watched failing on a broken stylesheet | passes |
 | Stub mode serves an event name, checked by booting the real server against the real data directory | passes |
+| A fresh clone of the default branch, with no tag in it, refuses to start and says to check the tag out | passes |
+| No deployment document checks out a tag name it invented, and none protects `.env` before writing it | passes |
+| Every relative link between the sixteen documents resolves, and the runbook and the deployment document each point at the other | passes |
 | A database from another round is refused at startup by both the server and the draw job | passes |
 | A finished event is archived, verified and then cleared; an unfinished one is not closed without saying so | passes |
 | A Frey address that resolves on one machine only is flagged, and a real domain is not | passes |

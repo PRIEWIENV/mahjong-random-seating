@@ -4,6 +4,8 @@
 
 有先后顺序——不要跳步。带锁标记的步骤进入冻结状态；此后任何东西都不得再修改。
 
+部署是这份清单里的一步，位置在 **B** 和 **C** 之间，由 [`../deploy/README.zh.md`](../deploy/README.zh.md) 承担。它不可能更早：第一条命令就要检出第 11 步打出的那个 tag，而正是那个 tag 才把 `data/protocol.json` 和 `data/roster.json` 带进 checkout。
+
 ## A. 实现阶段（还没有真实选手参与）
 
 1. 按 `PROTOCOL.zh.md`、`PANTHEON-INTEGRATION.zh.md` 和 `UI-SPEC.zh.md` 把应用做出来。
@@ -60,7 +62,7 @@
 16. 把选手引到结果页。任何愿意核验的人，都应当能仅凭公开信息复现出同一张座位表：
 
     ```sh
-    git checkout frozen-v1
+    git checkout <tag>            # 第 11 步公布的那一个
     node generate.js --verify results.json     # 整个文件，外加点名核对
     python3 tools/verify_template.py data/schedule_template.json
     ```

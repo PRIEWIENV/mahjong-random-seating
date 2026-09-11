@@ -402,3 +402,53 @@ test('a Frey address that resolves on one machine only is flagged', () => {
     assert.equal(at(url), false, `${url} must not be flagged`);
   }
 });
+
+/** assert.throws returns nothing, and these tests are about the message. */
+function caught(fn) {
+  try { fn(); } catch (err) { return err; }
+  throw new assert.AssertionError({ message: 'expected a throw, and nothing was thrown' });
+}
+
+/**
+ * The first thing a new operator sees when the deploy went wrong.
+ *
+ * This error used to say "copy the .example file, fill it in, and freeze it", which is
+ * right on the machine where the event is prepared and actively harmful on a deployment
+ * box: hand-writing protocol.json there produces a round that matches no tag, and the
+ * tag is the whole of what a player is given to check against. The file is missing in
+ * both places for the same reason — it is gitignored until the freeze commits it — so
+ * the message has to name both situations and say which is which.
+ */
+test('a missing frozen file sends a deploying operator to the tag, not to the example', () => {
+  const empty = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'no-freeze-'));
+  const failed = caught(() => load({ dataDir: empty }));
+  assert.match(failed.message, /missing .*protocol\.json/);
+  assert.match(failed.message, /git checkout <tag>/, 'the deployment remedy must be a checkout');
+  assert.match(failed.message, /git tag -l/, 'and it has to say how to find the tag');
+  assert.match(failed.message, /pick-round|freeze\.js/, 'the preparing remedy is still named');
+  assert.match(failed.message, /by hand/, 'and hand-writing it has to be called out as wrong');
+  fs.rmSync(empty, { recursive: true, force: true });
+});
+
+test('the same guidance covers a roster that never made it into the tag', () => {
+  // roster.json is the other half of the freeze and lands in exactly the same hole: a
+  // clone of the default branch has protocol.json only if somebody committed it by hand.
+  const fx = makeDataDir();
+  fs.rmSync(path.join(fx.dataDir, 'roster.json'));
+  const failed = caught(() => load({ dataDir: fx.dataDir }));
+  assert.match(failed.message, /missing .*roster\.json/);
+  assert.match(failed.message, /git checkout <tag>/);
+  cleanup(fx.dir);
+});
+
+test('a configuration failure is an operator refusal, not a crash', () => {
+  // server.js and finalise.js print err.message and exit 2 for these, and rethrow
+  // anything else. Without the flag the remedy above arrived inside a stack trace, which
+  // is how a message that says exactly what to run goes unread.
+  const empty = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'no-freeze-'));
+  assert.equal(caught(() => load({ dataDir: empty })).operator, true);
+  fs.rmSync(empty, { recursive: true, force: true });
+
+  const bad = caught(() => withProtocol((p) => { p.quorum = 2; }));
+  assert.equal(bad.operator, true, 'a refused value is the operator’s to fix too');
+});

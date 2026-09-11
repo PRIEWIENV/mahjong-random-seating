@@ -4,20 +4,28 @@
 
 一个 Node 进程跑在反向代理后面，状态存在 SQLite 里。它既服务页面，也用自己的定时器负责开奖，所以没有别的东西要装，也不需要 root。应用和 Pantheon 共用一台主机，所以后端到 Pantheon 的调用走 localhost。
 
+> **前置条件：[`docs/RUNBOOK.zh.md`](../docs/RUNBOOK.zh.md) 做到第 11 步。** 这是那份清单里的部署步骤，位置在 B 和 C 之间。§1 检出的正是第 11 步推出的那个 tag；抽签结束后由 RUNBOOK E 收尾。
+
 这里没有任何一份秘密能提前打开一份提交。机器上仅有的两份凭证是用于镜像的 GitHub PAT 和用于座位表同步的 Pantheon 管理员账号——这两者最坏也只能往某处写东西。
 
 ## 1. 安装
+
+**必须先有一个已推送的冻结 tag。** `data/protocol.json` 和 `data/roster.json` 被 gitignore，只有 RUNBOOK 第 11 步会把它们提交进去，所以克隆默认分支得到的树里没有活动，服务器会拒绝启动。不要改为在这里手写这两个文件：不在 tag 里的那份 protocol 就不是冻结的，而选手拿到的正是那个 tag（`PROTOCOL.zh.md` §9）。
 
 不需要 root，也不需要新建用户。所有东西都在一个你本来就拥有的目录里：
 
 ```sh
 git clone <repo> ~/mahjong && cd ~/mahjong
-git checkout frozen-v1                     # RUNBOOK 第 11 步打的那个 tag
+git tag -l                                 # 这个克隆能看到的冻结 tag
+git checkout <tag>                         # RUNBOOK 第 11 步公布的那一个
 npm ci --omit=dev
 node tools/build-client.js --verify-hash   # 已提交的 bundle 与其已提交的哈希一致
-node tools/verify-template.js              # 重新推导模板不变量
-chmod 600 .env                             # §2 写出它之后
+node tools/verify-template.js              # 模板不变量；需要 Python 3，在这台机器上可跳过
 ```
+
+`<tag>` 是占位符。这份文档不可能知道你的 tag 名，也没有默认值；`git tag -l` 为空说明它从未被推上去，可以用 `git ls-remote --tags <repo>` 确认。
+
+`verify-template.js` 是检查而不是安装步骤，也是这里唯一一条 Node 之外还需要别的东西的命令。没有 Python 3 的机器可以跳过这一行，在别处对着同一个 tag 跑。`.env` 和保护它的 `chmod` 都在 §2，因为文件不存在时两者都做不了。
 
 这份清单里没有一步需要特权，而这是设计的性质，不是图省事。进程监听一个高位端口，因为 TLS 由前面的东西终结（§4）。它只在自己的 checkout 里写文件。它不打开任何设备、不加入任何用户组、不向系统注册任何东西。它持有的两份凭证是一个 GitHub PAT 和一个 Pantheon 账号，而两者都是**你的**秘密，不是这台机器的秘密——这也正是为什么一个专用系统账号在这里买到的东西比通常少：要保护的东西无论如何都在 `.env` 里，而文件权限位就能做到。
 
@@ -33,7 +41,7 @@ chmod 600 .env                             # §2 写出它之后
 ```sh
 sudo adduser --system --group --home /opt/mahjong mahjong
 sudo -u mahjong git clone <repo> /opt/mahjong/app
-cd /opt/mahjong/app && sudo -u mahjong git checkout frozen-v1
+cd /opt/mahjong/app && sudo -u mahjong git checkout <tag>
 sudo -u mahjong npm ci --omit=dev
 sudo -u mahjong node tools/build-client.js --verify-hash
 sudo chown -R mahjong:mahjong /opt/mahjong
@@ -81,6 +89,12 @@ PANTHEON_ADMIN_TOKEN=...
 ```sh
 # 组织者面板。没有这个，/admin 路由根本不存在。
 ADMIN_TOKEN=...                      # openssl rand -hex 16
+```
+
+文件存在之后，把权限收紧——它装着一个 GitHub token 和一个 Pantheon 账号，是这台机器上唯一值得保护的东西：
+
+```sh
+chmod 600 .env
 ```
 
 **是谁在读这个文件。** 是进程自己，在启动时读，并且在最初几行日志里报出它读了哪个文件。这件事以前只有 systemd 单元通过 `EnvironmentFile=` 在做，也就是说 §3 里其他每一种启动方式——tmux、`nohup`、crontab、直接开个终端——跑出来的服务器从来没见过上面任何一项。而这看上去哪里都不像出了问题：它照常供页面、照常让人登录、照常收下密文，然后**一份也不镜像**，于是那条阻止组织者在看到结果之后丢掉一份碍事提交的性质（§5）就这么悄悄没了。环境里已经设好的变量仍然优先于文件，所以 `PORT=9000 node server/server.js` 还是它字面的意思。

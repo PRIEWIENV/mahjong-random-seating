@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-354%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-362%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -21,7 +21,7 @@
 两个部分彼此独立，而且都已完成：组合学部分求解到了可证最优，抽签部分是一个可运行的 Web 应用，配有成文的协议、运营手册，以及一套三分钟就能跑完的端到端排练。
 
 **目录** — [工作原理](#工作原理) · [保证了什么](#保证了什么) ·
-[快速开始](#快速开始) · [文档](#文档) ·
+[从哪里开始](#从哪里开始) · [文档](#文档) ·
 [如何运行](#如何运行) · [项目状态](#项目状态) ·
 [仓库结构](#仓库结构) · [硬性规则](#硬性规则) ·
 [许可证](#许可证)
@@ -57,42 +57,68 @@ flowchart LR
 
 座位模板本身也不是启发式凑出来的。任意两人恰好同桌三次；每个位置的风位分布恰好是 {3,3,3,2}；任意两人恰好对坐一次；66 对关系里有 55 对完全平衡。这些数字是**全局最优且已证明的**——整数规划以目标值等于界的方式终止，搜索覆盖了已知存在的全部五个互不同构的可分解 2-(12,4,3) 设计，其中恰好只有一个能满足「对坐一次」的条件。这个设计不是被选中的，而是被迫的。
 
-## 快速开始
+## 从哪里开始
+
+### 先看它跑起来
 
 ```sh
 git clone <本仓库> && cd mahjong-random-seating
 npm ci
-npm test                  # 354 个单元测试，完全离线，约 12 秒
-npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
+npm test                  # 362 个单元测试，离线，约 12 秒
+npm run rehearse          # 沙箱里端到端跑完整场抽签，约 3 分钟
 ```
 
-`npm run rehearse` 是最快看清全貌的方式。它会建一个用完即弃的 git 仓库，快照名册，冻结并打 tag，对着三分钟后的一个真实 drand 轮次封存十二份真密文，跑完抽签，同步座位表，并执行选手事后会做的那项核验。除了 Pantheon 之外没有任何一步是模拟的。
+`npm run rehearse` 会建一个用完即弃的 git 仓库，快照名册，冻结并打 tag，对着三分钟后的一个真实 drand 轮次封存十二份真密文，跑完抽签，同步座位表，并执行选手事后会做的那项核验。只有 Pantheon 是模拟的。不需要账号，不需要配置，不需要 `.env`。
+
+### 改代码
+
+1. 先读 [`docs/PROTOCOL.zh.md`](docs/PROTOCOL.zh.md)。它界定了一处改动被允许影响什么。
+2. 按下面的[开发](#开发)一节搭起开发循环。`PANTHEON_MODE=stub` 不需要任何 Pantheon 部署。
+3. 按需查阅：选手看得见的流程查 [`UI-SPEC.zh.md`](docs/UI-SPEC.zh.md)，线上格式查 [`PANTHEON-INTEGRATION.zh.md`](docs/PANTHEON-INTEGRATION.zh.md)，代码为什么这样写查 [`IMPLEMENTATION_NOTES.zh.md`](docs/IMPLEMENTATION_NOTES.zh.md)。
+
+### 真的办一场抽签
+
+```
+npm run rehearse ─▶ RUNBOOK A ─▶ RUNBOOK B ─▶ deploy/README ─▶ RUNBOOK C ─▶ D ─▶ E
+```
+
+部署是 runbook 里的一步，不是一份并列的文档。RUNBOOK 第 11 步推出一个 tag，[`deploy/README.zh.md`](deploy/README.zh.md) §1 检出它。正是那个 tag 把 `data/protocol.json` 和 `data/roster.json` 放进仓库，所以它不存在时没有任何东西可以安装。
+
+1. 先跑一次 `npm run rehearse`，在沙箱里看一遍整个序列。
+2. 把 [`docs/RUNBOOK.zh.md`](docs/RUNBOOK.zh.md) 从头读到尾。带锁标记的步骤进入冻结状态，此后任何东西都不得再修改。
+3. **RUNBOOK A** —— 用一场测试活动和十二个虚拟账号把整条路走一遍。[`PANTHEON-INTEGRATION.zh.md`](docs/PANTHEON-INTEGRATION.zh.md) §6 讲怎么把实例搭起来。
+4. **RUNBOOK B 第 8 到 11 步** —— 登记十二个人、选定目标轮次、冻结并打 tag。这一步在开发机上做：冻结会从源码重建浏览器 bundle，服务器上没有那套工具链。
+5. **[`deploy/README.zh.md`](deploy/README.zh.md)** —— 在那个 tag 上安装、写 `.env`、架好反向代理和 TLS，跑它的 §5 起飞前检查。
+6. **RUNBOOK C 和 D** —— 给选手发同一个链接，盯着提交数，然后确认开奖跑过了、座位表也进了 Pantheon。
+7. **RUNBOOK E** —— 在冻结下一场之前把这一场收尾。
 
 ## 文档
 
+按阅读顺序排列。没有哪一条路需要七份都读。
+
 | 文档 | 内容 | English |
 |---|---|---|
-| [`docs/seating-design.zh.md`](docs/seating-design.zh.md) | 座位表的来历：愿望清单、两条不可能性定理、求解器，以及一张已证明最优的表为什么仍然需要抽签。不需要数学背景。 | [English](docs/seating-design.md) |
-| [`docs/PROTOCOL.zh.md`](docs/PROTOCOL.zh.md) | 协议本身：冻结产物、字节编码、API、门槛与失败处理、信任边界。**改代码之前先读这份。** | [English](docs/PROTOCOL.md) |
+| [`docs/seating-design.zh.md`](docs/seating-design.zh.md) | 座位表：愿望清单、两条不可能性定理、求解器，以及一张已证明最优的表为什么仍然需要抽签。不需要数学背景。 | [English](docs/seating-design.md) |
+| [`docs/PROTOCOL.zh.md`](docs/PROTOCOL.zh.md) | 冻结产物、字节编码、API、门槛与失败处理、信任边界。**改代码之前先读。** | [English](docs/PROTOCOL.md) |
+| [`docs/RUNBOOK.zh.md`](docs/RUNBOOK.zh.md) | 运营者的检查清单，按顺序：实现、冻结、提交窗口、开奖、收尾。**真的办一场之前先读。** | [English](docs/RUNBOOK.md) |
+| [`deploy/README.zh.md`](deploy/README.zh.md) | 安装、环境变量、进程管理、反向代理、TLS，以及公布 URL 之前的起飞前检查。排在 RUNBOOK 第 11 步之后。 | [English](deploy/README.md) |
+| [`docs/PANTHEON-INTEGRATION.zh.md`](docs/PANTHEON-INTEGRATION.zh.md) | 通过 Frey 登录、通过 Mimir 写回座位表、线上格式，以及一个可供测试的本地实例。 | [English](docs/PANTHEON-INTEGRATION.md) |
 | [`docs/UI-SPEC.zh.md`](docs/UI-SPEC.zh.md) | 面向选手的流程，逐个阶段，以及那些让它保持诚实的规则。 | [English](docs/UI-SPEC.md) |
-| [`docs/PANTHEON-INTEGRATION.zh.md`](docs/PANTHEON-INTEGRATION.zh.md) | 通过 Frey 登录、通过 Mimir 写回座位表，以及线上实际长什么样。 | [English](docs/PANTHEON-INTEGRATION.md) |
-| [`docs/RUNBOOK.zh.md`](docs/RUNBOOK.zh.md) | 运营者的检查清单，按顺序：实现、冻结、提交窗口、开奖，以及出问题时怎么办。 | [English](docs/RUNBOOK.md) |
 | [`docs/IMPLEMENTATION_NOTES.zh.md`](docs/IMPLEMENTATION_NOTES.zh.md) | 规范留白处的每一个决定、每一处偏离、值得知道的 bug，以及一张「到底验证了什么」的表。 | [English](docs/IMPLEMENTATION_NOTES.md) |
-| [`deploy/README.zh.md`](deploy/README.zh.md) | 部署到服务器：安装、环境变量、那一个进程、反向代理、TLS，以及公布 URL 之前的起飞前检查。 | [English](deploy/README.md) |
 
 ## 如何运行
 
-### 不需要任何配置的检查
+### 检查
 
 ```sh
 npm ci
-npm test                  # 354 个单元测试，离线，约 12 秒
+npm test                  # 362 个单元测试，离线，约 12 秒
 npm run verify-template   # 重新推导冻结模板的每一条不变量
 npm run e2e               # 对着真实 drand 跑 RUNBOOK A2-A7，约 90 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
 ```
 
-[`.github/workflows/reproducibility.yml`](.github/workflows/reproducibility.yml) 在每次 push 时跑前三项，在 Linux 上跑一遍，在开了 `core.autocrlf=true` 的 Windows 上再跑一遍，另外加上 `build-client.js --check`——那是从源码重新构建的检查，`--verify-hash` 顶替不了，因为它需要 esbuild。它跑在一份没人碰过的克隆上，这正是要点：[`docs/IMPLEMENTATION_NOTES.zh.md`](docs/IMPLEMENTATION_NOTES.zh.md) §6d 里那个检出 bug，在写出这些文件的那棵树里根本不可能出现。`e2e` 不在其中——它要连真实 drand，要三分钟。
+[`.github/workflows/reproducibility.yml`](.github/workflows/reproducibility.yml) 在每次 push 时跑前三项，Linux 一遍，开了 `core.autocrlf=true` 的 Windows 再一遍，另加 `build-client.js --check`——从源码重建的检查，`--verify-hash` 顶替不了，因为它需要 esbuild。它刻意跑在一份没人碰过的克隆上：[`IMPLEMENTATION_NOTES.zh.md`](docs/IMPLEMENTATION_NOTES.zh.md) §6d 里那个检出 bug，在写出这些文件的那棵树里不可能出现。`e2e` 不在其中，它要连真实 drand，要三分钟。
 
 ### 开发
 
@@ -109,10 +135,10 @@ PANTHEON_MODE=stub npm run serve                # http://127.0.0.1:8080
 > [!IMPORTANT]
 > **名册不用手打。** `tools/freeze.js --event <id> --write` 从 Pantheon 读出这场活动的报名信息，自己写出十二行 `{local_id, person_id, title}`，并把标了 `ignore_seating` 的人排除在外。只要有任何一位选手没有 `local_id`，它就什么都不写——那个错误否则要等到开奖之后、座位表同步的时候才浮现，而那时什么都改不了了。不加 `--write` 时它只说自己打算做什么，不碰任何文件。这是 RUNBOOK 第 10 步，也是生成那个文件的唯一受支持方式。
 
-它需要一个可读的 Pantheon，开发环境下有三条路：
+开发需要一个可读的 Pantheon，有三条路：
 
 - **一个真实实例** —— `PANTHEON_MODE=twirp`，加上 [`deploy/README.zh.md`](deploy/README.zh.md) §2 里的基础 URL 和管理员凭证。`tools/pantheon-fixture.js --accounts` 会在上面建好一场测试活动，连十二个账号一起。
-- **完全没有 Pantheon** —— `PANTHEON_MODE=stub`，用 `PANTHEON_STUB_ROSTER` 指向一个小的报名 JSON 文件。这个桩故意不从 `roster.json` 自举：一个和第 10 步本该写出的文件完全一致的假实现，根本没法用来检验第 10 步。它回答活动名称查询时给的是 `Stub event <id>`，所以页面会显示一个名字，而不是退回通用标题；`PANTHEON_STUB_EVENT_TITLE` 可以换成别的。
+- **完全没有 Pantheon** —— `PANTHEON_MODE=stub`，用 `PANTHEON_STUB_ROSTER` 指向一个小的报名 JSON 文件。这个桩不从 `roster.json` 自举：一个和第 10 步本该写出的文件完全一致的假实现，检验不了第 10 步。它回答活动名称查询时给的是 `Stub event <id>`，可用 `PANTHEON_STUB_EVENT_TITLE` 覆盖。
 - **暂时两样都没有** —— `npm run rehearse` 会在一个用完即弃的仓库里跑完 B、C、D 全部内容，包括这一步和它的各种拒绝。
 
 <details>
@@ -143,19 +169,21 @@ ADMIN_TOKEN=$(openssl rand -hex 16) PANTHEON_MODE=stub npm run serve
 
 ### 生产
 
+两份文档，有先后：[`docs/RUNBOOK.zh.md`](docs/RUNBOOK.zh.md) 管这场活动，[`deploy/README.zh.md`](deploy/README.zh.md) 管服务器。见上面的[真的办一场抽签](#真的办一场抽签)。下面写的是这个进程本身的细节。
+
 一个进程，既服务页面也负责开奖：
 
 ```sh
 node server/server.js
 ```
 
-这就是整个部署，而它唯一的前提值得明说：进程启动时会读取 checkout 根目录下的 `.env`，并在最初几行日志里报出它读了哪个文件。所有让一次部署成为真部署而不是演示的东西都在那里面——Pantheon 的基础 URL、用于座位同步的管理员账号、镜像仓库和它的 token、`ADMIN_TOKEN`、`NODE_ENV=production`。其中大部分没有命令行参数，也不需要有。文件内容见 [`deploy/README.zh.md`](deploy/README.zh.md) §2。
+这就是整个部署。进程启动时读取 checkout 根目录下的 `.env`，并在最初几行日志里报出它读了哪个文件。所有让一次部署成为真部署而不是演示的东西都在那里面：Pantheon 的基础 URL、用于座位同步的管理员账号、镜像仓库和它的 token、`ADMIN_TOKEN`、`NODE_ENV=production`。文件内容见 [`deploy/README.zh.md`](deploy/README.zh.md) §2。
 
-没有别的东西要装，也不需要 root——进程不需要，让它熬过重启不需要，一开始安装它也不需要。服务器会用自己的定时器派生 `server/finalise.js`（`server.finalise_interval_seconds`，默认 60 秒），所以开奖不需要 systemd 单元也不需要 cron 条目——如果你更想自己调度，把 `server.run_finalise` 设为 `false` 就交还给你。
+没有别的东西要装，也不需要 root：进程不需要，熬过重启不需要，安装它也不需要。服务器用自己的定时器派生 `server/finalise.js`（`server.finalise_interval_seconds`，默认 60 秒），所以开奖不需要 systemd 单元也不需要 cron 条目；把 `server.run_finalise` 设为 `false` 可以把调度交还给你。
 
-真实部署的其余部分——冻结检出、`.env`、反向代理与 TLS、在 Linux 或 Windows 上让这一个进程活着，以及万一没人开奖你怎么发现——都在 **[`deploy/README.zh.md`](deploy/README.zh.md)** 里。
+冻结检出、`.env`、反向代理与 TLS、在 Linux 或 Windows 上守住这一个进程，以及万一没人开奖怎么发现，都在 **[`deploy/README.zh.md`](deploy/README.zh.md)** 里。
 
-和上面开发命令的三处差别值得在这里点明，因为每一处都可能让你把测试当成真事在跑：
+和上面开发命令的三处差别，每一处都可能让你把测试当成真事在跑：
 
 | | 开发 | 生产 |
 |---|---|---|
@@ -163,7 +191,7 @@ node server/server.js
 | `PANTHEON_MODE` | `stub` | `twirp`，指向选手真正有账号的那个实例 |
 | 冻结 | 树里是什么就是什么 | 检出到 RUNBOOK 第 11 步的那个 tag，且 `--verify-hash` 通过 |
 
-`/admin` 会在起飞前面板里把这三条都大声说出来，只要有一条不对就拒绝把这次部署判为就绪。
+`/admin` 会在起飞前面板里报出这三条，只要有一条不对就拒绝把这次部署判为就绪。
 
 ```sh
 node tools/freeze.js                            # RUNBOOK 8-11，只检查

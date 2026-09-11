@@ -7,22 +7,41 @@ runs the draw on a timer of its own, so there is nothing else to install and no 
 needed. The app and Pantheon share a host, so backend-to-Pantheon calls go over
 localhost.
 
+> **Prerequisite: [`docs/RUNBOOK.md`](../docs/RUNBOOK.md) through step 11.** This is the
+> deployment step of that checklist, between B and C. §1 checks out the tag step 11
+> pushes; RUNBOOK E closes the event out afterwards.
+
 Nothing here holds a secret that could open a submission early. The only credentials on
 the box are the GitHub PAT used for mirroring and the Pantheon admin account used for
 the seat-plan sync — and the worst either can do is write somewhere.
 
 ## 1. Install
 
+**A pushed freeze tag is required.** `data/protocol.json` and `data/roster.json` are
+gitignored, and RUNBOOK step 11 is the only thing that commits them, so a clone of the
+default branch contains no event and the server refuses to start. Do not write those
+files here instead: a protocol that is not the one inside the tag is not frozen, and the
+tag is what players are given (PROTOCOL.md §9).
+
 No root, and no new user. Everything lives in one directory that you already own:
 
 ```sh
 git clone <repo> ~/mahjong && cd ~/mahjong
-git checkout frozen-v1                     # the tag from RUNBOOK step 11
+git tag -l                                 # the freeze tags this clone can see
+git checkout <tag>                         # the one RUNBOOK step 11 announced
 npm ci --omit=dev
 node tools/build-client.js --verify-hash   # committed bundle matches its committed hash
-node tools/verify-template.js              # re-derive the template invariants
-chmod 600 .env                             # once §2 has written it
+node tools/verify-template.js              # template invariants; needs Python 3, skippable here
 ```
+
+`<tag>` is a placeholder. This document cannot know your tag name and there is no
+default; an empty `git tag -l` means it was never pushed, which
+`git ls-remote --tags <repo>` confirms.
+
+`verify-template.js` is a check rather than an install step, and the only command here
+that needs anything but Node. A machine without Python 3 can skip the line and run it
+elsewhere on the same tag. `.env` and the `chmod` that protects it are both in §2, since
+neither can happen before the file exists.
 
 Nothing on that list needs a privilege, and that is a property of the design rather than
 a convenience. The process listens on a high port, because something else terminates TLS
@@ -47,7 +66,7 @@ reaches nothing else of yours, and it lets the systemd hardening in
 ```sh
 sudo adduser --system --group --home /opt/mahjong mahjong
 sudo -u mahjong git clone <repo> /opt/mahjong/app
-cd /opt/mahjong/app && sudo -u mahjong git checkout frozen-v1
+cd /opt/mahjong/app && sudo -u mahjong git checkout <tag>
 sudo -u mahjong npm ci --omit=dev
 sudo -u mahjong node tools/build-client.js --verify-hash
 sudo chown -R mahjong:mahjong /opt/mahjong
@@ -112,6 +131,13 @@ PANTHEON_ADMIN_TOKEN=...
 ```sh
 # The organiser's dashboard. Without this the /admin route does not exist.
 ADMIN_TOKEN=...                      # openssl rand -hex 16
+```
+
+Once the file exists, take the mode down — it holds a GitHub token and a Pantheon
+account, and it is the only thing on the box worth protecting:
+
+```sh
+chmod 600 .env
 ```
 
 **Who reads this file.** The process does, at startup, and it says which file it read in

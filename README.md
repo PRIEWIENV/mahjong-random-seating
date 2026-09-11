@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-354%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-362%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -27,7 +27,7 @@ proven optimality, and the draw is a working web application with a documented p
 an operational runbook and an end-to-end rehearsal you can run in three minutes.
 
 **Contents** — [How it works](#how-it-works) · [Guarantees](#guarantees) ·
-[Quick start](#quick-start) · [Documentation](#documentation) ·
+[Start here](#start-here) · [Documentation](#documentation) ·
 [Running it](#running-it) · [Project status](#project-status) ·
 [Repository layout](#repository-layout) · [Hard rules](#hard-rules) ·
 [License](#license)
@@ -81,39 +81,77 @@ opposite exactly once; 55 of the 66 rivalries are perfectly balanced. Those figu
 bound, over all five non-isomorphic resolvable 2-(12,4,3) designs known to exist, exactly
 one of which admits the "opposite once" condition. The design is not chosen; it is forced.
 
-## Quick start
+## Start here
+
+### See it work
 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 354 unit tests, fully offline, ~12 s
-npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
+npm test                  # 362 unit tests, offline, ~12 s
+npm run rehearse          # the full draw, end to end, in a sandbox, ~3 min
 ```
 
-`npm run rehearse` is the fastest way to see the whole thing work. It builds a throwaway
-git repository, snapshots a roster, freezes and tags it, seals twelve real ciphertexts
-against a genuine drand round three minutes away, runs the draw, syncs the seat plan, and
-performs the check a player does afterwards. Nothing is simulated except Pantheon.
+`npm run rehearse` builds a throwaway git repository, snapshots a roster, freezes and tags
+it, seals twelve real ciphertexts against a drand round three minutes out, runs the draw,
+syncs the seat plan, and performs the check a player does afterwards. Only Pantheon is
+simulated. No accounts, no configuration, no `.env`.
+
+### Work on the code
+
+1. Read [`docs/PROTOCOL.md`](docs/PROTOCOL.md). It defines what a change is allowed to affect.
+2. Set up the loop under [Development](#development). `PANTHEON_MODE=stub` needs no Pantheon deployment.
+3. Reference as needed: [`UI-SPEC.md`](docs/UI-SPEC.md) for the player-facing flow,
+   [`PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) for the wire format,
+   [`IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) for the reasoning behind the code.
+
+### Run a real draw
+
+```
+npm run rehearse ─▶ RUNBOOK A ─▶ RUNBOOK B ─▶ deploy/README ─▶ RUNBOOK C ─▶ D ─▶ E
+```
+
+Deployment is a step in the runbook, not a parallel document. RUNBOOK step 11 pushes a
+tag and [`deploy/README.md`](deploy/README.md) §1 checks it out. That tag is also what
+puts `data/protocol.json` and `data/roster.json` into the repository, so nothing can be
+installed before it exists.
+
+1. `npm run rehearse`, once, to see the sequence in a sandbox.
+2. Read [`docs/RUNBOOK.md`](docs/RUNBOOK.md) end to end. Steps marked with a lock enter
+   the frozen state; nothing after that point may be modified.
+3. **RUNBOOK A** — the full journey against a test event and twelve dummy accounts.
+   [`PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) §6 covers standing an
+   instance up.
+4. **RUNBOOK B, steps 8–11** — register the twelve, choose the target round, freeze and
+   tag. Run this on a development machine: the freeze rebuilds the browser bundle from
+   source, which needs a toolchain the server does not have.
+5. **[`deploy/README.md`](deploy/README.md)** — install at that tag, write `.env`, add a
+   reverse proxy and TLS, run its §5 pre-flight.
+6. **RUNBOOK C and D** — send the players one link, watch the count, then confirm the
+   draw ran and the seat plan reached Pantheon.
+7. **RUNBOOK E** — close the event out before freezing the next one.
 
 ## Documentation
 
-| Document | What it covers | 中文 |
+Listed in reading order. No single path needs all seven.
+
+| Document | Covers | 中文 |
 |---|---|---|
-| [`docs/seating-design.md`](docs/seating-design.md) | Where the seating chart came from: the wish list, the two impossibility theorems, the solver, and why a proved-optimal chart still needs a lottery. No mathematical background assumed. | [中文](docs/seating-design.zh.md) |
-| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | The protocol itself: frozen artefacts, the byte encoding, the API, quorum and failure handling, the trust boundary. **Read this before changing code.** | [中文](docs/PROTOCOL.zh.md) |
-| [`docs/UI-SPEC.md`](docs/UI-SPEC.md) | The player-facing flow, stage by stage, and the rules that make it honest. | [中文](docs/UI-SPEC.zh.md) |
-| [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) | Sign-in through Frey, the seat-plan prescript through Mimir, and what the wire actually looks like. | [中文](docs/PANTHEON-INTEGRATION.zh.md) |
-| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The operator's checklist, in order: implementation, freeze, submission window, draw, and what to do when something goes wrong. | [中文](docs/RUNBOOK.zh.md) |
-| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | Every decision the specification left open, every deviation from it, the bugs worth knowing about, and a table of what has actually been verified. | [中文](docs/IMPLEMENTATION_NOTES.zh.md) |
-| [`deploy/README.md`](deploy/README.md) | Putting it on a server: install, environment, the one process, the reverse proxy, TLS, and the pre-flight before you publish the URL. | [中文](deploy/README.zh.md) |
+| [`docs/seating-design.md`](docs/seating-design.md) | The seating chart: the wish list, two impossibility theorems, the solver, and why a proved-optimal chart still needs a lottery. No mathematical background assumed. | [中文](docs/seating-design.zh.md) |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Frozen artefacts, the byte encoding, the API, quorum and failure handling, the trust boundary. **Read before changing code.** | [中文](docs/PROTOCOL.zh.md) |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The operator's checklist in order: implementation, freeze, submission window, draw, close. **Read before running a real draw.** | [中文](docs/RUNBOOK.zh.md) |
+| [`deploy/README.md`](deploy/README.md) | Install, environment, process management, reverse proxy, TLS, and the pre-flight before publishing the URL. Follows RUNBOOK step 11. | [中文](deploy/README.zh.md) |
+| [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) | Sign-in through Frey, the seat-plan prescript through Mimir, the wire format, and a local instance to test against. | [中文](docs/PANTHEON-INTEGRATION.zh.md) |
+| [`docs/UI-SPEC.md`](docs/UI-SPEC.md) | The player-facing flow, stage by stage, and the rules that keep it honest. | [中文](docs/UI-SPEC.zh.md) |
+| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | Decisions the specification left open, deviations from it, bugs worth knowing about, and a table of what has been verified. | [中文](docs/IMPLEMENTATION_NOTES.zh.md) |
 
 ## Running it
 
-### The checks, which need no configuration
+### Checks
 
 ```sh
 npm ci
-npm test                  # 354 unit tests, offline, ~12 s
+npm test                  # 362 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -121,11 +159,10 @@ npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 
 [`.github/workflows/reproducibility.yml`](.github/workflows/reproducibility.yml) runs the
 first three on every push, on Linux and on Windows with `core.autocrlf=true`, plus
-`build-client.js --check` — the rebuild from source that `--verify-hash` cannot stand in
-for, because it needs esbuild. It runs them on a clone nobody has touched, which is the
-point: the checkout bug in [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md)
-§6d could not appear in the tree where the files were written. `e2e` is not in it — live
-drand, three minutes.
+`build-client.js --check` — the rebuild from source that `--verify-hash` cannot substitute
+for, since it needs esbuild. It runs on an untouched clone by design: the checkout bug in
+[`IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) §6d could not appear in the tree
+where the files were written. `e2e` is excluded, as it needs live drand and three minutes.
 
 ### Development
 
@@ -151,17 +188,15 @@ PANTHEON_MODE=stub npm run serve                # http://127.0.0.1:8080
 > would do and touches nothing. This is RUNBOOK step 10, and it is the only supported way
 > to produce that file.
 
-It needs a Pantheon to read, which in development means one of three things:
+Development needs a Pantheon to read from. Three options:
 
 - **A real instance** — `PANTHEON_MODE=twirp` plus the base URLs and admin credentials
   from [`deploy/README.md`](deploy/README.md) §2. `tools/pantheon-fixture.js --accounts`
   builds a test event there, twelve accounts and all.
 - **No Pantheon at all** — `PANTHEON_MODE=stub` with `PANTHEON_STUB_ROSTER` pointing at a
-  small JSON file of registrations. The stub deliberately will not seed itself from
-  `roster.json`: a fake that agreed with the file step 10 is supposed to write could not
-  exercise step 10 at all. It answers the event-name query with `Stub event <id>`, so the
-  page shows a name rather than falling back to its generic title; `PANTHEON_STUB_EVENT_TITLE`
-  sets a different one.
+  small JSON file of registrations. The stub will not seed itself from `roster.json`: a
+  fake that agreed with the file step 10 writes could not exercise step 10. It answers the
+  event-name query with `Stub event <id>`, overridable via `PANTHEON_STUB_EVENT_TITLE`.
 - **Neither, yet** — `npm run rehearse` does the whole of B, C and D in a throwaway
   repository, including this step and its refusals.
 
@@ -204,33 +239,33 @@ gitignored, because it is deliberately outside the freeze
 
 ### Production
 
+Two documents, in order: [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for the event,
+[`deploy/README.md`](deploy/README.md) for the server. See
+[Run a real draw](#run-a-real-draw) above. What follows is detail about the process itself.
+
 One process, and it draws as well as serves:
 
 ```sh
 node server/server.js
 ```
 
-That is the whole deployment, and the one thing it assumes is worth stating plainly: it
-reads `.env` from the root of the checkout at startup, and names the file it read in its
-first few log lines. Everything that makes a deployment real rather than a demo lives
-there — the Pantheon base URLs and the admin account used for the seat-plan sync, the
-mirror repository and its token, `ADMIN_TOKEN`, `NODE_ENV=production`. There is no flag
-for most of it, and there does not need to be. [`deploy/README.md`](deploy/README.md) §2
-is the file's contents.
+That is the whole deployment. The process reads `.env` from the root of the checkout at
+startup and names the file it read in its first log lines. Everything that separates a
+real deployment from a demo lives there: the Pantheon base URLs and the admin account for
+the seat-plan sync, the mirror repository and its token, `ADMIN_TOKEN`,
+`NODE_ENV=production`. [`deploy/README.md`](deploy/README.md) §2 is the file's contents.
 
-There is nothing else to install and no root needed — not for the process, not to keep it
-alive across a reboot, and not to install it in the first place.
-The server spawns `server/finalise.js` on a timer of its own
-(`server.finalise_interval_seconds`, default 60), so the draw happens without a systemd
-unit or a cron entry — and if you would rather schedule it yourself,
-`server.run_finalise: false` hands it back.
+Nothing else to install, and no root — not for the process, not to keep it alive across a
+reboot, not to install it. The server spawns `server/finalise.js` on its own timer
+(`server.finalise_interval_seconds`, default 60), so the draw runs without a systemd unit
+or a cron entry; `server.run_finalise: false` hands scheduling back.
 
-Everything else about a real deployment — the frozen checkout, the `.env`, the reverse
-proxy and TLS, keeping the one process alive on Linux or Windows, and how you find out if
-nothing is drawing — is in **[`deploy/README.md`](deploy/README.md)**.
+The frozen checkout, `.env`, the reverse proxy and TLS, process supervision on Linux or
+Windows, and how to tell if nothing is drawing are all in
+**[`deploy/README.md`](deploy/README.md)**.
 
-Three differences from the development commands above are worth stating here, because each
-is a way to be accidentally running a test as if it were the real thing:
+Three differences from the development commands above, each a way to run a test as though
+it were the real thing:
 
 | | development | production |
 |---|---|---|
@@ -238,8 +273,8 @@ is a way to be accidentally running a test as if it were the real thing:
 | `PANTHEON_MODE` | `stub` | `twirp`, against the instance the players actually have accounts on |
 | the freeze | whatever is in the tree | a checkout at the tag from RUNBOOK step 11, with `--verify-hash` passing |
 
-`/admin` says all three out loud in its pre-flight panel, and refuses to call a deployment
-ready while any of them is wrong.
+`/admin` reports all three in its pre-flight panel and refuses to call a deployment ready
+while any of them is wrong.
 
 ```sh
 node tools/freeze.js                            # RUNBOOK 8-11, checks only

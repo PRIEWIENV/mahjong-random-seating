@@ -4,6 +4,8 @@
 
 Ordered — do not skip steps. Steps marked with a lock enter the frozen state; nothing after that point may be modified.
 
+Deployment is a step in this list, between **B** and **C**; [`../deploy/README.md`](../deploy/README.md) covers it. It cannot happen earlier: its first command checks out the tag step 11 creates, and that tag is what carries `data/protocol.json` and `data/roster.json` into a checkout.
+
 ## A. Implementation (no real players involved yet)
 
 1. Build the app per `PROTOCOL.md`, `PANTHEON-INTEGRATION.md` and `UI-SPEC.md`.
@@ -78,7 +80,7 @@ that could trigger or re-time the draw off HTTP entirely.
 16. Point the players at the result. Anyone inclined to check should be able to reproduce the same plan from public information alone:
 
     ```sh
-    git checkout frozen-v1
+    git checkout <tag>            # the one you announced in step 11
     node generate.js --verify results.json     # whole file, plus the roll-call
     python3 tools/verify_template.py data/schedule_template.json
     ```

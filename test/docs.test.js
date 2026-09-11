@@ -131,3 +131,104 @@ test('both READMEs name the same four frozen artefacts', () => {
     }
   }
 });
+
+/**
+ * A deployment document cannot know your tag, so it must not print one.
+ *
+ * `git checkout frozen-v1` sat in the install block as a copyable line. There is no tag
+ * called that and there never was: RUNBOOK step 11 creates one under whatever name the
+ * organiser chooses, on a different machine. A new operator following the document
+ * top to bottom stopped on the second line with "pathspec 'frozen-v1' did not match",
+ * and nothing above it said the freeze was a prerequisite at all.
+ *
+ * The rule is the narrow one that was actually broken: where a document tells somebody
+ * to check something out, the thing checked out is a placeholder.
+ */
+test('no deployment document checks out a tag name it invented', () => {
+  for (const rel of ['deploy/README.md', 'deploy/README.zh.md', 'docs/RUNBOOK.md', 'docs/RUNBOOK.zh.md']) {
+    for (const m of read(rel).matchAll(/git checkout +(\S+)/g)) {
+      assert.match(m[1], /^<.+>$/,
+        `${rel} says "git checkout ${m[1]}" — that name exists only on the machine that froze it`);
+    }
+  }
+});
+
+/**
+ * The install block has to survive being run in order on a fresh clone, and `chmod 600
+ * .env` cannot: at that point there is no .env. It failed with "cannot access '.env'"
+ * two lines after the checkout that had already failed. It belongs beside the section
+ * that writes the file.
+ */
+test('the deploy documents protect .env only after writing it', () => {
+  for (const rel of ['deploy/README.md', 'deploy/README.zh.md']) {
+    const text = read(rel);
+    const chmod = text.indexOf('chmod 600 .env');
+    assert.ok(chmod > 0, `${rel} never tells anyone to protect .env`);
+    const written = text.indexOf('ADMIN_TOKEN=');
+    assert.ok(written > 0 && chmod > written,
+      `${rel} tells you to chmod .env before it tells you how to write it`);
+  }
+});
+
+/** Every document that is part of the reading order, in both languages. */
+const DOCS = PAIRS.flat();
+
+/**
+ * A cross-reference that does not resolve is worse than no cross-reference: it is an
+ * instruction to go somewhere, and the reader who follows it is the one who most needed
+ * the answer. Cheap to check and easy to break, since half of these links cross a
+ * directory boundary and the other half do not.
+ */
+test('every relative link between documents resolves', () => {
+  const broken = [];
+  for (const rel of DOCS) {
+    for (const m of read(rel).matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = m[1];
+      if (/^(https?:|mailto:|#)/.test(target)) continue;
+      const [file] = target.split('#');
+      if (!file) continue;
+      if (!fs.existsSync(path.resolve(path.dirname(path.join(ROOT, rel)), file))) {
+        broken.push(`${rel} -> ${target}`);
+      }
+    }
+  }
+  assert.deepEqual(broken, [], `dangling links:\n  ${broken.join('\n  ')}`);
+});
+
+/**
+ * The one piece of ordering an operator cannot derive from either document alone.
+ *
+ * Deployment is a step inside the runbook, between B and C, because RUNBOOK step 11
+ * creates the tag that deploy/README §1 checks out. Neither document said so, and a new
+ * operator who opened the deployment document first got as far as its second line.
+ * Both directions, so whichever one they land on carries the other.
+ */
+test('the runbook and the deployment document each point at the other', () => {
+  for (const [runbook, deploy] of [
+    ['docs/RUNBOOK.md', 'deploy/README.md'],
+    ['docs/RUNBOOK.zh.md', 'deploy/README.zh.md'],
+  ]) {
+    assert.ok(read(runbook).includes(`../${deploy}`),
+      `${runbook} never says where deployment happens`);
+    assert.ok(read(deploy).includes(`../${runbook}`),
+      `${deploy} never sends the reader to the checklist it is a step of`);
+  }
+});
+
+/**
+ * In-page anchors break silently when a heading is renamed, and both READMEs carry a
+ * contents line made entirely of them. Renaming "Quick start" to "Start here" broke one
+ * in each language, in the same commit that wrote the new section.
+ */
+test('every in-page anchor points at a heading that exists', () => {
+  const slug = (h) => h.toLowerCase().replace(/[^\w一-鿿\- ]/g, '').trim().replace(/ +/g, '-');
+  const broken = [];
+  for (const rel of DOCS) {
+    const text = read(rel);
+    const headings = [...text.matchAll(/^#{2,6} (.+)$/gm)].map((m) => slug(m[1]));
+    for (const m of text.matchAll(/\]\(#([^)]+)\)/g)) {
+      if (!headings.includes(m[1])) broken.push(`${rel} -> #${m[1]}`);
+    }
+  }
+  assert.deepEqual(broken, [], `dangling anchors:\n  ${broken.join('\n  ')}`);
+});

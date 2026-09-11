@@ -25,12 +25,33 @@ const MIN_REVEAL_GAP_SECONDS = 60;
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX_PUBKEY = /^[0-9a-f]{96}$|^[0-9a-f]{192}$/; // G1 or G2 group key
 
-function readJson(p) {
+/**
+ * The remedy for a frozen file that is not there.
+ *
+ * "Copy the .example file and fill it in" is right on the machine where the event is
+ * being prepared and wrong everywhere else, and the file is missing in both places for
+ * the same reason: protocol.json and roster.json are gitignored, and RUNBOOK step 11 is
+ * the only thing that ever commits them. So a deployment box cloning the default branch
+ * gets no event at all — and an operator who follows the old advice there hand-writes a
+ * protocol that matches no tag, which is not a freeze, it is a draw nobody can check.
+ * Both paths, named, and the wrong one named as wrong.
+ */
+const FROZEN_REMEDY = (rel) =>
+  `${rel} is written by the freeze (RUNBOOK step 11) and is gitignored until then, so a `
+  + 'clone of the default branch does not have it.\n'
+  + '  Deploying:   git fetch --tags && git checkout <tag>   ("git tag -l" lists them)\n'
+  + '  Preparing:   start from the .example file, then tools/pick-round.js and tools/freeze.js\n'
+  + `  Not this:    writing ${rel} by hand on the box. A protocol that is not the one in `
+  + 'the tag is not frozen, and players are given the tag.';
+
+function readJson(p, remedy = null) {
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (err) {
     if (err.code === 'ENOENT') {
-      throw new Error(`missing ${path.relative(ROOT, p)} — copy the .example file, fill it in, and freeze it`);
+      const rel = path.relative(ROOT, p).split(path.sep).join('/');
+      throw new Error(remedy ? `missing ${rel}\n\n${remedy(rel)}`
+        : `missing ${rel} — copy the .example file, fill it in, and freeze it`);
     }
     throw new Error(`${path.relative(ROOT, p)}: ${err.message}`);
   }
@@ -226,9 +247,27 @@ function validateTemplate(t, totalSlots) {
   return t;
 }
 
+/**
+ * Every failure in here is a deployment to fix, not a bug to report.
+ *
+ * A file that is not there, a value outside its bounds, an operational key inside the
+ * frozen half: each of those is something the person holding the terminal has to change,
+ * and each already carries a message saying what. `operator` is what lets the entry
+ * points print that message and nothing else. Without it, a new operator whose clone had
+ * no freeze in it got the one paragraph telling them to check out the tag delivered in
+ * the middle of a ten-frame stack trace.
+ */
 function load(opts = {}) {
+  try {
+    return loadFrozen(opts);
+  } catch (err) {
+    throw Object.assign(err, { operator: true });
+  }
+}
+
+function loadFrozen(opts) {
   const dataDir = opts.dataDir || path.join(ROOT, 'data');
-  const protocol = validateProtocol(readJson(path.join(dataDir, 'protocol.json')));
+  const protocol = validateProtocol(readJson(path.join(dataDir, 'protocol.json'), FROZEN_REMEDY));
   // Not frozen, not tagged, optional (§4.2). Loaded here so every consumer reads both
   // halves of the configuration off one object.
   const runtime = opts.runtime || loadRuntime(dataDir, opts.env || process.env);
@@ -243,7 +282,7 @@ function load(opts = {}) {
   let roster = null;
   let rosterError = null;
   try {
-    roster = validateRoster(readJson(path.join(dataDir, 'roster.json')), protocol.total_slots);
+    roster = validateRoster(readJson(path.join(dataDir, 'roster.json'), FROZEN_REMEDY), protocol.total_slots);
   } catch (err) {
     if (!opts.rosterOptional) throw err;
     rosterError = err;
