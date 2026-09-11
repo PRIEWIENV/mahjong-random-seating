@@ -69,6 +69,12 @@ PANTHEON_ADMIN_TOKEN=...
 ADMIN_TOKEN=...                      # openssl rand -hex 16
 ```
 
+`PORT` and `HOST` can also be given on the command line, and the flag wins:
+`node server/server.js --port 9000 --host 127.0.0.1`. Useful when 8080 is already taken,
+which on a box that also runs Pantheon it often is. Whichever you use, the reverse proxy
+in §4 has to point at the same number; a port already in use is reported as that, with
+the flag to use instead.
+
 `NODE_ENV=production` matters for more than logging: it marks the session cookie
 `Secure` and makes `/api/dev-authorize` return 404. That endpoint is the development
 stand-in for Frey; it must not exist here.

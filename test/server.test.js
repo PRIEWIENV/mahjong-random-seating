@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const { createServer } = require('../server/server');
+const { createServer, listenOn } = require('../server/server');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
@@ -553,4 +553,27 @@ test('trust_proxy with no header falls back to the socket address', async () => 
     const codes = await attempts(s, 5);
     assert.ok(codes.includes(429), `unforwarded requests went unlimited: ${codes.join(',')}`);
   } finally { await s.close(); }
+});
+
+test('the port comes from a flag, then the environment, then the default', () => {
+  // 8080 is a popular port, and "something else already has it" should not send an
+  // organiser into a config file on the day.
+  assert.deepEqual(listenOn([], {}), { port: 8080, host: '127.0.0.1' });
+  assert.equal(listenOn([], { PORT: '9001' }).port, 9001);
+  assert.equal(listenOn(['--port', '9002'], { PORT: '9001' }).port, 9002, 'the flag must win');
+  assert.equal(listenOn(['--port=9003'], {}).port, 9003);
+  assert.equal(listenOn(['-p', '9004'], {}).port, 9004);
+  assert.equal(listenOn(['--host', '0.0.0.0'], {}).host, '0.0.0.0');
+  // Loopback by default: a reverse proxy terminates TLS in front (§10), and binding
+  // every interface is a decision, not something to arrive at by omission.
+  assert.equal(listenOn(['--port', '9005'], {}).host, '127.0.0.1');
+});
+
+test('a port that is not a port is refused before anything opens a socket', () => {
+  // Number('') is 0 and Number('http') is NaN; both used to become a listen() call with
+  // whatever Node made of them, and 0 binds a random port nobody knows.
+  for (const bad of ['0', 'http', '-1', '70000', '80.5', '']) {
+    assert.throws(() => listenOn(['--port', bad], {}), /--port must be a whole number/, `accepted ${bad}`);
+  }
+  assert.throws(() => listenOn([], { PORT: 'nope' }), /--port must be a whole number/);
 });

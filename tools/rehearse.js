@@ -86,8 +86,19 @@ function parseArgs(argv) {
  */
 function makeSandbox() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjs-rehearsal-'));
+  // Steps 9 and 10 exist to produce these two, so a rehearsal that starts with the last
+  // event's copies is not rehearsing either of them. It is not academic: freeze.js takes
+  // the event id from an existing roster.json in preference to --event, on purpose, so
+  // step 10's refusals would run against whatever event this tree was last pointed at
+  // and report "0 seated players" instead of the refusal being tested.
+  //
+  // They have to be named rather than simply absent. Both are committed in the real
+  // repository — they ARE the public commitment — and this broke the moment they first
+  // were.
+  const MADE_BY_STEPS_9_AND_10 = new Set(['data/protocol.json', 'data/roster.json']);
   const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
-    .split('\0').filter(Boolean);
+    .split('\0').filter(Boolean)
+    .filter((rel) => !MADE_BY_STEPS_9_AND_10.has(rel.replace(/\\/g, '/')));
   for (const rel of tracked) {
     const dest = path.join(dir, rel);
     fs.mkdirSync(path.dirname(dest), { recursive: true });

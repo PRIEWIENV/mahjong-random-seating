@@ -699,9 +699,47 @@ function createServer(opts = {}) {
 
 module.exports = { createServer, RateLimiter, COOKIE, parseCookies };
 
+/**
+ * Where to listen: a flag if given, else the environment, else the default.
+ *
+ * The flag exists because 8080 is a popular port and "something else already has it" is
+ * not a reason to go and edit a file — least of all on the day, on a box that is also
+ * running Pantheon. `--port 9000` is the shape people reach for first.
+ */
+function listenOn(argv = process.argv.slice(2), env = process.env) {
+  // A flag that is present takes whatever follows it, including something that looks
+  // like another flag. Skipping those and quietly falling back to the default would
+  // mean `--port -1` starts on 8080, which is the opposite of what was asked for.
+  const flag = (...names) => {
+    for (const n of names) {
+      const i = argv.indexOf(n);
+      if (i > -1) return argv[i + 1] ?? '';
+      const inline = argv.find((a) => a.startsWith(`${n}=`));
+      if (inline) return inline.slice(n.length + 1);
+    }
+    return undefined;
+  };
+  const rawPort = flag('--port', '-p') ?? env.PORT ?? '8080';
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`--port must be a whole number between 1 and 65535, got ${JSON.stringify(rawPort)}`);
+  }
+  // Caddy or nginx terminates TLS in front (§10), so loopback is the right default and
+  // 0.0.0.0 is a deliberate act.
+  return { port, host: flag('--host') ?? env.HOST ?? '127.0.0.1' };
+}
+
+module.exports.listenOn = listenOn;
+
 if (require.main === module) {
-  const port = Number(process.env.PORT || 8080);
-  const host = process.env.HOST || '127.0.0.1'; // Caddy terminates TLS in front (§10)
+  let port;
+  let host;
+  try {
+    ({ port, host } = listenOn());
+  } catch (err) {
+    console.error(`[server] ${err.message}`);
+    process.exit(2);
+  }
   const { server, cfg, pantheon, store } = createServer();
   let scheduler = null;
   for (const sig of ['SIGINT', 'SIGTERM']) {
@@ -712,6 +750,23 @@ if (require.main === module) {
       server.close(() => process.exit(0));
     });
   }
+  server.on('error', (err) => {
+    // The one failure an organiser will actually hit, and a raw stack trace answers
+    // none of the three questions it raises.
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `[server] port ${port} is already in use on ${host}. Something else has it — on a box ` +
+        'that also runs Pantheon that is likely. Choose another: node server/server.js --port 9000, ' +
+        'or set PORT in .env. Remember to point the reverse proxy at the same number.');
+      process.exit(1);
+    }
+    if (err.code === 'EACCES') {
+      console.error(`[server] not allowed to listen on port ${port}. Ports below 1024 need ` +
+        'privileges; put the app on a high port and let the reverse proxy hold 80 and 443.');
+      process.exit(1);
+    }
+    throw err;
+  });
   server.listen(port, host, () => {
     console.info(`[server] listening on http://${host}:${port}`);
     console.info(`[server] event ${cfg.roster.pantheon_event_id}, ${cfg.protocol.total_slots} slots, ` +

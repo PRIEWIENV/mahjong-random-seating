@@ -18,10 +18,11 @@ Ordered — do not skip steps. Steps marked with a lock enter the frozen state; 
 **Rehearse it first.** `npm run rehearse` performs the whole of B, C and D — roster
 snapshot, freeze, tag, twelve sealed submissions, the chase list, the draw, the sync, and
 the check a player does afterwards — in a throwaway git repository, against the Pantheon
-stub and a real drand round about four minutes away. It takes five minutes and it is the
-only way to find out that a step does not work at a time when that is still cheap. The
-first two runs found two: `freeze.js` could not create the roster it exists to create, and
-a refused freeze wrote one anyway.
+stub and a real drand round three minutes away. It takes about three minutes and it is
+the only way to find out that a step does not work at a time when that is still cheap. It
+keeps earning it: `freeze.js` could not create the roster it exists to create, a refused
+freeze wrote one anyway, the server announced itself at boot and then died, and the draw
+excluded players whose ciphertexts were perfectly good.
 
 `node tools/freeze.js` performs steps 10 and 11 and refuses on anything that would only
 surface after the draw. Run it with `--write` to snapshot the roster, and `--tag <name>`

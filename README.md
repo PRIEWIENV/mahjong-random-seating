@@ -38,12 +38,14 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ## Running it
 
+### The checks, which need no configuration
+
 ```sh
 npm ci
-npm test                  # 264 unit tests, offline, ~5s
+npm test                  # 285 unit tests, offline, ~5s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90s
-npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~2 min
+npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 ```
 
 `.github/workflows/reproducibility.yml` runs the first three on every push, on Linux and
@@ -53,34 +55,101 @@ a clone nobody has touched, which is the point: the checkout bug in
 [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) §6d could not appear in the
 tree where the files were written. `e2e` is not in it — live drand, three minutes.
 
-To actually run the app you need `data/roster.json` and `data/protocol.json`; the
-server refuses to start without them, and copying the `.example` files is not enough
-(`target_round: 0` is rejected on purpose).
+### Development
+
+The app needs `data/protocol.json` and `data/roster.json` and refuses to start without
+them. Renaming the `.example` files does not work and is not meant to: the placeholder
+`target_round: 0` and `pantheon_event_id: 0` are both rejected, so a run cannot be
+started against values nobody chose.
 
 ```sh
 cp data/protocol.example.json data/protocol.json
-node tools/pick-round.js --in 2h --write        # sets target_round + cutoff together
-# write data/roster.json: pantheon_event_id and twelve {local_id, person_id, title}
-
+node tools/pick-round.js --in 2h --write        # target_round, cutoff and reveal gap together
+node tools/freeze.js --event 42 --write         # data/roster.json, read out of Pantheon
 npm run build                                   # rebuild public/app.js + app.css
 PANTHEON_MODE=stub npm run serve                # http://127.0.0.1:8080
+```
+
+**Nobody types the roster by hand.** `tools/freeze.js --event <id> --write` reads the
+event's registrations from Pantheon and writes the twelve `{local_id, person_id, title}`
+rows itself, leaving out anyone marked `ignore_seating`. It refuses to write anything at
+all if a player has no `local_id` — the failure that otherwise surfaces after the draw,
+in the seat-plan sync, when nothing can be changed. Without `--write` it says what it
+would do and touches nothing. This is RUNBOOK step 10, and it is the only supported way
+to produce that file.
+
+It needs a Pantheon to read, which in development means one of three things:
+
+- **A real instance** — `PANTHEON_MODE=twirp` plus the base URLs and admin credentials
+  from [`deploy/README.md`](deploy/README.md) §2. `tools/pantheon-fixture.js --accounts`
+  builds a test event there, twelve accounts and all.
+- **No Pantheon at all** — `PANTHEON_MODE=stub` with `PANTHEON_STUB_ROSTER` pointing at a
+  small JSON file of registrations. The stub deliberately will not seed itself from
+  `roster.json`: a fake that agreed with the file step 10 is supposed to write could not
+  exercise step 10 at all.
+- **Neither, yet** — `npm run rehearse` does the whole of B, C and D in a throwaway
+  repository, including this step and its refusals, and is the fastest way to watch the
+  flow end to end before setting anything up.
+
+**Choosing a port.** 8080 is the default and is often taken, particularly on a box that
+also runs Pantheon. Either form works, and the flag wins:
+
+```sh
+node server/server.js --port 9000
+PORT=9000 npm run serve
+```
+
+`--host` moves the interface the same way; it stays on loopback unless you say otherwise,
+because in production something else terminates TLS in front of it. A port already in use
+is reported as that, with the flag to use instead, rather than as a stack trace.
+
+`PANTHEON_MODE=stub` runs against the in-process fake, which is what makes the whole flow
+exercisable without a Pantheon deployment. It also enables a development-only sign-in
+stand-in that is refused under `NODE_ENV=production`.
+
+Set `ADMIN_TOKEN` to put the organiser's dashboard on `/admin?token=…`: submission
+progress and who is still missing, the pre-flight checks, the frozen artefacts'
+fingerprints, whether the draw job is running, the result, the Pantheon sync, and every
+past attempt. It is read-only, and without `ADMIN_TOKEN` the route does not exist at all.
+
+```sh
+ADMIN_TOKEN=$(openssl rand -hex 16) PANTHEON_MODE=stub npm run serve
 ```
 
 `data/runtime.json` is optional. Copy `runtime.example.json` to it only to change
 something — a different drand mirror, real Pantheon base URLs — and note that it is
 gitignored, because it is deliberately outside the freeze (`PROTOCOL.md` §4.2).
 
-`PANTHEON_MODE=stub` runs against the in-process fake, which is what makes the whole
-flow exercisable without a Pantheon deployment. It also enables a development-only
-sign-in stand-in that is refused under `NODE_ENV=production`.
+### Production
 
-Set `ADMIN_TOKEN` to put the organiser's dashboard on `/admin?token=…`: submission
-progress and who is still missing, the pre-flight checks, the frozen artefacts'
-fingerprints, the result, the Pantheon sync, and every past attempt. It is read-only, and
-without `ADMIN_TOKEN` the route does not exist at all.
+One process, and it draws as well as serves:
 
 ```sh
-ADMIN_TOKEN=$(openssl rand -hex 16) PANTHEON_MODE=stub npm run serve
+node server/server.js
+```
+
+There is nothing else to install and no root needed. The server spawns
+`server/finalise.js` on a timer of its own (`server.finalise_interval_seconds`, default
+60), so the draw happens without a systemd unit or a cron entry — and if you would rather
+schedule it yourself, `server.run_finalise: false` hands it back.
+
+Everything else about a real deployment — the frozen checkout, the `.env`, the reverse
+proxy and TLS, keeping the one process alive on Linux or Windows, and how you find out
+if nothing is drawing — is in **[`deploy/README.md`](deploy/README.md)**.
+
+Three differences from the development commands above are worth stating here, because
+each is a way to be accidentally running a test as if it were the real thing:
+
+| | development | production |
+|---|---|---|
+| `NODE_ENV` | unset | `production` — marks the session cookie `Secure` and makes `/api/dev-authorize` return 404 |
+| `PANTHEON_MODE` | `stub` | `twirp`, against the instance the players actually have accounts on |
+| the freeze | whatever is in the tree | a checkout at the tag from RUNBOOK step 11, with `--verify-hash` passing |
+
+`/admin` says all three out loud in its pre-flight panel, and refuses to call a
+deployment ready while any of them is wrong.
+
+```sh
 node tools/freeze.js                            # RUNBOOK 8-11, checks only
 node tools/freeze.js --write --tag frozen-v1    # ...and commit and tag
 ```
@@ -91,13 +160,15 @@ node tools/freeze.js --write --tag frozen-v1    # ...and commit and tag
 generate.js                  # PROTOCOL.md §7 — frozen; node:crypto only, no dependencies
 data/
   schedule_template.json     # frozen and verified — do not hand-edit
-  roster.example.json        # Pantheon event roster snapshot; fill in, rename to roster.json
+  roster.example.json        # shape reference; the real one is written by tools/freeze.js
   protocol.example.json      # FROZEN parameters: chain, target round, quorum, input range
   runtime.example.json       # operational settings — not frozen, not tagged, optional
 server/
   server.js                  # the six endpoints of §6, plus the SSE stream
-  finalise.js                # the scheduled draw job and the Pantheon sync (§5, §8)
+  finalise.js                # the draw job and the Pantheon sync (§5, §8) — a separate
+                             # process, run on a timer by schedule.js
                              # idempotent: never re-draws, never un-publishes a result
+  schedule.js                # the timer that runs finalise.js, so no cron or systemd is needed
   rounds.js                  # voided attempts: archive, verify, and open the next one
   admin.js                   # the organiser's read-only dashboard (RUNBOOK C/D)
   pantheon.js                # the Pantheon boundary: Twirp client + in-process stub
@@ -106,6 +177,7 @@ server/
   ciphertext.js              # admission checks — is this addressed to our chain and round?
   stats.js                   # per-player figures for the explorer (§7 of UI-SPEC)
   drand.js                   # multi-mirror beacon client; refuses to draw if mirrors disagree
+  ots.js                     # OpenTimestamps writer, zero dependencies (§9 anchoring)
   tlock.js  db.js  events.js  mirror.js
 client/
   App.jsx                    # the stage machine (UI-SPEC §2)
@@ -122,6 +194,7 @@ tools/
   verify_template.py         # re-derives every invariant of the template
   verify_contribution.py     # second implementation of the byte encoding, in another language
   build-client.js            # builds and hash-pins the browser bundle
+  verify-template.js         # the same invariants as the Python one, for the freeze path
   pick-round.js              # target_round and cutoff, kept consistent
   new-round.js               # after a void: verify the archive, then open the next attempt
   freeze.js                  # RUNBOOK 8-11 as one command: snapshot, check, commit, tag
@@ -132,7 +205,7 @@ test/
   *.test.js                  # unit tests, incl. the roll-call against the snapshot
   e2e.js                     # RUNBOOK A2-A7 against live drand
 deploy/
-  Caddyfile, *.service, *.timer, README.md
+  nginx.conf, Caddyfile, mahjong-relay.service (optional), README.md
 ```
 
 
