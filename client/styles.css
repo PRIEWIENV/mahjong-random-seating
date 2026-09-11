@@ -239,6 +239,12 @@ input:focus-visible, button:focus-visible, .grid th:focus-visible, .lang-toggle:
 }
 .cd-unit i { font-style: normal; color: var(--muted); font-size: 0.85rem; margin-left: 3px; }
 .countdown.done b { color: var(--accent); font-size: clamp(26px, 7vw, 44px); }
+/* The draw is late. Deliberately not the accent colour the "Drawing" state uses: the
+   difference between those two states is the whole point, and a player who glances at
+   the page must not read one as the other. */
+.countdown.stuck b { color: var(--warn); font-size: clamp(22px, 5.5vw, 34px); }
+.note.stuck p { margin: 0 0 8px; text-align: left; }
+.note.stuck p:last-child { margin-bottom: 0; }
 
 .tally-head, .beacon-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .pill { font-size: 0.78rem; padding: 4px 11px; border-radius: 99px; white-space: nowrap; }

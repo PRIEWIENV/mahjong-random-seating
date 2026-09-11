@@ -230,8 +230,8 @@ Two ways that principle was stated but not actually implemented, both fixed:
 - **`run()` did not use `phaseOf` at all.** It read the persisted key directly, so on a
   fresh database the scheduled job walked straight past the guard, snapshotted an empty
   submissions table, found it below quorum and **published `events/void.json` over a
-  completed draw** — mirroring it to the repository in the process. The systemd timer
-  fires every five minutes, so this needed only one lost `var/` to happen on its own.
+  completed draw** — mirroring it to the repository in the process. The job runs every
+  minute, so this needed only one lost `var/` to happen on its own.
   `run()` now derives its state through `phaseOf` and reconciles the database with the
   file. `test/resume.test.js` pins it.
 
@@ -624,9 +624,9 @@ client sends. That client hides what it is stamping; this roll is published in f
 moments later, and stamping it bare is what lets a reader verify the `.ots` against the
 `snapshot.json` they downloaded, with no extra step.
 
-### Two bugs the stopwatch found
+### Three bugs the stopwatch found
 
-Timing the rehearsal turned up two things no assertion was looking at.
+Timing the rehearsal turned up three things no assertion was looking at.
 
 **The unit suite had started using the network.** `publishRoll` defaulted to the real
 stamper, so every test that finalised anything dialled four calendars: `rounds.test.js`
@@ -642,14 +642,116 @@ spun until its two-minute timeout and then returned false, which reads as failur
 had been there all along; nothing timed that path. A disabled mirror now queues nothing,
 because the local copy under `events/` is already on disk.
 
-Together they took the rehearsal from 253 seconds to 134, and `npm run e2e` to 90.
+**The job polled its way through an interval whose length it already knew.** `finalise`
+starts at the cutoff, and the beacon it is waiting for does not exist until
+`reveal_gap_seconds` later. The wait loop asked drand every fifteen seconds for the whole
+of it, and then, once the round was actually due, could still miss it by most of another
+fifteen: where the polls fell depended on how long the OpenTimestamps stamp had taken
+just before. That is a random delay bolted onto the end of a draw, which is the one place
+this program should not have one.
+
+Nothing about the round's time is a guess. protocol.json fixes it, `config.js` derives
+`target_round_ms`, drand emits on a fixed period. So the first miss now sleeps to exactly
+that moment and polls only afterwards, once a second, because from then on the delay is
+propagation rather than the interval. In the rehearsal the stretch between the beacon
+landing and the draw being finished fell from 17 seconds to 8, and stopped varying from
+run to run. A ten-minute production interval had been costing forty round trips to the
+mirrors for nothing.
+
+Two details are worth keeping. The sleep is clamped so it cannot run past `maxWaitMs`,
+or a deployment whose give-up timeout is shorter than its own interval would be told so
+late. And the log is throttled to one line when the round first runs late and one every
+half minute after, because at a one-second poll a genuinely stalled drand would otherwise
+bury its own diagnosis under a line per second.
+
+The first two took the rehearsal from 253 seconds to 134, and `npm run e2e` to 90. The
+third took it to 122. What is left in D14 is the interval itself, which is the whole
+point of the step, plus the work that genuinely follows a beacon: twelve tlock
+decryptions, the seat plan, the Pantheon sync, and a second process for `--verify`.
+
+## 6j. Who runs the draw, and the bug that came out from under it
+
+The server serves the page. `server/finalise.js` draws. Keeping them separate is §9's
+doing — nothing an outsider can poke may trigger, retry or re-time the draw — and it is
+right. What was wrong was the conclusion drawn from it: that scheduling the job is
+somebody else's problem. The only documented scheduler was a systemd timer, which asks
+for root on a machine the organiser may not own and does not exist at all on Windows,
+where this is developed and rehearsed.
+
+So the realistic deployment served the page perfectly and never drew. Players signed in,
+sealed their numbers, watched the countdown reach zero, and nothing happened — and
+nothing anywhere said why, because every other indicator was green.
+
+`server/schedule.js` gives the server a timer of its own. It is not an endpoint: no
+request reaches it, and the interval is a number in a file on the box, so §9 is
+untouched. It **spawns** the job rather than calling `run()` in-process, which keeps
+three properties that are worth more than the saved process: the page stays responsive
+through a dozen tlock decryptions, a crash in the draw cannot take the server with it,
+and what the rehearsal exercises is the same command a cron would run. `run_finalise` in
+`runtime.json` turns it off for anyone who does have a scheduler; the two must not both
+fire, not because a double draw would disagree — it could not — but because it would
+stamp the roll twice and write to Pantheon twice.
+
+The page, the dashboard and the boot log all now say when nothing has drawn. That was
+the actual defect: not that the draw could fail to be scheduled, but that it could fail
+silently.
+
+### The clock it exposed
+
+Waking exactly at the round instead of polling past it (item 6i) turned a rare failure
+into a reliable one. The rehearsal drew 9 of 12, then 11 of 12, then 9 again, and named
+the missing players as **excluded**, with `results.json` saying so and the exclusion
+published:
+
+```
+local_id 1 — It's too early to decrypt the ciphertext - decryptable at round 32098187
+```
+
+The obvious reading is that the beacon had not propagated. It is not what happened.
+tlock never asks the beacon whether it is time; the check is local arithmetic, in
+`tlock-js/drand/timelock-decrypter.js`:
+
+```js
+if (roundTime(chainInfo, roundNumber) > Date.now()) {
+  throw Error(`It's too early to decrypt the ciphertext - decryptable at round ${roundNumber}`);
+}
+```
+
+`roundTime` is `genesis_time + (round - 1) * period`, and the comparison is against
+**this machine's clock**. So the two questions the job asks are answered by two
+different clocks: drand's servers decide whether the beacon exists, and the local clock
+decides whether tlock will use it. A host running a second or two behind drand is handed
+the key and then told it is too early to turn it.
+
+That also explains the shape of the failure, which nothing about propagation does: the
+first few players excluded and the rest fine. Each decryption takes a few hundred
+milliseconds, so the clock catches up partway through the loop.
+
+It had been latent the whole time. A fifteen-second poll meant the draw always ran
+several seconds after the round, which was enough to hide any plausible skew. Nothing
+was wrong with the old cadence except that it was slow enough to be lucky.
+
+The fix is in two parts, and the first is the real one. Before decrypting, the job waits
+out its own clock: `target_round_ms` comes from `target_round_utc`, which
+`tools/pick-round.js` computes with the same formula from the same chain info, so it is
+exactly the instant tlock will test against. Satisfy the test locally before asking.
+
+The second part is a net. "Too early" now raises `BeaconNotReadyError` rather than
+being filed alongside a malformed ciphertext: the pass is abandoned at the first one
+instead of working through the rest, and the caller retries — `pollMs` later when
+waiting, or on the next run of the scheduled job, which does nothing at all in the
+meantime. A round is drawn complete or not yet.
+
+Keeping both is deliberate. An exclusion is irreversible and published, so the bar for
+producing one has to be a failure that cannot be a timing artefact — and that bar should
+not rest on one arithmetic identity holding between two codebases.
 
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 264 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll | pass |
+| Unit tests (`npm test`) — 283 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -663,6 +765,8 @@ Together they took the rehearsal from 253 seconds to 134, and `npm run e2e` to 9
 | Behind a proxy the rate limit is per player, and a forged `X-Forwarded-For` buys nothing | passes |
 | The `.ots` this writes is accepted by python-opentimestamps, with four calendar attestations | passes |
 | The roll is published and anchored at the cutoff, not at the draw | passes |
+| A clock short of the round delays the draw instead of excluding whoever was decrypted first | passes |
+| The server draws on its own timer, with no systemd and no root (`npm run rehearse` step 14) | passes |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |
@@ -686,5 +790,7 @@ Together they took the rehearsal from 253 seconds to 134, and `npm run e2e` to 9
 | The whole suite on Linux (WSL 2), including e2e A2-A7 | passes |
 | **The Pantheon instance actually deployed against** | **outstanding — §5.1 is one commit's behaviour** |
 
-`npm run e2e` needs network access to `api.drand.sh` and takes about three minutes,
-most of it waiting for the target round to land.
+`npm run e2e` needs network access to `api.drand.sh` and takes about ninety seconds,
+`npm run rehearse` about two minutes. Most of both is spent waiting for a target round to
+land, which is the one part of either that cannot be made faster without making it a
+different test.

@@ -65,6 +65,7 @@ Do not offer an edit or withdraw affordance. A submission is final by design; sa
 - **Submission tally** — "9 of 12 sealed", with the twelve players as chips: sealed ones filled and named, unsealed ones outlined. Who has submitted is public; what they submitted is not, and the UI should make that distinction obvious in words.
 - **Quorum marker** on the tally: the threshold of 8 drawn on the track, so a player can see at a glance whether the draw is already safe.
 - **drand status** — the chain's latest round, whether it is advancing, and the round the draw is waiting for. A quiet pulse on each new beacon round is enough to show liveness; if the beacon goes stale, say so plainly rather than hiding it.
+- **After the countdown reaches zero**, three states and not one. The server never draws — a separate job does, on a timer — so the page must distinguish "the result is a minute away" from "nobody is computing it". While `status.draw.overdue` is false it says *Drawing*; once it is true it says the draw has not run, how late it is, that the outcome was fixed at the cutoff and cannot be affected, and to contact the organiser. An animation that runs forever is the same lie as an invented progress bar.
 
 Everything here updates over SSE. If the stream drops, fall back to polling `/api/status` and show a subdued "reconnecting" note. The interval is whatever the status payload's `status_poll_interval_ms` says, defaulting to 15 s.
 

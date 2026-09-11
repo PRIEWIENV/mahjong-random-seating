@@ -351,6 +351,47 @@ test('phase goes open -> void below quorum and open -> awaiting_round at or abov
   await s.close(); await s2.close();
 });
 
+test('the status separates a draw that is pending from one that is not happening', async () => {
+  // This process never draws; server/finalise.js does, on a timer. A gap between the
+  // beacon landing and the result appearing is therefore normal, and the page used to
+  // render that gap and a dead timer identically, as "Drawing", forever. The status has
+  // to be able to tell them apart or the page cannot.
+  let now = Date.now();
+  const gap = 600;
+  const s = await boot({
+    protocol: { submission_cutoff_utc: new Date(now + 1000).toISOString(), reveal_gap_seconds: gap },
+    now: () => now,
+  });
+  for (let i = 1; i <= 8; i++) {
+    const { cookie } = await s.signIn(1000 + i);
+    await s.submit(cookie, ct(s.cfg.protocol));
+  }
+
+  // Before the cutoff there is nothing to be late for.
+  assert.equal((await s.get('/api/status')).body.draw, null);
+
+  // Inside the interval: sealed, but the beacon does not exist yet, so still nothing.
+  now += 5000;
+  assert.equal((await s.get('/api/status')).body.phase, 'awaiting_round');
+  assert.equal((await s.get('/api/status')).body.draw, null);
+
+  // The beacon's round has passed. Late, but not yet longer than the timer needs to
+  // notice and do the work.
+  now += gap * 1000;
+  const pending = (await s.get('/api/status')).body.draw;
+  assert.equal(pending.overdue, false, 'grace, because the timer may have fired just before the beacon');
+  assert.equal(pending.grace_seconds, 120, 'two runs of the one-minute timer');
+  assert.ok(pending.seconds_late >= 0);
+
+  // Past the grace: the job is not running, and the page is entitled to say so.
+  now += 121_000;
+  const late = (await s.get('/api/status')).body.draw;
+  assert.equal(late.overdue, true);
+  assert.ok(late.seconds_late > 120);
+  assert.equal(late.round_due_utc, s.cfg.protocol.target_round_utc);
+  await s.close();
+});
+
 // ---------------------------------------------------------------------------
 // mirroring, SSE, static, misc
 // ---------------------------------------------------------------------------

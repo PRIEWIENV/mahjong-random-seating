@@ -1,5 +1,5 @@
 [Unit]
-Description=Mahjong seating relay (accepts tlock ciphertexts)
+Description=Mahjong seating relay (accepts tlock ciphertexts, and runs the draw)
 Documentation=file:///opt/mahjong/app/docs/PROTOCOL.md
 After=network-online.target
 Wants=network-online.target
@@ -14,17 +14,26 @@ ExecStart=/usr/bin/node server/server.js
 Restart=always
 RestartSec=3
 
+# Optional. Only for a box you have root on; the app needs none of this to run, and
+# deploy/README.md §3 has the ways that need no privileges at all.
+#
 # The relay holds nothing that would let anyone decrypt early, but it does hold the
 # mirroring PAT, so give it as little of the machine as it can work with.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/mahjong/app/var /opt/mahjong/app/events
+# The app directory, not just var/ and events/: this unit spawns server/finalise.js,
+# which publishes results.json at the root of the checkout. Narrowing this to the two
+# subdirectories makes the draw fail at its last step, after the beacon is out and with
+# the outcome already determined, which is the worst moment available for it.
+ReadWritePaths=/opt/mahjong/app
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6
-MemoryMax=256M
+# Covers the draw child too, which holds a dozen tlock ciphertexts and their plaintexts
+# at once. The old figure was for a process that only ever relayed.
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target

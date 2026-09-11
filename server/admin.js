@@ -33,6 +33,7 @@ const path = require('node:path');
 
 const { readIndex } = require('./rounds');
 const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
+const { KEY_TICK } = require('./finalise');
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
@@ -156,6 +157,29 @@ function collect(ctx) {
     cfg.protocol.chain_public_key ? 'ok' : 'fail',
     'The drand chain is pinned by hash AND public key',
     cfg.protocol.chain_hash
+  );
+  // The failure this page exists to catch. Serving the page and drawing are two
+  // programs; if only the first was ever started, everything else here stays green,
+  // the players' countdown reaches zero, and nothing happens. Reading the job's own
+  // heartbeat is what separates that from a late beacon, which looks identical from
+  // here and needs the opposite response — wait, rather than go and start something.
+  const tick = store.get(KEY_TICK);
+  const interval = cfg.runtime.server.finalise_interval_seconds;
+  const sinceTick = tick ? now - Date.parse(tick.at) : null;
+  const overdue = Boolean(status.draw?.overdue);
+  check(
+    tick === undefined || tick === null
+      ? (overdue ? 'fail' : 'warn')
+      : sinceTick > interval * 2000 ? (overdue ? 'fail' : 'warn') : 'ok',
+    'The draw job has run',
+    tick
+      ? `server/finalise.js last ran ${tick.at} (${duration(sinceTick)} ago), expected every ${interval}s` +
+        (cfg.runtime.server.run_finalise ? ', run by this server' : ', run by something outside this server')
+      : 'server/finalise.js has NEVER run against this database. ' +
+        (cfg.runtime.server.run_finalise
+          ? 'This server is supposed to be running it — check the server log for [schedule] lines'
+          : 'server.run_finalise is off in data/runtime.json, so something else has to run it, ' +
+            'and nothing has. Set it back to true, or run: node server/finalise.js')
   );
   check(
     adminOverPlainHttp ? 'warn' : 'ok',

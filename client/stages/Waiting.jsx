@@ -32,6 +32,13 @@ const TEXT = {
   zh: {
     until: '距离开奖',
     drawing: '开奖中',
+    drawingHint: '信标已产生，开奖任务将在几分钟内运行。',
+    stuckTitle: '开奖任务没有运行',
+    stuckLate: (mins) => `目标轮次的信标已经在 ${mins} 分钟前产生，但开奖仍未进行。`,
+    stuckSafe: '这不会改变结果。参与名单在截止时就已冻结，信标也已公开，谁坐哪里此刻其实已经定下，只是还没有人把它算出来。',
+    stuckWho: '请联系组织者。',
+    sealedAt: '封存截止',
+    drawAt: '开奖',
     countdown: '倒计时',
     d: '天', h: '时', m: '分', s: '秒',
     round: (n) => `drand 第 ${n} 轮`,
@@ -64,6 +71,13 @@ const TEXT = {
   en: {
     until: 'Until the draw',
     drawing: 'Drawing',
+    drawingHint: 'The beacon is out. The draw job runs within a few minutes.',
+    stuckTitle: 'The draw job is not running',
+    stuckLate: (mins) => `The beacon for the target round arrived ${mins} minutes ago and the draw still has not run.`,
+    stuckSafe: 'This cannot change the outcome. The list of participants was frozen at the cutoff and the beacon is public, so who sits where is already decided. Nobody has computed it yet.',
+    stuckWho: 'Please contact the organiser.',
+    sealedAt: 'Sealed at',
+    drawAt: 'Draw',
     countdown: 'Countdown',
     d: 'd', h: 'h', m: 'm', s: 's',
     round: (n) => `drand round ${n}`,
@@ -140,9 +154,22 @@ export default function Waiting({ status, me, serverNow, connection }) {
   const t = useText(TEXT);
   if (!status) return null;
 
-  const left = Date.parse(status.cutoff_utc) - serverNow();
+  // UI-SPEC §5 anchors the countdown on the target round, not on the cutoff. The two
+  // are reveal_gap_seconds apart (PROTOCOL.md §9), and the interval between them is not
+  // dead time: the roll of who submitted is published in it, while the beacon that
+  // would open the ciphertexts does not yet exist. Counting to the cutoff here meant
+  // the page announced "Drawing" for the whole of that gap, when nothing was.
+  const cutoffAt = Date.parse(status.cutoff_utc);
+  const roundAt = Date.parse(status.target_round_utc);
+  const drawAt = Number.isFinite(roundAt) ? roundAt : cutoffAt;
+  const left = drawAt - serverNow();
   const { d, h, m, s } = split(left);
   const elapsed = left <= 0;
+  const sealed = serverNow() >= cutoffAt;
+  // The server says whether the draw is merely pending or actually late; this page does
+  // not guess, because the answer depends on a schedule it cannot see.
+  const overdue = Boolean(status.draw?.overdue);
+  const lateMinutes = Math.floor((status.draw?.seconds_late || 0) / 60);
   const met = status.submitted_count >= status.quorum;
   const pct = (status.submitted_count / status.total_slots) * 100;
   const quorumPct = (status.quorum / status.total_slots) * 100;
@@ -154,13 +181,15 @@ export default function Waiting({ status, me, serverNow, connection }) {
   // beacon that opens the ciphertexts exists (PROTOCOL.md §9). Once the draw has
   // happened the fingerprint is still true but no longer a commitment to anything,
   // and the result page is where people should be looking.
-  const roll = elapsed && status.phase === 'awaiting_round' ? status.roll : null;
+  const roll = sealed && status.phase === 'awaiting_round' ? status.roll : null;
 
   return (
     <div className="stage waiting">
       <section className="countdown-block">
         <p className="eyebrow">{t.until}</p>
-        {elapsed ? (
+        {elapsed && overdue ? (
+          <div className="countdown stuck"><span className="cd-unit"><b>{t.stuckTitle}</b></span></div>
+        ) : elapsed ? (
           <div className="countdown done"><span className="cd-unit"><b>{t.drawing}</b></span></div>
         ) : (
           <div className="countdown" aria-label={t.countdown}>
@@ -171,8 +200,22 @@ export default function Waiting({ status, me, serverNow, connection }) {
           </div>
         )}
         <p className="hint">
-          {formatDateTime(status.cutoff_utc, lang)} · {t.round(status.target_round)}
+          {t.sealedAt} {formatDateTime(status.cutoff_utc, lang)}
+          {status.target_round_utc && <> · {t.drawAt} {formatDateTime(status.target_round_utc, lang)}</>}
+          {' · '}{t.round(status.target_round)}
         </p>
+        {elapsed && !overdue && <p className="note">{t.drawingHint}</p>}
+        {/* Not an error message so much as a correction: the page has been saying
+            "Drawing" and nothing is drawing. Say what is actually missing, and say in
+            the same breath that the outcome is not at risk, because a player who reads
+            only the first sentence will assume it is. */}
+        {elapsed && overdue && (
+          <div className="note warn stuck">
+            <p>{t.stuckLate(lateMinutes)}</p>
+            <p>{t.stuckSafe}</p>
+            <p>{t.stuckWho}</p>
+          </div>
+        )}
         {me?.submitted && <p className="note ok">{t.yours}</p>}
       </section>
 

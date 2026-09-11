@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { run, phaseOf, KEY_PHASE, KEY_SYNC } = require('../server/finalise');
+const { run, phaseOf, KEY_PHASE, KEY_SYNC, KEY_TICK } = require('../server/finalise');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
@@ -246,5 +246,45 @@ test('phaseOf reports void from the published notice alone', async () => {
   const c = belowQuorum(7);
   await invoke(c);
   assert.equal(phaseOf(c.cfg, new Store(':memory:')), 'void');
+  cleanup(c.fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// leaving evidence that it ran at all
+// ---------------------------------------------------------------------------
+
+test('every run records that the job ran, including the ones that do nothing', async () => {
+  // The web server does not draw, so "the beacon is out and the phase has not moved"
+  // has two explanations with opposite remedies: drand is late, or nobody ever
+  // installed the timer. Nothing could tell them apart, and the page said "Drawing"
+  // through both. The heartbeat is what separates them, which means it has to be
+  // written by the no-op runs too — before the cutoff, the no-op IS every run.
+  const fx = makeDataDir({ protocol: { submission_cutoff_utc: new Date(Date.now() + 3_600_000).toISOString() } });
+  const cfg = load({ dataDir: fx.dataDir });
+  cfg.root = fx.dir;
+  const store = new Store(':memory:');
+  assert.ok(!store.get(KEY_TICK), 'nothing should have run yet');
+
+  const out = await run({
+    cfg, store, wait: false, log: QUIET,
+    mirror: { enabled: false, enqueue() {}, drain: async () => true },
+    pantheon: new StubPantheon(cfg),
+    drand: { round: async () => { throw new Error('nothing should be drawn before the cutoff'); } },
+  });
+  assert.equal(out.phase, 'open', 'before the cutoff the job is a no-op');
+  const tick = store.get(KEY_TICK);
+  assert.ok(tick, 'a no-op run still has to leave proof it ran');
+  assert.ok(Math.abs(Date.now() - Date.parse(tick.at)) < 60_000);
+  cleanup(fx.dir);
+});
+
+test('the heartbeat is written before the work, so a crash still proves the job fired', async () => {
+  // Recording it on success would make a job that runs and then dies look exactly like
+  // one that was never installed, which is the failure this key exists to rule out.
+  const c = finished();
+  c.pantheon = { getPrescript: async () => { throw new Error('Pantheon is down'); },
+                 setPrescript: async () => { throw new Error('Pantheon is down'); } };
+  await invoke(c).catch(() => {});
+  assert.ok(c.store.get(KEY_TICK), 'the run left no trace');
   cleanup(c.fx.dir);
 });

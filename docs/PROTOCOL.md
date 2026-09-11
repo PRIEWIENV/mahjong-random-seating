@@ -139,7 +139,8 @@ The split is not tidiness. Freezing something that fails the test makes the run 
     "mimir_service": "mimir.Mimir"
   },
   "ui":     { "status_poll_interval_ms": 15000 },
-  "server": { "sse_heartbeat_ms": 25000, "session_ttl_days": 30, "rate_limit_per_minute": 30, "trust_proxy": false }
+  "server": { "sse_heartbeat_ms": 25000, "session_ttl_days": 30, "rate_limit_per_minute": 30,
+              "trust_proxy": false, "run_finalise": true, "finalise_interval_seconds": 60 }
 }
 ```
 

@@ -23,6 +23,7 @@ const { createServer } = require('../server/server');
 const { collect } = require('../server/admin');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
+const { KEY_TICK } = require('../server/finalise');
 const { StubPantheon } = require('../server/pantheon');
 const { makeDataDir, fakeCiphertext, cleanup, ROOT } = require('./helpers');
 
@@ -199,13 +200,18 @@ test('an artefact that is not where it should be reads as missing, not as blank'
 // ---------------------------------------------------------------------------
 
 function checksFor(over) {
-  const { dataDirOpts, ...rest } = over;
+  const { dataDirOpts, tick, ...rest } = over;
   const fx = makeDataDir(dataDirOpts || {});
   const cfg = load({ dataDir: fx.dataDir });
   cfg.root = fx.dir;
+  const store = new Store(':memory:');
+  // A working deployment has the draw job on a timer, so the default fixture has one
+  // that ran a moment ago. Pass tick: null for a deployment where it never ran, or a
+  // timestamp for one where it has stopped.
+  if (tick !== null) store.set(KEY_TICK, { at: new Date(tick ?? Date.now()).toISOString() });
   const model = collect({
     cfg,
-    store: new Store(':memory:'),
+    store,
     status: { phase: 'open', submitted_count: 0, drand: { healthy: true, latest_round: 1 } },
     syncOutcome: null,
     publicDir: path.join(ROOT, 'public'),
@@ -222,6 +228,28 @@ function checksFor(over) {
 test('a clean production configuration is all green', () => {
   const c = checksFor({});
   assert.deepEqual([...new Set(Object.values(c))], ['ok'], JSON.stringify(c, null, 2));
+});
+
+test('a draw job that never ran is a warning, and a failure once the draw is late', () => {
+  // The failure this row exists for. Serving the page and running the draw are two
+  // programs, and installing only the first leaves every other row on this page green
+  // while the players' countdown reaches zero and nothing happens. Before the beacon it
+  // is merely unproven; after it, it is the explanation.
+  const pending = checksFor({ tick: null });
+  assert.equal(pending['The draw job has run'], 'warn');
+  const late = checksFor({
+    tick: null,
+    status: { phase: 'awaiting_round', submitted_count: 12, drand: { healthy: true, latest_round: 1 }, draw: { overdue: true, seconds_late: 900 } },
+  });
+  assert.equal(late['The draw job has run'], 'fail');
+});
+
+test('a draw job that has stopped is caught even though it once ran', () => {
+  // A timer that was installed and then died looks exactly like one that works, unless
+  // the age of its last run is what is checked rather than its existence.
+  const stale = Date.now() - 3600_000;
+  assert.equal(checksFor({ tick: stale })['The draw job has run'], 'warn');
+  assert.equal(checksFor({ tick: Date.now() - 60_000 })['The draw job has run'], 'ok');
 });
 
 test('the stub in production is a failure, on a laptop only a warning', () => {

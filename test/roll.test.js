@@ -20,8 +20,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { publishRoll, rollBody, rollDigest, takeSnapshot, KEY_ROLL } = require('../server/finalise');
+const {
+  run, publishRoll, rollBody, rollDigest, takeSnapshot, retryNapMs, decryptSnapshot,
+  BeaconNotReadyError, KEY_ROLL,
+} = require('../server/finalise');
 const { Store } = require('../server/db');
+const { StubPantheon } = require('../server/pantheon');
 const { makeDataDir, cleanup, fakeCiphertext } = require('./helpers');
 const { load } = require('../server/config');
 
@@ -165,4 +169,148 @@ test('with no stamper the roll is still published, and nothing is dialled', asyn
     globalThis.fetch = saved;
     c.close();
   }
+});
+
+/**
+ * Waiting out the interval (server/finalise.js).
+ *
+ * The job starts at the cutoff and the beacon does not exist until reveal_gap_seconds
+ * later, so almost all of its life is spent waiting for something whose arrival time is
+ * already written down in protocol.json. Polling blindly through that is both pointless
+ * traffic and, worse, a random delay bolted onto the end of the draw: the round can land
+ * a whole poll interval before anyone asks for it.
+ */
+
+const DUE = Date.parse('2026-09-10T20:10:00Z');
+const POLL = 1_000;
+
+test('before the round is due, it sleeps exactly until the round and not one interval', () => {
+  const now = DUE - 600_000;
+  assert.equal(retryNapMs(DUE, now, POLL), 600_000);
+  assert.equal(retryNapMs(DUE, DUE - 1, POLL), 1);
+});
+
+test('once the round is due, it polls, because now the delay is propagation', () => {
+  assert.equal(retryNapMs(DUE, DUE, POLL), POLL);
+  assert.equal(retryNapMs(DUE, DUE + 5_000, POLL), POLL);
+});
+
+test('a protocol with no derived round time falls back to polling rather than to NaN', () => {
+  // The only way this happens is a caller assembling a cfg by hand. A NaN nap is an
+  // immediate spin, which would turn a missing field into a denial of service against
+  // the drand mirrors.
+  for (const bad of [undefined, null, NaN, 'soon']) {
+    assert.equal(retryNapMs(bad, DUE, POLL), POLL);
+  }
+});
+
+/**
+ * Being decrypted too promptly must not cost anyone their place.
+ *
+ * Holding the beacon for a round and being allowed to open a ciphertext with it are two
+ * different questions, asked of two different clocks. drand's servers decide the first.
+ * tlock decides the second on its own, locally: genesis_time + (round - 1) * period
+ * against Date.now(). A host running a second behind drand is handed the key and then
+ * told it is too early to use it — and that was filed alongside a malformed ciphertext:
+ * excluded, published as excluded, and final. A player could be thrown out of the draw
+ * because the organiser's machine was slightly slow and its job slightly fast.
+ *
+ * It surfaced when the wait loop stopped polling every fifteen seconds and started
+ * waking exactly at the round. The draw went from always several seconds late to
+ * immediate, and the rehearsal lost first three players, then one — the first few
+ * decryptions failing while the rest succeeded, because each one took long enough for
+ * the clock to catch up.
+ */
+
+const TOO_EARLY = "It's too early to decrypt the ciphertext - decryptable at round 32098187";
+
+const snapOf = (...ids) => ({
+  cutoff_utc: SNAP.cutoff_utc,
+  local_ids: ids,
+  submissions: ids.map((local_id) => ({ local_id, ciphertext: `c${local_id}`, received_at: SNAP.taken_at })),
+});
+
+test('a beacon that has not propagated stops the pass instead of excluding anyone', async () => {
+  const c = fixture();
+  const seen = [];
+  await assert.rejects(
+    () => decryptSnapshot(snapOf(1, 2, 3), c.cfg, QUIET, {
+      decryptFn: async (ct) => { seen.push(ct); throw new Error(TOO_EARLY); },
+    }),
+    (err) => err instanceof BeaconNotReadyError && /not yet servable/.test(err.message),
+  );
+  // And it gives up at the first one rather than working through the rest: they would
+  // all fail the same way, and the point is that none of them is at fault.
+  assert.deepEqual(seen, ['c1']);
+  c.close();
+});
+
+test('a ciphertext that is genuinely unopenable is still excluded, one player only', async () => {
+  // The distinction is the whole fix. One is about the clock and clears by itself; the
+  // other is about the ciphertext and never will.
+  const c = fixture();
+  const { decrypted, excluded } = await decryptSnapshot(snapOf(1, 2, 3), c.cfg, QUIET, {
+    decryptFn: async (ct) => {
+      if (ct === 'c2') throw new Error('decrypted payload is not JSON');
+      return { user_input: 7, client_nonce: 'a'.repeat(32), client_timestamp: SNAP.taken_at };
+    },
+  });
+  assert.deepEqual(decrypted.map((d) => d.local_id), [1, 3]);
+  assert.equal(excluded.length, 1);
+  assert.equal(excluded[0].local_id, 2);
+  assert.match(excluded[0].reason, /not JSON/);
+  c.close();
+});
+
+test('the scheduled job does nothing and waits, rather than drawing a round short', async () => {
+  // The scheduler runs with --no-wait every minute, so the correct response to a beacon
+  // that has not propagated is to leave the whole thing alone: no results, no void
+  // notice, no exclusions, phase unchanged. The next run draws a complete round.
+  const c = fixture();
+  const now = Date.parse(c.cfg.protocol.submission_cutoff_utc) - 60_000;
+  for (let id = 1; id <= 12; id++) {
+    c.store.insertSubmission(id, fakeCiphertext(c.cfg.protocol.target_round, c.cfg.protocol.chain_hash), now);
+  }
+  const out = await run({
+    cfg: c.cfg, store: c.store, log: QUIET, wait: false,
+    now: c.cfg.protocol.target_round_ms + 1000,
+    mirror: { enabled: false, enqueue() {}, flush: async () => {}, drain: async () => true },
+    pantheon: new StubPantheon({ roster: c.fx.roster }),
+    drand: { round: async () => ({ round: c.cfg.protocol.target_round, signature: 'ab'.repeat(48), mirrors: ['m'] }) },
+    decryptFn: async () => { throw new Error(TOO_EARLY); },
+  });
+  assert.equal(out.phase, 'awaiting_round');
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'results.json')), false, 'it drew anyway');
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'events', 'void.json')), false, 'it voided a full round');
+  c.close();
+});
+
+test('a clock short of the round waits for itself rather than excluding anyone', async () => {
+  // The fix that makes the retry above almost unreachable: tlock's test is local, so
+  // the answer is to satisfy it locally before asking. Four hundred milliseconds here,
+  // a second or two on a host whose NTP has drifted.
+  const c = fixture();
+  const now = Date.parse(c.cfg.protocol.submission_cutoff_utc) - 60_000;
+  for (let id = 1; id <= 12; id++) {
+    c.store.insertSubmission(id, fakeCiphertext(c.cfg.protocol.target_round, c.cfg.protocol.chain_hash), now);
+  }
+  const due = Date.now() + 400;
+  c.cfg.protocol.target_round_ms = due;
+
+  const decryptedAt = [];
+  const out = await run({
+    cfg: c.cfg, store: c.store, log: QUIET, wait: false,
+    now: Date.parse(c.cfg.protocol.submission_cutoff_utc) + 1000,
+    mirror: { enabled: false, enqueue() {}, flush: async () => {}, drain: async () => true },
+    pantheon: new StubPantheon({ roster: c.fx.roster }),
+    drand: { round: async () => ({ round: c.cfg.protocol.target_round, signature: 'ab'.repeat(48), mirrors: ['m'] }) },
+    decryptFn: async (ct) => {
+      decryptedAt.push(Date.now());
+      return { user_input: Number(ct.length % 7), client_nonce: 'b'.repeat(32), client_timestamp: SNAP.taken_at };
+    },
+  });
+  assert.equal(out.phase, 'done');
+  assert.equal(decryptedAt.length, 12, 'every player must be opened, not just the ones the clock allowed');
+  assert.ok(decryptedAt[0] >= due, `the first decryption ran ${due - decryptedAt[0]}ms before the round's time`);
+  c.close();
 });

@@ -208,7 +208,7 @@ async function main() {
     step(`A2: ${c.n} submissions must draw, and sync`);
     const out = await finalise({
       cfg: c.sc.cfg, store: c.sc.store, mirror: c.sc.mirror, pantheon: c.sc.pantheon,
-      drand, wait: true, pollMs: 3000, maxWaitMs: 5 * 60_000, log: QUIET,
+      drand, wait: true, maxWaitMs: 5 * 60_000, log: QUIET,
     });
     assert.equal(out.phase, 'done', `[${c.name}] expected done, got ${out.phase} ${out.error || ''}`);
     const r = out.results;

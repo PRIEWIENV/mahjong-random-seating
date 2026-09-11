@@ -42,7 +42,8 @@ const { load } = require('./config');
 const { Store } = require('./db');
 const { assertAdmissible, CiphertextError } = require('./ciphertext');
 const { Mirror, writeLocal } = require('./mirror');
-const { phaseOf, KEY_RESULT, KEY_ROLL, KEY_SYNC } = require('./finalise');
+const { phaseOf, KEY_RESULT, KEY_ROLL, KEY_SYNC, KEY_TICK } = require('./finalise');
+const { startScheduler } = require('./schedule');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
@@ -212,11 +213,44 @@ function createServer(opts = {}) {
     };
   }
 
+  /**
+   * Whether the draw is merely pending or actually late.
+   *
+   * This process never draws. server/finalise.js does, on a timer (deploy/README.md
+   * §3), so a gap between the beacon landing and the result appearing is normal: up to
+   * one timer interval of it. Past that, the page must stop animating and say what is
+   * true, because the two states look identical from a chair and have opposite
+   * meanings. The outcome is not in doubt either way — the snapshot was frozen at the
+   * cutoff — but "being computed" and "nobody is computing it" are not the same news.
+   */
+  function drawStatus(phase, now) {
+    if (phase !== 'awaiting_round') return null;
+    const dueMs = cfg.protocol.target_round_ms;
+    if (!Number.isFinite(dueMs) || now < dueMs) return null;
+    const secondsLate = Math.floor((now - dueMs) / 1000);
+    // Two intervals, not one. The first covers a timer that fired a moment before the
+    // beacon landed, so the earliest tick that could possibly have drawn is a whole
+    // interval away. The second covers the job's own work, which is a dozen tlock
+    // decryptions and a round trip to Pantheon. Past both, this is not a schedule, it
+    // is a silence.
+    const grace = cfg.runtime.server.finalise_interval_seconds * 2;
+    return {
+      round_due_utc: cfg.protocol.target_round_utc,
+      seconds_late: secondsLate,
+      grace_seconds: grace,
+      overdue: secondsLate > grace,
+    };
+  }
+
   function status() {
     const submitted = store.submittedLocalIds();
     const previous = readIndex(cfg);
+    const now = nowFn();
+    const phase = phaseOf(cfg, store, now);
     return {
-      phase: phaseOf(cfg, store, nowFn()),
+      phase,
+      // Null until the beacon is out and the phase has not moved; see drawStatus.
+      draw: drawStatus(phase, now),
       submitted_count: submitted.length,
       quorum: cfg.protocol.quorum,
       total_slots: cfg.protocol.total_slots,
@@ -268,8 +302,10 @@ function createServer(opts = {}) {
       // or being asked for a number a second time looks like the rules moving.
       attempt: previous.length + 1,
       previous_rounds: previous,
-      // UI-SPEC §5: the countdown is driven by this, so it never drifts.
-      server_time_utc: new Date(nowFn()).toISOString(),
+      // UI-SPEC §5: the countdown is driven by this, so it never drifts. The same
+      // instant the phase and the lateness above were read at, or a page could show a
+      // countdown and a lateness that disagree by a tick.
+      server_time_utc: new Date(now).toISOString(),
     };
   }
 
@@ -666,7 +702,16 @@ module.exports = { createServer, RateLimiter, COOKIE, parseCookies };
 if (require.main === module) {
   const port = Number(process.env.PORT || 8080);
   const host = process.env.HOST || '127.0.0.1'; // Caddy terminates TLS in front (§10)
-  const { server, cfg, pantheon } = createServer();
+  const { server, cfg, pantheon, store } = createServer();
+  let scheduler = null;
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => {
+      // The draw child, if one is mid-flight, is left to finish: a half-published round
+      // is worse than a few extra seconds of shutdown.
+      scheduler?.stop();
+      server.close(() => process.exit(0));
+    });
+  }
   server.listen(port, host, () => {
     console.info(`[server] listening on http://${host}:${port}`);
     console.info(`[server] event ${cfg.roster.pantheon_event_id}, ${cfg.protocol.total_slots} slots, ` +
@@ -700,5 +745,22 @@ if (require.main === module) {
         ? `[server] admin dashboard at /admin?token=… (RUNBOOK C/D)`
         : '[server] admin dashboard disabled (set ADMIN_TOKEN to enable /admin)'
     );
+    // Serving the page and running the draw are two different programs. This one starts
+    // the other on a timer unless told not to, because the failure it replaces is
+    // silent: the countdown reaches zero and nothing happens.
+    if (cfg.runtime.server.run_finalise) {
+      scheduler = startScheduler({ cfg, log: console });
+      const every = cfg.runtime.server.finalise_interval_seconds;
+      console.info(`[server] running server/finalise.js every ${every}s (server.run_finalise)`);
+    } else if (!store.get(KEY_TICK)) {
+      // Switched off and never run: something else is supposed to be doing it, and so
+      // far nothing has. The key is written by every run of the job, so this clears
+      // itself as soon as whatever it is fires once.
+      console.warn(
+        '[server] WARNING: server.run_finalise is off and server/finalise.js has never ' +
+        'run against this database. Nothing will draw. Either set it back to true in ' +
+        'data/runtime.json, or make sure the schedule you set up elsewhere is running.'
+      );
+    }
   });
 }

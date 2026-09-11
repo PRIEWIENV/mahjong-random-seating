@@ -13,7 +13,7 @@
  * its job and it refused to start without a data/roster.json. See §6e of
  * docs/IMPLEMENTATION_NOTES.md.
  *
- *   node tools/rehearse.js               the whole of B, C and D, about five minutes
+ *   node tools/rehearse.js               the whole of B, C and D, about three minutes
  *   node tools/rehearse.js --window 300  a longer submission window
  *   node tools/rehearse.js --gap 120    a longer interval between cutoff and beacon
  *   node tools/rehearse.js --keep        leave the sandbox behind to poke at
@@ -164,7 +164,14 @@ async function main(argv) {
   // write anything, which is most of a minute. A window shorter than that expires
   // during the freeze and the rehearsal fails on its own timing rather than on
   // anything it was meant to exercise.
-  const windowSec = Number(args.window || 45);
+  // Measured, not guessed, and with room: steps 10 and 11 run tools/freeze.js four
+  // times between them and two of those run the whole unit suite and rebuild the
+  // bundle. On an idle machine that is about 35 seconds; sharing the machine with
+  // anything else it has been seen at 65, and the suite grows every time something is
+  // pinned. A window that expires before step 12 fails the rehearsal on its own timing
+  // rather than on anything it was meant to exercise, and the symptom — a server
+  // reporting `void` at boot — points nowhere near the cause.
+  const windowSec = Number(args.window || 120);
   // The rehearsal takes the shortest interval the protocol allows. A real freeze uses
   // ten minutes (PROTOCOL.md section 9); waiting that long here would make the one
   // command nobody runs the one that matters most.
@@ -257,22 +264,47 @@ async function main(argv) {
     const adminToken = require('node:crypto').randomBytes(16).toString('hex');
     child = spawn(process.execPath, ['server/server.js'], {
       cwd: dir,
-      env: { ...process.env, ...env, PORT: String(port), ADMIN_TOKEN: adminToken },
+      env: {
+        ...process.env, ...env, PORT: String(port), ADMIN_TOKEN: adminToken,
+        // The deployed default is that the server draws, on its own timer. Five seconds
+        // rather than sixty only so the rehearsal is not mostly spent waiting for a
+        // tick; everything else about the path is the shipped one.
+        FINALISE_INTERVAL_SECONDS: '5',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const base = `http://127.0.0.1:${port}`;
+    // Kept for the whole run, not just the boot: step 14 asks this log who drew.
+    let serverLog = '';
+    child.stdout.on('data', (d) => { serverLog += d; });
+    child.stderr.on('data', (d) => { serverLog += d; });
     const boot = await new Promise((resolve, reject) => {
-      let buf = '';
-      // The last of the four lines it logs on boot, not the first: the ones that say
-      // which Pantheon and whether the dashboard is on come after "listening".
-      child.stdout.on('data', (d) => { buf += d; if (buf.includes('admin dashboard')) resolve(buf); });
-      child.stderr.on('data', (d) => { buf += d; });
-      child.on('exit', (code) => reject(new Error(`server exited ${code}:\n${buf}`)));
-      setTimeout(() => reject(new Error(`server did not start:\n${buf}`)), 20_000);
+      // The last of the lines it logs on boot, not the first: the ones that say which
+      // Pantheon, whether the dashboard is on and who runs the draw come after
+      // "listening".
+      const look = () => { if (serverLog.includes('running server/finalise.js every')) resolve(serverLog); };
+      child.stdout.on('data', look);
+      child.stderr.on('data', look);
+      child.on('exit', (code) => reject(new Error(`server exited ${code}:\n${serverLog}`)));
+      setTimeout(() => reject(new Error(`server did not start:\n${serverLog}`)), 20_000);
     });
     assert.match(boot, /StubPantheon/);
     assert.match(boot, /admin dashboard at \/admin/);
-    ok(`server up on ${base}, event ${EVENT_ID}, admin dashboard enabled`);
+    // A log line is not a running server. The entry point does more after that line,
+    // and a throw in any of it leaves a process that announced itself and then died —
+    // which is exactly what happened once: the boot check passed and step 13 failed
+    // with "fetch failed", three steps from the cause. Ask it something instead.
+    const alive = await fetch(`${base}/api/status`).then((r) => r.json());
+    if (alive.phase !== 'open') {
+      const late = Math.round((Date.now() - Date.parse(protocol.submission_cutoff_utc)) / 1000);
+      throw new Error(
+        `the window closed before step 12 could open it: phase ${alive.phase}, cutoff ` +
+        `${protocol.submission_cutoff_utc} passed ${late}s ago. Steps 10 and 11 took longer than ` +
+        `the ${windowSec}s window; re-run with --window ${Math.max(windowSec, late + windowSec + 60)}.`);
+    }
+    assert.equal(child.exitCode, null, 'the server exited after logging that it had started');
+    ok(`server up on ${base}, event ${EVENT_ID}, admin dashboard enabled, /api/status answering`);
+    note('it also runs the draw itself, every 5s here — that is the deployed default');
 
     const { load } = require('../server/config');
     const cfg = load({ dataDir: path.join(dir, 'data') });
@@ -326,7 +358,7 @@ async function main(argv) {
 
     // ---- D, step 14 -------------------------------------------------------
     const cutoffMs = Date.parse(protocol.submission_cutoff_utc);
-    step(`D14: wait for the cutoff, then run the job the way cron does`);
+    step(`D14: wait for the cutoff, and let the server draw on its own`);
     // Redrawn in place on a terminal; once every half minute when this is piped into a
     // file, where a carriage return only makes one very long line.
     const tty = process.stdout.isTTY;
@@ -339,13 +371,42 @@ async function main(argv) {
     }
     process.stdout.write(tty ? '\r        cutoff reached        \n' : '        cutoff reached\n');
 
-    // A separate process, with the server still running and still holding the database.
-    const finaliseOut = run(['server/finalise.js']);
-    assert.match(finaliseOut, /\[finalise\]/);
-    const results = JSON.parse(fs.readFileSync(path.join(dir, 'results.json'), 'utf8'));
+    // Nothing is run by hand here, deliberately. Nobody installs a timer during a
+    // rehearsal, and for a while nobody had to be told to: the server served the page,
+    // the countdown reached zero and the draw never happened, because the only
+    // documented scheduler was a systemd unit. The server owns that schedule now, and
+    // this step is the test of it — what it waits for is the server noticing by itself.
+    const resultsFile = path.join(dir, 'results.json');
+    const drawBy = Date.parse(protocol.target_round_utc) + 90_000;
+    while (!fs.existsSync(resultsFile)) {
+      if (Date.now() > drawBy) {
+        throw new Error(`nothing drew within 90s of round ${protocol.target_round}. Server log:\n${serverLog.slice(-2000)}`);
+      }
+      const to = Math.ceil((Date.parse(protocol.target_round_utc) - Date.now()) / 1000);
+      if (tty) process.stdout.write(`\r        ${to > 0 ? `${to}s to the round` : 'waiting for the draw'}   `);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (tty) process.stdout.write('\r                                   \r');
+    const results = JSON.parse(fs.readFileSync(resultsFile, 'utf8'));
     assert.equal(results.round_used, protocol.target_round);
-    assert.equal(results.participating_local_ids.length, 12);
-    ok(`the draw ran: round ${results.round_used}, 12 contributions, seed ${results.seed.slice(0, 16)}…`);
+    // If any were excluded, the reason is the whole story and it is already recorded.
+    // Reporting the count alone sends the reader looking for a sandbox that has usually
+    // been deleted by then.
+    assert.equal(results.participating_local_ids.length, 12,
+      `only ${results.participating_local_ids.length} of 12 took part. Excluded: ` +
+      `${JSON.stringify(results.excluded_local_ids)}`);
+    assert.match(serverLog, /\[schedule\]|\[finalise\]/,
+      'the draw happened but the server log says nothing about running it');
+    ok(`the server drew it with nobody asking: round ${results.round_used}, 12 contributions, ` +
+       `seed ${results.seed.slice(0, 16)}…`);
+
+    // The same job by hand, which is what RUNBOOK's manual remedies run. It has to be
+    // safe on an already-finished draw, because that is when someone reaches for it.
+    const again = strip(run(['server/finalise.js']));
+    assert.match(again, /already done/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(resultsFile, 'utf8')), results,
+      'running the job by hand after the draw changed results.json');
+    ok('running it again by hand is a no-op: "already done", results.json untouched');
 
     const verify = run(['generate.js', '--verify', 'results.json']);
     assert.match(strip(verify), /reproduces byte for byte/);

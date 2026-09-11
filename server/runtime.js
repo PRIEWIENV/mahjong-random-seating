@@ -92,6 +92,16 @@ const DEFAULTS = {
     // because believing that header when nothing sets it lets any caller claim any
     // address and have a limit of its own.
     trust_proxy: false,
+    // Whether the server runs the draw job itself, on a timer (server/schedule.js).
+    // On by default because the alternative is a deployment that serves the page
+    // perfectly and never draws. Turn it off only where something else already runs
+    // server/finalise.js on a schedule — a systemd timer or cron on a box you have
+    // root on — so the two do not both fire.
+    run_finalise: true,
+    // How often the draw job runs, and, whoever runs it, the budget after which "the
+    // beacon is out and the phase has not moved" stops being normal and becomes
+    // something the organiser has to go and fix.
+    finalise_interval_seconds: 60,
   },
 };
 
@@ -103,6 +113,8 @@ const OPERATIONAL_KEYS = {
   'pantheon.mimir_base_url': 'runtime.json → pantheon.mimir_base_url',
   'pantheon.frey_public_url': 'runtime.json → pantheon.frey_public_url',
   'server.trust_proxy': 'runtime.json → server.trust_proxy',
+  'server.finalise_interval_seconds': 'runtime.json → server.finalise_interval_seconds',
+  'server.run_finalise': 'runtime.json → server.run_finalise',
   'pantheon.twirp_path_template': 'runtime.json → pantheon.twirp_path_template',
   'pantheon.frey_service': 'runtime.json → pantheon.frey_service',
   'pantheon.mimir_service': 'runtime.json → pantheon.mimir_service',
@@ -166,6 +178,10 @@ function validate(r) {
   if (typeof r.server.trust_proxy !== 'boolean') {
     throw new Error(`runtime.json: server.trust_proxy must be true or false, got ${JSON.stringify(r.server.trust_proxy)}`);
   }
+  posInt('server', 'finalise_interval_seconds', r.server.finalise_interval_seconds);
+  if (typeof r.server.run_finalise !== 'boolean') {
+    throw new Error(`runtime.json: server.run_finalise must be true or false, got ${JSON.stringify(r.server.run_finalise)}`);
+  }
   posInt('server', 'status_push_ms', r.server.status_push_ms);
   posInt('server', 'status_push_fast_ms', r.server.status_push_fast_ms);
   return r;
@@ -214,6 +230,19 @@ function loadRuntime(dataDir, env = process.env) {
   if (env.PANTHEON_MIMIR_URL) r.pantheon.mimir_base_url = baseUrl('pantheon', 'mimir_base_url', env.PANTHEON_MIMIR_URL);
   if (env.PANTHEON_FREY_PUBLIC_URL) {
     r.pantheon.frey_public_url = baseUrl('pantheon', 'frey_public_url', env.PANTHEON_FREY_PUBLIC_URL).replace(/\/+$/, '');
+  }
+  // The scheduler, for the two cases where editing a file is the wrong shape: a
+  // rehearsal that wants a faster tick, and a box where cron already runs the job.
+  if (env.FINALISE_INTERVAL_SECONDS) {
+    const n = Number(env.FINALISE_INTERVAL_SECONDS);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new Error(
+        `FINALISE_INTERVAL_SECONDS must be a positive whole number of seconds, got ${env.FINALISE_INTERVAL_SECONDS}`);
+    }
+    r.server.finalise_interval_seconds = n;
+  }
+  if (env.RUN_FINALISE !== undefined && env.RUN_FINALISE !== '') {
+    r.server.run_finalise = !/^(0|false|no|off)$/i.test(env.RUN_FINALISE);
   }
   if (!r.drand.mirrors.includes(r.drand.api)) r.drand.mirrors = [r.drand.api, ...r.drand.mirrors];
 

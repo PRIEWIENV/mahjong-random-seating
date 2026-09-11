@@ -1,8 +1,9 @@
 # Deployment (PROTOCOL.md §10)
 
-A small Node process behind a reverse proxy, SQLite for state, and a systemd timer for
-finalisation job. The app and Pantheon share a host, so backend-to-Pantheon calls go
-over localhost.
+One Node process behind a reverse proxy, with SQLite for state. It serves the page and
+runs the draw on a timer of its own, so there is nothing else to install and no root
+needed. The app and Pantheon share a host, so backend-to-Pantheon calls go over
+localhost.
 
 Nothing here holds a secret that could open a submission early. The only credentials on
 the box are the GitHub PAT used for mirroring and the Pantheon admin account used for
@@ -89,18 +90,37 @@ Narrow the GitHub PAT to this repository and to contents:write only. Per §10, w
 access to `main` should be restricted to that token, so the ciphertext history is
 append-only in practice as well as in principle.
 
-## 3. Services
+## 3. Running it
+
+One process:
 
 ```sh
-cp deploy/mahjong-relay.service /etc/systemd/system/
-cp deploy/mahjong-finalise.service deploy/mahjong-finalise.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now mahjong-relay
-systemctl enable --now mahjong-finalise.timer
+node server/server.js
 ```
 
-The finalise timer runs every five minutes and is a no-op until the cutoff. That cadence
-is also the recovery path, for three different failures:
+That is the whole deployment. The server serves the page **and** runs the draw, spawning
+`server/finalise.js --no-wait` every `server.finalise_interval_seconds` (§4.2, default
+60). The draw stays a separate program — §9 keeps it off HTTP, so nothing a player can
+poke may trigger or re-time it — but nothing outside this repository has to be set up
+for it to happen.
+
+Earlier versions asked for two systemd units. That was wrong twice over: registering
+units needs root on a machine the organiser may not own, and it does not exist at all on
+Windows, where this is developed and rehearsed. The realistic outcome was a deployment
+that served the page perfectly and never drew.
+
+**Keeping the one process alive** is whatever your box offers, and none of it is
+special:
+
+| | |
+|---|---|
+| Linux, no root | `tmux new -d -s mahjong 'node server/server.js'`, or `nohup node server/server.js >> var/server.log 2>&1 &` |
+| Linux, with root | `cp deploy/mahjong-relay.service /etc/systemd/system/ && systemctl enable --now mahjong-relay` |
+| Windows | run it in a terminal, or Task Scheduler with a trigger at log on |
+
+The draw job restarting with the server is fine and is the point of it running on a
+clock. Every run is a no-op until the cutoff, and after it the cadence is also the
+recovery path, for three different failures:
 
 - **drand unreachable at the target time** (§8 — a delay, not a failure). The job leaves
   the phase at `awaiting_round` and the next tick tries again. The snapshot was frozen at
@@ -112,8 +132,34 @@ is also the recovery path, for three different failures:
   database and stops. It will not re-draw, and it will not declare a published round void.
 
 Once a sync *failure* has been recorded, the job stops retrying: that path has a manual
-remedy (RUNBOOK step 15) and a timer hammering Pantheon every five minutes would only
-bury it.
+remedy (RUNBOOK step 15) and a timer hammering Pantheon every minute would only bury it.
+
+### If something else should run the draw
+
+Set `server.run_finalise` to `false` in `data/runtime.json` and schedule it yourself. A
+user crontab needs no root either:
+
+```
+* * * * * cd /opt/mahjong/app && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
+```
+
+Do not run both. Two draws in flight would agree with each other — the job is
+deterministic, which is the whole point of the protocol — but they would stamp the roll
+twice and write to Pantheon twice, and external side effects are worth not doing twice.
+
+### How you find out if nothing is drawing
+
+This was a real failure and it was silent: players sign in, seal their numbers, watch the
+countdown reach zero, and then nothing happens. Three things say so now.
+
+- The server logs `[schedule]` lines for every run of the job, and a warning at boot if
+  `run_finalise` is off and the job has never run against this database.
+- `/admin` carries a row, **The draw job has run**, with when it last did. It is a
+  warning while the beacon is still pending and a failure once the draw is late, which
+  is the row that distinguishes a late beacon — wait — from a dead schedule — go and
+  start something.
+- The players' page stops saying "Drawing" after two intervals and says the draw has not
+  run, together with the fact that the outcome was fixed at the cutoff regardless.
 
 ## 4. The reverse proxy
 

@@ -41,6 +41,10 @@ const KEY_ROLL = 'roll_published';
 const KEY_PHASE = 'phase';
 const KEY_RESULT = 'result';
 const KEY_SYNC = 'pantheon_sync';
+// Proof that the scheduled job exists and is firing. Nothing else in the system can
+// tell the difference between "drand is late" and "nobody ever installed the timer",
+// and those have opposite remedies: wait, or go and start something.
+const KEY_TICK = 'finalise_tick';
 
 const resultsPath = (cfg) => path.join(cfg.root, 'results.json');
 const voidPath = (cfg) => path.join(cfg.root, 'events', 'void.json');
@@ -171,7 +175,28 @@ function takeSnapshot(cfg, store, log) {
  * towards the quorum it was provisionally counted in — hence the second quorum check
  * in run(). Every exclusion is published.
  */
-async function decryptSnapshot(snapshot, cfg, log) {
+/**
+ * The beacon exists, but this machine's clock has not reached the round's time.
+ *
+ * tlock-js decides this locally — `genesis_time + (round - 1) * period > Date.now()` —
+ * so it can refuse a ciphertext whose beacon it has just been handed, if the host runs
+ * behind drand. Distinct from every other decryption failure because it is about the
+ * clock rather than about the ciphertext, and because it clears on its own.
+ *
+ * The wait above this normally makes it unreachable. It stays as the net, because the
+ * thing it guards against — excluding a player who did nothing wrong, permanently and
+ * in public — is not something to leave to one calculation being right.
+ */
+class BeaconNotReadyError extends Error {}
+const BEACON_NOT_READY = /too early to decrypt/i;
+// A moment past the round's time rather than exactly on it: the comparison is strict
+// and both sides are computed to the millisecond.
+const CLOCK_SLACK_MS = 250;
+// Past this, a slow clock is a fault to report rather than a delay to absorb, and the
+// retry loop can have it.
+const MAX_CLOCK_WAIT_MS = 10_000;
+
+async function decryptSnapshot(snapshot, cfg, log, { decryptFn = decryptPayload } = {}) {
   const decrypted = [];
   const excluded = [];
   // tlock-js prints the whole beacon on every decrypt; a dozen copies of one line
@@ -181,10 +206,20 @@ async function decryptSnapshot(snapshot, cfg, log) {
   try {
     for (const s of snapshot.submissions) {
       try {
-        const payload = await decryptPayload(s.ciphertext, cfg);
+        const payload = await decryptFn(s.ciphertext, cfg);
         decrypted.push({ local_id: s.local_id, ...payload });
         log.info?.(`[finalise] local_id ${s.local_id}: decrypted`);
       } catch (err) {
+        // "Too early" is not a property of the ciphertext. It is tlock reading this
+        // machine's clock and finding it short of the round's time, on a beacon the
+        // caller is already holding. Excluding on it would throw a player out of the
+        // draw for being decrypted too promptly, which is both unfair and irreversible:
+        // exclusions are published. So the whole pass is abandoned and the caller tries
+        // again — nobody is at fault, so nobody is singled out.
+        if (BEACON_NOT_READY.test(err.message)) {
+          throw new BeaconNotReadyError(
+            `round ${cfg.protocol.target_round} is not yet servable for decryption: ${err.message}`);
+        }
         excluded.push({ local_id: s.local_id, reason: err.message });
         log.error?.(`[finalise] local_id ${s.local_id}: UNDECRYPTABLE — excluded (${err.message})`);
       }
@@ -287,6 +322,27 @@ async function syncToPantheon(cfg, results, pantheon, log, opts = {}) {
   }
 }
 
+/**
+ * How long to wait before asking drand again.
+ *
+ * The round's time is not a guess: protocol.json fixes it, config.js derives
+ * target_round_ms from it, and drand emits on a fixed period. So until that moment
+ * there is nothing to poll for, and the honest wait is a single sleep to the second it
+ * is due. After it, the beacon is merely propagating and a short poll picks it up.
+ *
+ * Falls back to the poll interval if the caller handed over a protocol without the
+ * derived field, which is the only way targetRoundMs is not a number.
+ */
+function retryNapMs(targetRoundMs, now, pollMs) {
+  if (!Number.isFinite(targetRoundMs)) return pollMs;
+  const untilRound = targetRoundMs - now;
+  return untilRound > 0 ? untilRound : pollMs;
+}
+
+// One line at the first attempt past the round's time, then one every half minute. At a
+// one-second poll, logging every miss would bury the run that matters in its own noise.
+const LATE_LOG_MS = 30_000;
+
 async function run(opts = {}) {
   const log = opts.log || console;
   const cfg = opts.cfg || load(opts);
@@ -296,9 +352,19 @@ async function run(opts = {}) {
   const pantheon = opts.pantheon || createPantheon(cfg, process.env);
   const onPhase = opts.onPhase || (() => {});
   const wait = opts.wait !== false;
-  const pollMs = opts.pollMs ?? 15_000;
+  // Only ever used once the round is already due, so it is about propagation delay, not
+  // about the wait itself. maxWaitMs bounds it: an hour of a genuinely stalled drand is
+  // at worst 3600 attempts, and each mirror that is timing out rather than answering
+  // throttles that by its own ten-second timeout.
+  const pollMs = opts.pollMs ?? 1_000;
   const maxWaitMs = opts.maxWaitMs ?? 60 * 60 * 1000;
   const now = opts.now ?? Date.now();
+
+  // Written before anything is decided, so it records that the job ran and not that it
+  // succeeded. The web server never draws — it only serves what this job publishes —
+  // and until this key exists, "the beacon is out and the phase has not moved" has two
+  // completely different explanations. The dashboard reads it to tell them apart.
+  store.set(KEY_TICK, { at: new Date(now).toISOString(), waited: wait });
 
   // "Has this round already been settled AND published?" — deliberately not phaseOf,
   // which also *predicts* a state the job has yet to act on. phaseOf answers 'void' for
@@ -374,6 +440,7 @@ async function run(opts = {}) {
 
   const deadline = Date.now() + maxWaitMs;
   let beacon = null;
+  let lastLateLog = 0;
   for (;;) {
     try {
       beacon = await drand.round(cfg.protocol.target_round);
@@ -390,13 +457,69 @@ async function run(opts = {}) {
         log.error?.(`[finalise] gave up waiting for round ${cfg.protocol.target_round}: ${err.message}`);
         return { phase: 'awaiting_round', error: err.message };
       }
-      log.info?.(`[finalise] round ${cfg.protocol.target_round} not out yet; retrying in ${pollMs / 1000}s`);
-      await new Promise((r) => setTimeout(r, pollMs));
+      const nap = retryNapMs(cfg.protocol.target_round_ms, Date.now(), pollMs);
+      if (nap > pollMs) {
+        log.info?.(
+          `[finalise] round ${cfg.protocol.target_round} is due at ${cfg.protocol.target_round_utc}, ` +
+          `${Math.round(nap / 1000)}s away; sleeping until then`);
+      } else if (Date.now() - lastLateLog >= LATE_LOG_MS) {
+        lastLateLog = Date.now();
+        const behind = Math.round((Date.now() - cfg.protocol.target_round_ms) / 1000);
+        log.info?.(
+          `[finalise] round ${cfg.protocol.target_round} not out yet, ${behind}s past its time; ` +
+          `polling every ${pollMs / 1000}s`);
+      }
+      // Never sleep past the moment we would give up anyway: the sleep to the round is
+      // long, and a caller whose maxWaitMs is shorter than its own interval deserves to
+      // be told so on time rather than after it.
+      await new Promise((r) => setTimeout(r, Math.min(nap, Math.max(deadline - Date.now(), 0))));
     }
   }
   log.info?.(`[finalise] round ${cfg.protocol.target_round} landed; confirmed by ${beacon.mirrors.length} mirror(s)`);
 
-  const { decrypted, excluded } = await decryptSnapshot(snapshot, cfg, log);
+  // tlock does not ask the beacon it was handed whether it is time yet. It recomputes
+  // genesis_time + (round - 1) * period and compares that with THIS machine's clock
+  // (tlock-js/drand/timelock-decrypter.js). So a host running a second or two behind
+  // drand refuses to open a ciphertext it is already holding the key for — and refuses
+  // it one submission at a time, which is how this showed up: the first few players
+  // excluded and the rest fine, because each decryption took long enough for the clock
+  // to catch up. Wait out our own clock before asking.
+  const dueMs = cfg.protocol.target_round_ms;
+  const shortBy = Number.isFinite(dueMs) ? dueMs + CLOCK_SLACK_MS - Date.now() : 0;
+  if (shortBy > 0) {
+    log.info?.(
+      `[finalise] the beacon is out, but this clock is ${(shortBy / 1000).toFixed(1)}s short of ` +
+      `round ${cfg.protocol.target_round}; waiting for it rather than excluding anyone`);
+    if (shortBy > MAX_CLOCK_WAIT_MS) {
+      // Further behind than propagation explains. Worth saying: every timestamp this
+      // deployment writes is off by the same amount.
+      log.warn?.(`[finalise] this machine's clock looks ${(shortBy / 1000).toFixed(0)}s slow — check NTP`);
+    }
+    await new Promise((r) => setTimeout(r, Math.min(shortBy, MAX_CLOCK_WAIT_MS)));
+  }
+
+  let decrypted;
+  let excluded;
+  for (;;) {
+    try {
+      ({ decrypted, excluded } = await decryptSnapshot(snapshot, cfg, log, { decryptFn: opts.decryptFn }));
+      break;
+    } catch (err) {
+      if (!(err instanceof BeaconNotReadyError)) throw err;
+      if (!wait) {
+        // The scheduled job: do nothing and let the next run have it. §8 again — a few
+        // seconds of delay cannot change an outcome fixed at the cutoff.
+        log.info?.(`[finalise] ${err.message}; the next run will draw`);
+        return { phase: 'awaiting_round' };
+      }
+      if (Date.now() > deadline) {
+        log.error?.(`[finalise] gave up waiting for the beacon to propagate: ${err.message}`);
+        return { phase: 'awaiting_round', error: err.message };
+      }
+      log.info?.(`[finalise] ${err.message}; retrying in ${pollMs / 1000}s`);
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+  }
   if (decrypted.length < cfg.protocol.quorum) {
     const notice = publishVoid(cfg, store, mirror, 'quorum not met once undecryptable submissions were excluded',
       { snapshot_size: snapshot.local_ids.length, decrypted: decrypted.length, excluded }, log);
@@ -458,7 +581,8 @@ async function run(opts = {}) {
 
 module.exports = {
   run, phaseOf, takeSnapshot, publishRoll, rollBody, rollDigest, decryptSnapshot, syncToPantheon, publishSync,
-  readPublishedResults, KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC,
+  retryNapMs, BeaconNotReadyError,
+  readPublishedResults, KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC, KEY_TICK,
 };
 
 if (require.main === module) {
