@@ -50,6 +50,14 @@ const SESSION_TTL_MS = DEFAULTS.server.session_ttl_days * 24 * 3600 * 1000;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token), 'utf8').digest('hex');
 
 class Store {
+  /**
+   * The only state keys that outlive a round. `finalise_tick` records that the draw job
+   * is firing at all, which is a property of the deployment rather than of any one
+   * attempt, and clearing it would make a fresh round look like a dead schedule.
+   * Everything else describes one attempt and must not be carried into the next.
+   */
+  static KEPT_ACROSS_ROUNDS = ['finalise_tick'];
+
   constructor(file, opts = {}) {
     this.sessionTtlMs = opts.sessionTtlMs ?? SESSION_TTL_MS;
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -133,12 +141,21 @@ class Store {
    * cutoff and the frozen parameters before this is ever called, and refuses to let it
    * be called until that archive verifies.
    *
+   * The state keys are cleared by exclusion rather than by a list of what to remove, and
+   * the difference was a real bug. The old list named four keys and missed
+   * `roll_published`, which guards `publishRoll`: every attempt after the first therefore
+   * skipped publishing its own roll, and the waiting page showed the previous attempt's
+   * digest through the interval. That is the whole of PROTOCOL.md §9 silently not
+   * happening, from one key added in one file and not added in another. Anything new is
+   * now assumed to belong to the round unless it is named below.
+   *
    * @returns {number} how many submissions were cleared
    */
   clearRound() {
     const n = this.db.prepare('SELECT COUNT(*) AS n FROM submissions').get().n;
     this.db.exec('DELETE FROM submissions');
-    this.db.prepare("DELETE FROM state WHERE key IN ('snapshot','phase','result','pantheon_sync')").run();
+    const keep = Store.KEPT_ACROSS_ROUNDS.map((k) => `'${k}'`).join(', ');
+    this.db.prepare(`DELETE FROM state WHERE key NOT IN (${keep})`).run();
     return n;
   }
 

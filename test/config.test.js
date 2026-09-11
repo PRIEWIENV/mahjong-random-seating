@@ -372,3 +372,33 @@ test('a .env that cannot be read stops the process rather than half-configuring 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * The warning exists so a deployment is told, before a player finds out, that browsers
+ * have been given a Frey address they cannot reach. It only ever looked at IP literals,
+ * which made it silent for the one value it most needed to catch: `frey.pantheon.local`
+ * is the shipped default and is what a local Pantheon in Docker answers to. It resolves
+ * through an /etc/hosts entry on the box running the containers and nowhere else, and
+ * what a player reports is a wrong password.
+ */
+test('a Frey address that resolves on one machine only is flagged', () => {
+  const { freyPublicUrlIsLocal, DEFAULTS: D } = require('../server/runtime');
+  const at = (url) => freyPublicUrlIsLocal({ pantheon: { frey_base_url: url, frey_public_url: null } });
+
+  assert.equal(at(D.pantheon.frey_base_url), true, 'the shipped default is exactly this case');
+  for (const url of [
+    'http://frey.pantheon.local:4004',
+    'http://frey.pantheon.internal:4004',
+    'http://frey:4004',
+    'http://mahjong.localdomain',
+    'http://127.0.0.1:4004',
+    'http://192.168.1.10:4004',
+  ]) {
+    assert.equal(at(url), true, `${url} should be flagged`);
+  }
+  // And a real address must not be, or the warning becomes noise a deployment learns
+  // to ignore.
+  for (const url of ['https://frey.example.com', 'https://pantheon.example.org:4004']) {
+    assert.equal(at(url), false, `${url} must not be flagged`);
+  }
+});

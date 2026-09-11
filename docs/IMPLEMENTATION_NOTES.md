@@ -1049,12 +1049,95 @@ different colour from the eleven who had not, on the one control the page asks a
 of them to use and compare. Two places had already patched around it locally; those
 patches are one rule now.
 
+## 6o. There was a start procedure and no finish procedure
+
+It surfaced as a question about a page: a second event was frozen into a checkout that had
+run a first, and the first screen a player saw was the previous event's seat plan. Behind
+it were four separate faults, one of which had been quietly breaking §9 for every attempt
+after the first.
+
+### A reset that cleared four keys out of six
+
+`clearRound` named the state it deleted: `snapshot`, `phase`, `result`, `pantheon_sync`.
+It did not name `roll_published`, and `roll_published` is what guards `publishRoll`:
+
+```js
+if (!store.get(KEY_ROLL)) {
+  await publishRoll(cfg, store, snapshot, { mirror, log, stampFn: opts.stamp });
+}
+```
+
+So after §8's void-and-retry, the second attempt found the first attempt's record sitting
+there and **never published its own roll**. No digest for the twelve of them to compare
+during the interval, no OpenTimestamps anchor, and the waiting page showing the previous
+attempt's fingerprint while it happened. §9 is the argument that the roll is fixed before
+the beacon exists; for every attempt after the first, it was not happening at all.
+
+One key added in one file and not added in another. So the list is now an exclusion —
+everything is round-scoped unless named — and the test asserts that nothing outside the
+kept set survives a reset, including a key nobody has invented yet.
+
+### State that belongs to another round, served as if it were this one
+
+`phaseOf` answers from the persisted phase when no `results.json` is on disk, and that is
+deliberate: a published result outranks the database, and a database restored onto a
+finished draw must not report it void. The case nobody had considered is a database that
+is *intact* and about a **different round**.
+
+Nothing detected it, and every layer then behaved correctly on the wrong premise: the
+phase was `done`, the API served a seat plan, and the players it named were the previous
+event's twelve. Worse, once mirroring is configured, the re-publish added in §6m would
+have offered the old event's roll under the new event's name.
+
+It is now refused rather than reported. The snapshot records the cutoff it was taken at
+and the result records the round it was drawn at, so the disagreement is checkable
+against the freeze, and both the server and the draw job stop before doing anything. A
+deployment that does not start is visible before anybody is told a URL; one that starts
+wrong is visible only to the players. The re-publish carries the same check independently,
+because `var/` can be cleared on its own and leave `events/` behind.
+
+### No way to finish
+
+The documentation had a start procedure and no finish procedure, and that is what made all
+of the above reachable. `tools/new-round.js` is §8's retry and is narrow on purpose: it
+refuses unless a void notice exists, unless its archive verifies, unless the new round is
+later, unless the new cutoff is in the future. Every one of those refusals is a rule about
+not restarting a round after seeing who has submitted. None of them is about an event that
+is simply over.
+
+`tools/end-event.js` is that missing half. It archives the attempt, verifies every digest
+in the archive, and only then clears `var/` and the live files under `events/` — so
+nothing is deleted that the archive does not hold, and a failed verification clears
+nothing. A round that reached neither a draw nor a void is *abandoned* rather than closed,
+and saying so on the command line is the whole safeguard: abandoning a round after seeing
+who turned up is the manipulable step §8 exists to remove, and it should not be something
+that happens by running the tidy-up command.
+
+One detail is worth recording because the first version got it wrong. The round an attempt
+is about has to come from its evidence, not from `protocol.json` — closing an event after
+the next one has been frozen is exactly when those differ, and archiving twelve ciphertexts
+under a round they were never sealed against would make the archive worse than absent. In
+that case the frozen parameters cannot be archived at all, the manifest says so rather than
+copying the current file's values, and the tool tells the operator to close before freezing
+next time.
+
+### The warning that was silent for its own default
+
+`freyPublicUrlIsLocal` exists, in its own words, so a deployment is told before a player
+finds out that browsers have been handed a Frey address they cannot reach. It tested for
+IP literals only, so it was silent for `frey.pantheon.local` — the shipped default, and
+what a local Pantheon in Docker answers to. That name resolves through an `/etc/hosts`
+entry on the machine running the containers and nowhere else; the browser is somewhere
+else by definition, and what a player reports is a wrong password. Single-label and
+`.local`-style names are now flagged too, and a real domain still is not, because a
+warning that fires on correct configurations is one people learn to ignore.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 336 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env | pass |
+| Unit tests (`npm test`) — 347 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1094,6 +1177,10 @@ patches are one rule now.
 | The generated explanation page is deterministic: a fresh clone at the tag rebuilds the bundle byte-identically | passes |
 | `THIRD-PARTY-NOTICES.md` covers every one of the seventeen libraries in the bundle, and `--check` fails if it has fallen behind | passes |
 | Ctrl+C stops the relay while a player is attached to the stream, and a stream nothing releases is dropped rather than waited on | passes |
+| A reset clears every key that describes the round, and the attempt after it publishes its own roll | passes |
+| A database from another round is refused at startup by both the server and the draw job | passes |
+| A finished event is archived, verified and then cleared; an unfinished one is not closed without saying so | passes |
+| A Frey address that resolves on one machine only is flagged, and a real domain is not | passes |
 | A published file is renamed into place: a failed write leaves the previous one intact and no scratch file behind | passes |
 | A draw whose push never completed is re-mirrored on the next tick, with the bytes that are on disk | passes |
 | A void round and a roll taken at the cutoff both work the queue before the process exits, and are offered again if it did not empty | passes |

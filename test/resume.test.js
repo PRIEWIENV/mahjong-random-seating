@@ -465,3 +465,61 @@ test('the roll is offered before the result, so a reader never finds one without
     `the result went out before the file needed to audit it: ${order.join(', ')}`);
   cleanup(c.fx.dir);
 });
+
+// ---------------------------------------------------------------------------
+// a database that belongs to a different event
+// ---------------------------------------------------------------------------
+
+/**
+ * Freeze a second event in a checkout that ran a first, and the first one's state is
+ * still what answers. `phaseOf` reads the persisted phase when no results.json is on
+ * disk, so the new event's players open the page and are shown the previous event's
+ * seat plan, with nothing anywhere saying otherwise. Refusing to start is the better
+ * failure: it happens before anybody is told a URL.
+ */
+test('a draw job refuses to run on the previous event\'s database', async () => {
+  const c = finished();
+  fs.rmSync(path.join(c.fx.dir, 'results.json'));      // as when the new event was set up
+  c.store.set(KEY_PHASE, 'done');
+  c.store.set('result', { round_used: c.cfg.protocol.target_round + 5000, seating: {} });
+
+  await assert.rejects(() => invoke(c), /belongs to a different round/);
+  await assert.rejects(() => invoke(c), /end-event/, 'the refusal has to say what to run');
+  cleanup(c.fx.dir);
+});
+
+test('and a roll taken under a different cutoff is caught too', async () => {
+  const c = finished();
+  fs.rmSync(path.join(c.fx.dir, 'results.json'));
+  c.store.set('snapshot', { cutoff_utc: '2020-01-01T00:00:00Z', local_ids: [1] });
+
+  await assert.rejects(() => invoke(c), /2020-01-01T00:00:00Z/);
+  cleanup(c.fx.dir);
+});
+
+test('state from the round that is actually frozen is not refused', async () => {
+  // The guard must not fire on the ordinary case, or it breaks every restart.
+  const c = finished();
+  const out = await invoke(c);
+  assert.equal(out.phase, 'done');
+  cleanup(c.fx.dir);
+});
+
+test('another round\'s files are not re-mirrored under this round\'s name', async () => {
+  // var/ can be cleared on its own, leaving events/ behind, so the files say which round
+  // they are about and are checked against the freeze before being offered again.
+  const c = finished();
+  const pushed = [];
+  c.mirror = { enabled: true, enqueue: (p) => pushed.push(p), flush: async () => {}, drain: async () => true };
+  fs.mkdirSync(path.join(c.fx.dir, 'events'), { recursive: true });
+  fs.writeFileSync(path.join(c.fx.dir, 'events', 'snapshot.json'),
+    JSON.stringify({ cutoff_utc: '2020-01-01T00:00:00Z', local_ids: [1] }, null, 2) + '\n');
+
+  const warned = [];
+  await invoke(c, { log: { info() {}, warn: (m) => warned.push(m), error() {} } });
+
+  assert.ok(!pushed.includes('events/snapshot.json'), 'a roll from another round was offered to the mirror');
+  assert.ok(pushed.includes('results.json'), 'this round\'s own result should still go');
+  assert.match(warned.join('\n'), /from another round/);
+  cleanup(c.fx.dir);
+});

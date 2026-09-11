@@ -276,9 +276,24 @@ function freyPublicUrl(runtime) {
 
 const LOCAL_HOST = /^(localhost|127\.|0\.0\.0\.0$|\[?::1\]?$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
 
+/**
+ * A name that resolves on one machine and nowhere a player will be.
+ *
+ * The check above only ever looked at IP literals, and so was silent for the one value
+ * it most needed to catch: `frey.pantheon.local`, which is the shipped default and what
+ * a local Pantheon in Docker answers to. It resolves through an `/etc/hosts` entry on
+ * the box running the containers and nowhere else, so a browser is told to sign in at an
+ * address it cannot reach, and the symptom a player reports is a wrong password.
+ *
+ * A bare hostname with no dot is the same case, from the other direction: it resolves by
+ * whatever search domain the machine happens to have.
+ */
+const LOCAL_NAME = /^[^.]+$|\.(local|internal|localdomain|lan|home|home\.arpa)$/i;
+
 function freyPublicUrlIsLocal(runtime) {
   try {
-    return LOCAL_HOST.test(new URL(freyPublicUrl(runtime)).hostname);
+    const { hostname } = new URL(freyPublicUrl(runtime));
+    return LOCAL_HOST.test(hostname) || LOCAL_NAME.test(hostname);
   } catch {
     return false;
   }

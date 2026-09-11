@@ -51,14 +51,34 @@ function readIndex(cfg) {
   }
 }
 
+/** §8's case: an attempt that fell short of quorum. */
+function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
+  return archiveAttempt(cfg, store, { status: 'void', notice, reason: notice.reason }, mirror, log);
+}
+
 /**
  * Copy one attempt's evidence into events/rounds/<target_round>/ and record it.
  *
- * @param {object} notice the void notice as published, already on disk
+ * Voided attempts are archived the moment they are declared, because §8 makes them a
+ * claim that has to be checkable. A finished one is archived for a different reason and
+ * at a different moment: when the event is closed out, so that the checkout can hold a
+ * second event without the first one's files sitting in it, still being served and still
+ * being offered to the mirror. Same evidence either way, and the manifest says which.
+ *
+ * @param {object} outcome `{status, notice?, reason?}` — 'void', 'done' or 'abandoned'
  * @returns {object} the index entry that was appended
  */
-function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
-  const targetRound = cfg.protocol.target_round;
+function archiveAttempt(cfg, store, outcome, mirror, log = console) {
+  const { status, notice = null, reason = null } = outcome;
+  // The round an attempt is about comes from its own evidence when the caller knows it.
+  // Closing an event after somebody has already frozen the next one is exactly when that
+  // differs from what protocol.json says, and archiving twelve ciphertexts under a round
+  // they were never sealed against would make the archive worse than useless.
+  const targetRound = outcome.targetRound ?? cfg.protocol.target_round;
+  // Whether data/ still holds the freeze this attempt ran under. It always does in the
+  // case the protocol describes, because a voided attempt is archived the moment it is
+  // declared.
+  const frozenIsThisAttempt = targetRound === cfg.protocol.target_round;
   const dir = archiveAbs(cfg, targetRound);
   if (fs.existsSync(path.join(dir, 'manifest.json'))) {
     log.info?.(`[rounds] attempt ${targetRound} is already archived`);
@@ -81,12 +101,31 @@ function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
   // The frozen artefacts AS THIS ATTEMPT RAN THEM. protocol.json is about to be
   // rewritten with a new target_round; without this copy the ciphertexts below would
   // name a round and a chain that the repository no longer records anywhere.
-  for (const name of ['protocol.json', 'roster.json']) {
-    put(name, fs.readFileSync(path.join(cfg.dataDir, name)));
+  if (frozenIsThisAttempt) {
+    for (const name of ['protocol.json', 'roster.json']) {
+      put(name, fs.readFileSync(path.join(cfg.dataDir, name)));
+    }
+  } else {
+    log.warn?.(
+      `[rounds] data/protocol.json already names round ${cfg.protocol.target_round}, so the freeze ` +
+      `attempt ${targetRound} actually ran under is gone and cannot be archived beside its ` +
+      'ciphertexts. Close an event before freezing the next one.');
   }
-  put('void.json', j(notice));
+  if (notice) put('void.json', j(notice));
   const snapshot = store.get('snapshot');
   if (snapshot) put('snapshot.json', j(snapshot));
+
+  // Whatever this attempt actually published, byte for byte as it was published. The
+  // result is read from disk rather than re-serialised from the database, because the
+  // database copy carries the derived statistics and would not reproduce (§4.3). The
+  // OpenTimestamps proof is binary and is only evidence alongside the roll it proves.
+  for (const [rel, abs] of [
+    ['results.json', path.join(cfg.root, 'results.json')],
+    ['snapshot.json.ots', path.join(cfg.root, 'events', 'snapshot.json.ots')],
+    ['sync.json', path.join(cfg.root, 'events', 'sync.json')],
+  ]) {
+    if (fs.existsSync(abs)) put(rel, fs.readFileSync(abs));
+  }
   for (const r of rows) {
     put(`submissions/${r.local_id}.json`,
       j({ local_id: r.local_id, ciphertext: r.ciphertext, received_at: r.received_at }));
@@ -94,24 +133,39 @@ function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
 
   const manifest = {
     target_round: targetRound,
-    submission_cutoff_utc: cfg.protocol.submission_cutoff_utc,
-    chain_hash: cfg.protocol.chain_hash,
-    chain_public_key: cfg.protocol.chain_public_key,
-    status: 'void',
-    reason: notice.reason,
+    // From the roll when the freeze has already moved on, and null rather than a value
+    // copied out of a protocol.json these ciphertexts were never sealed against. A
+    // manifest that states the wrong chain is worse than one that states none.
+    submission_cutoff_utc: frozenIsThisAttempt
+      ? cfg.protocol.submission_cutoff_utc
+      : (snapshot?.cutoff_utc ?? null),
+    chain_hash: frozenIsThisAttempt ? cfg.protocol.chain_hash : null,
+    chain_public_key: frozenIsThisAttempt ? cfg.protocol.chain_public_key : null,
+    status,
+    reason,
     quorum: cfg.protocol.quorum,
     total_slots: cfg.protocol.total_slots,
+    frozen_parameters_archived: frozenIsThisAttempt,
     submitted_local_ids: rows.map((r) => r.local_id),
     submitted_count: rows.length,
     archived_at: new Date().toISOString(),
     how_to_verify:
       `drand round ${targetRound} is public. Once it has landed, these ciphertexts can be ` +
       'opened by anybody:\n' +
-      `  node tools/decrypt-submissions.js --dir ${archiveRel(targetRound)}/submissions ` +
-      `--protocol ${archiveRel(targetRound)}/protocol.json\n` +
-      `${rows.length} submissions were received before the cutoff, against a quorum of ` +
-      `${cfg.protocol.quorum}. That is why this attempt was void, and it is checkable ` +
-      'without trusting anyone.',
+      (frozenIsThisAttempt
+        ? `  node tools/decrypt-submissions.js --dir ${archiveRel(targetRound)}/submissions ` +
+          `--protocol ${archiveRel(targetRound)}/protocol.json\n`
+        : '  (this attempt was closed after the next event had already been frozen, so the\n' +
+          '   protocol.json it ran under is not here. Take the round and the chain from the\n' +
+          '   tag it was frozen at.)\n') +
+      (status === 'done'
+        ? `and the seat plan recomputed from the result beside them:\n` +
+          `  node generate.js --verify ${archiveRel(targetRound)}/results.json\n` +
+          `${rows.length} submissions were received before the cutoff, against a quorum of ` +
+          `${cfg.protocol.quorum}. Both checks need nothing from the organiser.`
+        : `${rows.length} submissions were received before the cutoff, against a quorum of ` +
+          `${cfg.protocol.quorum}. That is why this attempt is recorded as ${status}, and it ` +
+          'is checkable without trusting anyone.'),
     files,
   };
   const manifestBody = j(manifest);
@@ -126,9 +180,9 @@ function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
   const entry = {
     attempt: attempts.length + 1,
     target_round: targetRound,
-    submission_cutoff_utc: cfg.protocol.submission_cutoff_utc,
-    status: 'void',
-    reason: notice.reason,
+    submission_cutoff_utc: manifest.submission_cutoff_utc,
+    status,
+    reason,
     submitted_count: rows.length,
     quorum: cfg.protocol.quorum,
     archive: archiveRel(targetRound),
@@ -137,7 +191,7 @@ function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
   attempts.push(entry);
   const indexBody = j({ attempts });
   writeLocal(cfg.root, INDEX_PATH, indexBody);
-  mirror?.enqueue?.(INDEX_PATH, indexBody, `attempt ${targetRound} voided and archived`);
+  mirror?.enqueue?.(INDEX_PATH, indexBody, `attempt ${targetRound} archived as ${status}`);
 
   log.info?.(`[rounds] attempt ${entry.attempt} (round ${targetRound}) archived: ` +
     `${rows.length} ciphertexts, ${Object.keys(files).length + 1} files`);
@@ -258,7 +312,131 @@ function resetForNewRound(cfg, store, opts = {}) {
   return { ok: true, archived: check.manifest, cleared, voided };
 }
 
+/** The files one event leaves live in the tree, as opposed to archived. */
+const LIVE_FILES = [
+  'results.json',
+  'events/snapshot.json',
+  'events/snapshot.json.ots',
+  'events/sync.json',
+  'events/void.json',
+];
+
+/**
+ * Close out an event, so the checkout can hold the next one.
+ *
+ * There was a documented way to start a run and no documented way to finish one, and the
+ * gap is not cosmetic. Everything an event leaves behind outlives it: `var/` keeps the
+ * phase and the seat plan, `events/` keeps the roll and the result. Freeze a second event
+ * over the top and the first one's state is still what answers — `phaseOf` reads the
+ * persisted phase when no results.json is on disk, so the new event's players are shown
+ * the old event's result, and a configured mirror is offered the old event's roll under
+ * the new event's name.
+ *
+ * This is not `resetForNewRound`. That one is §8's retry: the same twelve players, the
+ * same event, a new target_round, and a set of refusals that exist so an organiser cannot
+ * restart a round after seeing who has submitted. This is the other thing — the event is
+ * over, or is being given up on, and what has to survive is the evidence.
+ *
+ * So: archive first, verify the archive, and only then clear. Nothing is deleted that the
+ * archive does not already hold, and if the archive does not verify, nothing is deleted
+ * at all.
+ *
+ * @param {object} opts `dryRun`, `abandon`, `mirror`, `log`, `now`
+ * @returns {{ok: boolean, error?: string, status?: string, archived?: object, cleared?: number, removed?: string[]}}
+ */
+/** Which round the evidence in this tree is about, whatever protocol.json says now. */
+function attemptRound(cfg, store) {
+  const fromJson = (abs, field) => {
+    try { return JSON.parse(fs.readFileSync(abs, 'utf8'))[field]; } catch { return undefined; }
+  };
+  const candidates = [
+    store.get('result')?.round_used,
+    fromJson(path.join(cfg.root, 'results.json'), 'round_used'),
+    fromJson(path.join(cfg.root, 'events', 'void.json'), 'target_round'),
+    cfg.protocol.target_round,
+  ];
+  return candidates.find(Number.isInteger);
+}
+
+function endEvent(cfg, store, opts = {}) {
+  const log = opts.log || console;
+  const now = opts.now ?? Date.now();
+  const targetRound = attemptRound(cfg, store);
+
+  const resultsFile = path.join(cfg.root, 'results.json');
+  const voidFile = path.join(cfg.root, 'events', 'void.json');
+  const done = fs.existsSync(resultsFile) || store.get('phase') === 'done';
+  const isVoid = fs.existsSync(voidFile) || store.get('phase') === 'void';
+  const rows = store.listSubmissions();
+  const live = LIVE_FILES.filter((rel) => fs.existsSync(path.join(cfg.root, rel)));
+
+  if (!done && !isVoid && !rows.length && !live.length && !store.get('snapshot')) {
+    return { ok: false, error: 'nothing to close: no submissions, no roll, no result, no void notice' };
+  }
+
+  // An event that has not reached an end of its own is being given up on, and that is a
+  // decision rather than a tidy-up. Saying so on the command line is the whole of the
+  // safeguard, but it is the difference between ending an event and quietly discarding
+  // a round after seeing who turned up — which is the step §8 exists to remove.
+  const status = done ? 'done' : isVoid ? 'void' : 'abandoned';
+  if (status === 'abandoned' && !opts.abandon) {
+    const when = now < cfg.protocol.cutoff_ms ? 'is still open' : 'has passed its cutoff without drawing';
+    return {
+      ok: false,
+      error:
+        `round ${targetRound} ${when}, with ${rows.length} submission(s) in hand. Ending it now is ` +
+        'abandoning it, not closing it, and abandoning a round after seeing who has submitted is ' +
+        'the manipulable step §8 exists to remove.\n' +
+        'If the draw simply has not happened yet, wait for it. If this really is being given up ' +
+        'on, say so: node tools/end-event.js --abandon',
+    };
+  }
+
+  const existing = fs.existsSync(path.join(archiveAbs(cfg, targetRound), 'manifest.json'));
+  // Said in the dry run as well as during the archive, because it is the one thing here
+  // a reader might still be able to do something about.
+  const frozenMoved = targetRound !== cfg.protocol.target_round;
+  if (opts.dryRun) {
+    return {
+      ok: true, dryRun: true, status, targetRound, frozenMoved,
+      archived: existing ? verifyArchive(cfg, targetRound).manifest : null,
+      willArchive: { submissions: rows.length, files: live, already: existing },
+      removed: live,
+      cleared: rows.length,
+    };
+  }
+
+  archiveAttempt(cfg, store, { status, targetRound, reason: opts.reason || null }, opts.mirror, log);
+  const check = verifyArchive(cfg, targetRound);
+  if (!check.ok) {
+    return {
+      ok: false,
+      error:
+        `the archive for round ${targetRound} does not verify:\n  ${check.problems.join('\n  ')}\n` +
+        'Nothing has been cleared. The evidence comes first.',
+    };
+  }
+
+  const removed = [];
+  for (const rel of live) {
+    fs.rmSync(path.join(cfg.root, rel));
+    removed.push(rel);
+  }
+  // The per-submission mirror copies. Every one of them is inside the archive, and they
+  // are the files a new event would otherwise appear to have received before it opened.
+  const subsDir = path.join(cfg.root, 'events', 'submissions');
+  if (fs.existsSync(subsDir)) {
+    fs.rmSync(subsDir, { recursive: true, force: true });
+    removed.push('events/submissions/');
+  }
+  const cleared = store.clearRound();
+
+  log.info?.(`[rounds] event closed: round ${targetRound} archived as ${status}, ` +
+    `${cleared} submission(s) and ${removed.length} live path(s) cleared`);
+  return { ok: true, status, targetRound, frozenMoved, archived: check.manifest, cleared, removed };
+}
+
 module.exports = {
-  archiveVoidedAttempt, verifyArchive, resetForNewRound, readIndex,
-  ROUNDS_DIR, INDEX_PATH, archiveRel,
+  archiveVoidedAttempt, archiveAttempt, verifyArchive, resetForNewRound, endEvent, attemptRound, readIndex,
+  ROUNDS_DIR, INDEX_PATH, archiveRel, LIVE_FILES,
 };

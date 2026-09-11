@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-336%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-347%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -62,7 +62,7 @@ flowchart LR
 ```sh
 git clone <本仓库> && cd mahjong-random-seating
 npm ci
-npm test                  # 336 个单元测试，完全离线，约 12 秒
+npm test                  # 347 个单元测试，完全离线，约 12 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
 ```
 
@@ -86,7 +86,7 @@ npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分�
 
 ```sh
 npm ci
-npm test                  # 336 个单元测试，离线，约 12 秒
+npm test                  # 347 个单元测试，离线，约 12 秒
 npm run verify-template   # 重新推导冻结模板的每一条不变量
 npm run e2e               # 对着真实 drand 跑 RUNBOOK A2-A7，约 90 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
@@ -263,6 +263,7 @@ tools/
   verify-template.js         # 和 Python 那份同样的不变量，供冻结流程使用
   pick-round.js              # 目标轮次与截止时刻，保持一致
   new-round.js               # 作废之后：验证归档，再开启下一次尝试
+  end-event.js               # 活动结束之后：归档，再清理 var/ 和 events/
   freeze.js                  # 把 RUNBOOK 8-11 合成一条命令：快照、检查、提交、打 tag
   rehearse.js                # 在沙箱里端到端跑 RUNBOOK B/C/D，在正日子之前
   pantheon-fixture.js        # 在本地 Pantheon 上搭好测试活动（仅限开发）

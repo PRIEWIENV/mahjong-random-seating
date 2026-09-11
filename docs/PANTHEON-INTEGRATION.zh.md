@@ -200,6 +200,7 @@ node tools/pantheon-fixture.js       # 我们的活动：prescripted，12 位选
 
 - **Host 头决定一切。** 每个容器的 nginx 都按 `server_name mimir.pantheon.local` 匹配，并有一个应答 404 的兜底。所以对 `http://127.0.0.1:4001` 的请求即便服务是健康的也会 404。要用主机名，并在 `/etc/hosts` 里加上指向 127.0.0.1 的条目。这就是 `runtime.json` 里 Pantheon 基础 URL 用主机名而不是地址的原因。
 - **WSL 每次启动都重写 `/etc/hosts`。** 先在 `/etc/wsl.conf` 的 `[network]` 段下写上 `generateHosts = false`，否则那些条目会消失，症状是一分钟前还好好的服务突然 404。
+- **需要这些条目的是两台机器，不是一台。** WSL 的 `/etc/hosts` 只管在 WSL 里跑的东西，而有两样东西经常不在里面。一是 relay，它在你启动它的那一侧；在 Windows 上跑、容器在 WSL 里，启动时就会得到 `GetEventsById: fetch failed`，页面标题里也不会有活动名称。二是浏览器，它永远在外面，而且它是**自己**去连 Frey 的，不经过 relay（§2：服务端绝不看到 Pantheon 密码），所以无论 relay 在哪一侧，`frey.pantheon.local` 都必须在 Windows 能解析。把两个名字都加进 `C:\Windows\System32\drivers\etc\hosts` 指向 `127.0.0.1`，或者用 `PANTHEON_MODE=stub` 开发，后者两样都不需要。把 URL 改成 `127.0.0.1` 是不行的：那样 Host 头就是 `127.0.0.1`，nginx 回 404，也就是上面第一条。
 - **Frey 每一个请求都会调用 Hugin。** 它的指标中间件 `await` 一个到 `hugin/addMetric` 的 POST 并把失败包起来，所以 Hugin 没跑的时候**每一个** Frey 调用都返回 500 `fetch failed`。把 `hugin.pantheon.internal` 也启起来。
 - **Redis 会缓存否定查询。** 在某人存在之前对他探测 `QuickAuthorize`，会把「不认识」缓存下来，之后正确的调用仍然失败。种子数据灌完之后跑一下 `redis-cli FLUSHALL`。
 - **只有 tournament 类型能被 prescripted。** `CreateEvent` 对 club 和 online 类型的活动硬性设置 `is_prescripted = 0`。它报告成功，它也如实存下 `wind_shuffle_mode`，唯一的症状是 `GetAllRegisteredPlayers` 返回不出任何 local id——因为 Mimir 只为 prescripted 活动填它们。RUNBOOK 第 8 步的活动必须是 `EVENT_TYPE_TOURNAMENT`。

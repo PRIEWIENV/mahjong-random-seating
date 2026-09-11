@@ -16,6 +16,7 @@
     "test": "node --test test/*.test.js",
     "e2e": "node test/e2e.js",
     "new-round": "node tools/new-round.js",
+    "end-event": "node tools/end-event.js",
     "freeze": "node tools/freeze.js",
     "rehearse": "node tools/rehearse.js"
   },

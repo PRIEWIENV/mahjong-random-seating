@@ -88,6 +88,46 @@ that could trigger or re-time the draw off HTTP entirely.
     every submission taken at the cutoff. The second re-derives the template's proved
     properties from the round data rather than trusting the file's own claims.
 
+## E. After the event
+
+There is a start procedure, so there is a finish procedure. Skipping it is not untidy, it
+is wrong: everything one event leaves behind outlives it, and the next event inherits it.
+
+**Stopping the relay.** Ctrl+C, or `systemctl stop`. It ends the streams the waiting page
+holds, waits for anything still queued for the repository, and is gone in milliseconds. A
+draw already in flight is left to finish. Press twice if you mean it anyway.
+
+**Closing the event.** Once the seat plan is synced and you are done with the round:
+
+```sh
+node tools/end-event.js --dry-run     # what it would archive and clear
+node tools/end-event.js
+```
+
+It archives the whole attempt into `events/rounds/<target_round>/` — the ciphertexts as
+received, the roll taken at the cutoff, the result, the sync outcome, and the frozen
+`protocol.json` and `roster.json` they ran under — verifies every digest in that archive,
+and only then clears `var/` and the live files under `events/`. If the archive does not
+verify, nothing is cleared.
+
+**Do it before freezing the next event, not after.** Two reasons, one of which cannot be
+repaired afterwards:
+
+- `protocol.json` is overwritten by the next freeze. Closing first is what puts the round
+  and chain these ciphertexts were sealed against into the archive beside them. Close
+  afterwards and the archive still holds the evidence, but not what it was evidence
+  *under*, and `tools/end-event.js` will say so.
+- Until you close it, the previous event is still what the server answers with. `phaseOf`
+  reads the persisted phase when no `results.json` is on disk, so the new event's players
+  would be shown the old event's seat plan. The server now refuses to start in that state
+  rather than serving it, which is how you find out if you get the order wrong.
+
+A round that fell short of quorum is a different thing and is not closed this way. That is
+§8's retry: same event, same twelve players, a new target round, and `tools/new-round.js`.
+
+`events/` is gitignored, so with mirroring configured the archive goes to the repository
+and with mirroring off it exists only on that machine. The tool says which.
+
 ## When things go wrong
 
 - **Fewer than 8 submissions.** Per `PROTOCOL.md` §8: void the round, set a new target round, and have **everyone** — including those who already submitted — submit again. Old ciphertexts are bound to the lapsed round and cannot be reused. In that order:

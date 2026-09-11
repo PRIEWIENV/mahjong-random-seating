@@ -129,6 +129,57 @@ function phaseOf(cfg, store, nowMs = Date.now()) {
   return count >= cfg.protocol.quorum ? 'awaiting_round' : 'void';
 }
 
+/**
+ * Does the state in `var/` describe the round that is frozen right now?
+ *
+ * It usually does, and the two ways it legitimately might not are already handled: a
+ * §8 retry clears the round before the new freeze is in place, and a `var/` restored
+ * from backup belongs to the same round it always did. What is left is the case that
+ * has no honest reading — a new freeze laid over the previous event's database, which
+ * happens the moment somebody runs a second event in a checkout that ran a first.
+ *
+ * It has to be refused rather than warned about. `phaseOf` answers from the persisted
+ * phase when no results.json is on disk, so the symptom is the previous event's seat
+ * plan served to this event's players as their result, with nothing anywhere saying
+ * otherwise. A backend that refuses to start is the better failure: it is visible before
+ * anybody is told a URL, which is the whole argument config.js already makes about a
+ * malformed roster.
+ *
+ * @returns {string|null} what disagrees, phrased for somebody who has to fix it
+ */
+function stateIsFromAnotherRound(cfg, store) {
+  const snap = store.get(KEY_SNAPSHOT);
+  if (snap?.cutoff_utc && snap.cutoff_utc !== cfg.protocol.submission_cutoff_utc) {
+    return `var/ holds a roll taken at the cutoff ${snap.cutoff_utc}, but data/protocol.json ` +
+      `now freezes ${cfg.protocol.submission_cutoff_utc}`;
+  }
+  const result = store.get(KEY_RESULT);
+  if (Number.isInteger(result?.round_used) && result.round_used !== cfg.protocol.target_round) {
+    return `var/ holds a draw made at round ${result.round_used}, but data/protocol.json ` +
+      `now freezes target_round ${cfg.protocol.target_round}`;
+  }
+  return null;
+}
+
+/**
+ * The refusal both entry points give, in the same words.
+ *
+ * Marked `operator` so the command-line entry points print the message and nothing else.
+ * A stack trace here would bury four lines that say exactly what to run under twenty that
+ * say where in this file the check happens, which is of interest to nobody holding a
+ * terminal at the start of an event.
+ */
+function refuseStaleState(disagreement) {
+  return Object.assign(new Error(
+    `${disagreement}.\n` +
+    'That database belongs to a different round, and serving it under this freeze would ' +
+    'show one event\'s players another event\'s result. Close the previous event first:\n' +
+    '  node tools/end-event.js --dry-run     # what it would archive and clear\n' +
+    '  node tools/end-event.js               # archive it, then clear var/ and events/\n' +
+    'A round that was voided under §8 is reopened with tools/new-round.js instead.'),
+  { operator: true });
+}
+
 /** The bytes of the roll, fixed the moment it is taken. */
 const rollBody = (snap) => JSON.stringify(snap, null, 2) + LF;
 const rollDigest = (body) => crypto.createHash('sha256').update(body, 'utf8').digest('hex');
@@ -419,20 +470,41 @@ async function republishIfUnmirrored(cfg, store, mirror, log) {
   }
 
   const ev = (name) => path.join(cfg.root, 'events', name);
+  // Only what belongs to the round frozen right now. A checkout that has run a previous
+  // event still has that event's files sitting under events/, and offering them here
+  // would publish one event's roll and result under another event's name. The startup
+  // guard refuses that combination while var/ still describes the old round, but var/
+  // can be cleared on its own and these files left behind, so each one says which round
+  // it is about and is checked against the freeze.
+  const about = (file, test) => {
+    try { return test(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch { return false; }
+  };
+  const rollIsCurrent = fs.existsSync(ev('snapshot.json')) &&
+    about(ev('snapshot.json'), (o) => o.cutoff_utc === cfg.protocol.submission_cutoff_utc);
+  const round = cfg.protocol.target_round;
+
   const wanted = [
     // The roll first, and not only for tidiness: a reader must never find a result
     // published without the file needed to audit its roll-call.
-    ['events/snapshot.json', ev('snapshot.json'), 'utf8'],
-    ['events/snapshot.json.ots', ev('snapshot.json.ots'), null],
-    ['results.json', resultsPath(cfg), 'utf8'],
-    ['events/void.json', ev('void.json'), 'utf8'],
-    ['events/sync.json', ev('sync.json'), 'utf8'],
+    ['events/snapshot.json', ev('snapshot.json'), 'utf8', () => rollIsCurrent],
+    // Binary, so it cannot say which round it is about. It is a proof OF the roll, and
+    // it travels with it or not at all.
+    ['events/snapshot.json.ots', ev('snapshot.json.ots'), null, () => rollIsCurrent],
+    ['results.json', resultsPath(cfg), 'utf8', (f) => about(f, (o) => o.round_used === round)],
+    ['events/void.json', ev('void.json'), 'utf8', (f) => about(f, (o) => o.target_round === round)],
+    ['events/sync.json', ev('sync.json'), 'utf8', (f) => about(f, (o) => o.round_used === round)],
   ];
   const sent = [];
-  for (const [repoPath, file, encoding] of wanted) {
+  const skipped = [];
+  for (const [repoPath, file, encoding, belongsHere] of wanted) {
     if (!fs.existsSync(file)) continue;
+    if (!belongsHere(file)) { skipped.push(repoPath); continue; }
     mirror.enqueue(repoPath, fs.readFileSync(file, encoding), `re-publishing ${repoPath} after an interrupted run`);
     sent.push(repoPath);
+  }
+  if (skipped.length) {
+    log.warn?.(`[finalise] left alone, they are from another round: ${skipped.join(', ')} ` +
+      '— close the previous event with tools/end-event.js');
   }
   if (!sent.length) {
     // Nothing published yet, so the repository is not behind anything.
@@ -528,6 +600,12 @@ async function run(opts = {}) {
   // and until this key exists, "the beacon is out and the phase has not moved" has two
   // completely different explanations. The dashboard reads it to tell them apart.
   store.set(KEY_TICK, { at: new Date(now).toISOString(), waited: wait });
+
+  // Before any of it. A draw job that ran here would snapshot this round's submissions
+  // into the previous round's phase, and the first thing it would find is a result it
+  // must not touch.
+  const elsewhere = stateIsFromAnotherRound(cfg, store);
+  if (elsewhere) throw refuseStaleState(elsewhere);
 
   // Before any branch. Something written locally by a previous run and never confirmed
   // pushed is offered again here, whatever state this round is in — the snapshot lost at
@@ -770,6 +848,7 @@ module.exports = {
   run, phaseOf, takeSnapshot, publishRoll, rollBody, rollDigest, decryptSnapshot, syncToPantheon, publishSync,
   retryNapMs, BeaconNotReadyError,
   readPublishedResults, republishIfUnmirrored, takeLock, releaseLock, lockPath,
+  stateIsFromAnotherRound, refuseStaleState,
   KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC, KEY_TICK, KEY_PUBLISHED,
 };
 
@@ -823,7 +902,7 @@ if (require.main === module) {
   run({ cfg, wait: !process.argv.includes('--no-wait'), stamp })
     .then((out) => leave(['done', 'void', 'open', 'awaiting_round'].includes(out.phase) ? 0 : 1))
     .catch((err) => {
-      console.error(`[finalise] ERROR ${err.stack || err.message}`);
+      console.error(err.operator ? `[finalise] ${err.message}` : `[finalise] ERROR ${err.stack || err.message}`);
       leave(1);
     });
 }

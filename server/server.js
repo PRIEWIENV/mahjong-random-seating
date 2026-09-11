@@ -42,7 +42,7 @@ const { load, loadEnvFile } = require('./config');
 const { Store } = require('./db');
 const { assertAdmissible, CiphertextError } = require('./ciphertext');
 const { Mirror, writeLocal } = require('./mirror');
-const { phaseOf, KEY_RESULT, KEY_ROLL, KEY_SYNC, KEY_TICK } = require('./finalise');
+const { phaseOf, stateIsFromAnotherRound, refuseStaleState, KEY_RESULT, KEY_ROLL, KEY_SYNC, KEY_TICK } = require('./finalise');
 const { startScheduler } = require('./schedule');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
@@ -129,6 +129,12 @@ function createServer(opts = {}) {
   const log = opts.log || console;
   const cfg = opts.cfg || load(opts);
   const store = opts.store || new Store(opts.dbFile || path.join(cfg.root, 'var', 'state.sqlite'));
+  // The database has to be about the round that is frozen, or the first page a player
+  // opens is the previous event's result. Refused here rather than reported later: this
+  // runs before the socket is listening, so it is a deployment that did not start rather
+  // than one that started wrong.
+  const elsewhere = stateIsFromAnotherRound(cfg, store);
+  if (elsewhere) throw refuseStaleState(elsewhere);
   const mirror = opts.mirror || new Mirror(process.env, log);
   const pantheon = opts.pantheon || createPantheon(cfg, process.env);
   const drand = opts.drand || new Drand(cfg.protocol.chain_hash, cfg.runtime.drand.mirrors);
@@ -905,7 +911,17 @@ if (require.main === module) {
     console.error(`[server] ${err.message}`);
     process.exit(2);
   }
-  const { server, cfg, pantheon, store, hub, mirror } = createServer();
+  let boot;
+  try {
+    boot = createServer();
+  } catch (err) {
+    // A refusal meant for whoever is holding the terminal, not a crash. The message is
+    // four lines that say what to run; a stack trace would bury them.
+    if (!err.operator) throw err;
+    console.error(`[server] ${err.message}`);
+    process.exit(2);
+  }
+  const { server, cfg, pantheon, store, hub, mirror } = boot;
   let scheduler = null;
   let stopping = false;
   for (const sig of ['SIGINT', 'SIGTERM']) {

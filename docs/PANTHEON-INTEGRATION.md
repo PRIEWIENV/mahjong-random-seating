@@ -221,6 +221,17 @@ Five things cost an hour between them and are invisible from the documentation:
 - **WSL rewrites `/etc/hosts` on every start.** Put `generateHosts = false` under a
   `[network]` section in `/etc/wsl.conf` first, or the entries vanish and the symptom is
   a sudden 404 from a service that was working a minute ago.
+- **Two machines need those entries, not one.** WSL's `/etc/hosts` covers whatever runs
+  inside WSL. Two things routinely do not. The relay is wherever you started it, and
+  running it from Windows against containers in WSL gives you
+  `GetEventsById: fetch failed` at boot and no event name in the page title. The browser
+  is always outside, and it calls **Frey** itself rather than through the relay — §2, the
+  server never sees a Pantheon password — so `frey.pantheon.local` has to resolve in
+  Windows whichever side the relay is on. Add both names to
+  `C:\Windows\System32\drivers\etc\hosts` pointing at `127.0.0.1`, or develop against
+  `PANTHEON_MODE=stub`, which needs neither. Pointing the URLs at `127.0.0.1` instead does
+  not work: the Host header is then `127.0.0.1` and nginx answers 404, which is the first
+  item on this list.
 - **Frey calls Hugin on every single request.** Its metrics middleware `await`s a POST to
   `hugin/addMetric` and wraps failures, so with Hugin not running *every* Frey call
   returns 500 `fetch failed`. Start `hugin.pantheon.internal` too.

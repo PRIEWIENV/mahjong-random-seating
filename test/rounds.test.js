@@ -19,11 +19,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { run, phaseOf } = require('../server/finalise');
+const { run, phaseOf, publishRoll, KEY_ROLL, KEY_TICK } = require('../server/finalise');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
-const { verifyArchive, resetForNewRound, readIndex } = require('../server/rounds');
+const { verifyArchive, resetForNewRound, endEvent, readIndex } = require('../server/rounds');
 const { makeDataDir, fakeCiphertext, cleanup } = require('./helpers');
 
 const QUIET = { info() {}, warn() {}, error() {} };
@@ -400,5 +400,139 @@ test('the archive route serves nothing outside events/rounds/', async () => {
     assert.doesNotMatch(r.body, /chain_public_key|root:/, `${p} leaked content`);
   }
   await s.close();
+  cleanup(c.fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// what a reset must actually clear
+// ---------------------------------------------------------------------------
+
+/**
+ * `clearRound` named four keys and missed `roll_published`, which guards `publishRoll`.
+ * So every attempt after the first skipped publishing its own roll, and the waiting page
+ * showed the previous attempt's digest right through the interval where the digest is
+ * the only thing a player has to compare. That is PROTOCOL §9 silently not happening.
+ *
+ * The list is now an exclusion, so a key added in one file cannot be forgotten in the
+ * other, and this test is the one that says so about any future key rather than about
+ * the one that went wrong.
+ */
+test('a reset clears every key that describes the round, and only those', () => {
+  const store = new Store(':memory:');
+  // Everything the job writes, plus something nobody has thought of yet.
+  for (const k of ['snapshot', 'phase', 'result', 'pantheon_sync', 'roll_published',
+    'results_mirrored', 'some_key_added_next_year']) {
+    store.set(k, { about: 'this attempt' });
+  }
+  store.set(KEY_TICK, { at: 'whenever' });
+  store.clearRound();
+
+  const left = store.db.prepare('SELECT key FROM state').all().map((r) => r.key).sort();
+  assert.deepEqual(left, Store.KEPT_ACROSS_ROUNDS.slice().sort(),
+    `these survived a reset and describe the previous round: ${left.join(', ')}`);
+  store.close();
+});
+
+test('the attempt after a reset publishes its own roll, not the previous one', async () => {
+  // The bug end to end: void, archive, re-freeze, reset, and then take a roll.
+  const c = attempt(7);
+  await voidIt(c);
+  const first = c.store.get(KEY_ROLL);
+  assert.ok(first?.digest, 'the first attempt must have published a roll');
+
+  refreeze(c);
+  const reset = resetForNewRound(c.cfg, c.store, { log: QUIET });
+  assert.equal(reset.ok, true, reset.error);
+  assert.equal(c.store.get(KEY_ROLL), null, 'the previous attempt\'s roll survived the reset');
+
+  // A second attempt reaches its own cutoff with its own submissions.
+  for (let i = 1; i <= 9; i++) {
+    c.store.insertSubmission(i, fakeCiphertext(c.cfg.protocol.target_round, c.cfg.protocol.chain_hash),
+      c.cfg.protocol.cutoff_ms - 60_000);
+  }
+  await publishRoll(c.cfg, c.store, {
+    cutoff_utc: c.cfg.protocol.submission_cutoff_utc,
+    taken_at: new Date().toISOString(),
+    local_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  }, { mirror: c.mirror, log: QUIET });
+
+  const second = c.store.get(KEY_ROLL);
+  assert.notEqual(second.digest, first.digest, 'the second attempt republished the first one\'s digest');
+  assert.equal(second.local_ids.length, 9);
+  cleanup(c.fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// ending an event, as opposed to retrying a round
+// ---------------------------------------------------------------------------
+
+test('a finished event is archived and then cleared', async () => {
+  const c = attempt(12);
+  // Stand in for a completed draw: the artefacts a finished round leaves live.
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'),
+    JSON.stringify({ round_used: c.cfg.protocol.target_round, seating: {} }, null, 2) + '\n');
+  fs.mkdirSync(path.join(c.fx.dir, 'events'), { recursive: true });
+  fs.writeFileSync(path.join(c.fx.dir, 'events', 'sync.json'), '{"status":"ok"}\n');
+  c.store.set('phase', 'done');
+
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.status, 'done');
+
+  // The evidence moved rather than vanished.
+  const dir = arch(c, c.cfg.protocol.target_round);
+  for (const f of ['manifest.json', 'protocol.json', 'roster.json', 'results.json', 'submissions/1.json']) {
+    assert.ok(fs.existsSync(path.join(dir, f)), `the archive is missing ${f}`);
+  }
+  assert.equal(verifyArchive(c.cfg, c.cfg.protocol.target_round).ok, true);
+
+  // And the tree is ready for another event.
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'results.json')), false);
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'events', 'sync.json')), false);
+  assert.equal(c.store.listSubmissions().length, 0);
+  assert.equal(c.store.get('phase'), null);
+  assert.equal(phaseOf(c.cfg, c.store), 'void', 'past the cutoff with nothing submitted is a void round, not a done one');
+  cleanup(c.fx.dir);
+});
+
+test('a round that never reached an end is not closed by accident', () => {
+  // Neither drawn nor voided: ending it is abandoning it, and abandoning a round after
+  // seeing who has submitted is the step §8 exists to remove.
+  const c = attempt(9);
+  const refused = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /abandoning/);
+  assert.match(refused.error, /--abandon/);
+  assert.equal(c.store.listSubmissions().length, 9, 'nothing may be cleared by a refusal');
+
+  const said = endEvent(c.cfg, c.store, { abandon: true, mirror: c.mirror, log: QUIET });
+  assert.equal(said.ok, true, said.error);
+  assert.equal(said.status, 'abandoned');
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(arch(c, c.cfg.protocol.target_round), 'manifest.json'), 'utf8')).status,
+    'abandoned');
+  cleanup(c.fx.dir);
+});
+
+test('a dry run says what it would do and changes nothing', () => {
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'), '{"round_used":1}\n');
+  c.store.set('phase', 'done');
+
+  const out = endEvent(c.cfg, c.store, { dryRun: true, mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true);
+  assert.equal(out.status, 'done');
+  assert.ok(out.removed.includes('results.json'));
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'results.json')), true);
+  assert.equal(c.store.listSubmissions().length, 12);
+  assert.equal(fs.existsSync(arch(c, c.cfg.protocol.target_round)), false, 'a dry run must not write an archive');
+  cleanup(c.fx.dir);
+});
+
+test('with nothing to close it says so instead of pretending', () => {
+  const c = attempt(0);
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, false);
+  assert.match(out.error, /nothing to close/);
   cleanup(c.fx.dir);
 });

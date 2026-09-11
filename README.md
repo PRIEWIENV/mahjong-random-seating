@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-336%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-347%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -86,7 +86,7 @@ one of which admits the "opposite once" condition. The design is not chosen; it 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 336 unit tests, fully offline, ~12 s
+npm test                  # 347 unit tests, fully offline, ~12 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 ```
 
@@ -113,7 +113,7 @@ performs the check a player does afterwards. Nothing is simulated except Pantheo
 
 ```sh
 npm ci
-npm test                  # 336 unit tests, offline, ~12 s
+npm test                  # 347 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -356,6 +356,7 @@ tools/
   verify-template.js         # the same invariants as the Python one, for the freeze path
   pick-round.js              # target_round and cutoff, kept consistent
   new-round.js               # after a void: verify the archive, then open the next attempt
+  end-event.js               # after the event: archive it, then clear var/ and events/
   freeze.js                  # RUNBOOK 8-11 as one command: snapshot, check, commit, tag
   rehearse.js                # RUNBOOK B/C/D end to end in a sandbox, before the day
   pantheon-fixture.js        # builds the test event on a local Pantheon (dev only)
