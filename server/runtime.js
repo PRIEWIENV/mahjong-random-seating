@@ -70,6 +70,12 @@ const DEFAULTS = {
     twirp_path_template: '/v2/{service}/{method}',
     frey_service: 'common.Frey',
     mimir_service: 'common.Mimir',
+    // What the page calls this draw, e.g. "2026 Spring Open". Normally left null and
+    // read from Mimir at boot; set it here for a deployment whose Mimir is not
+    // reachable from the server, or to override the name players see. Purely a label:
+    // no value it can take changes who sits where, which is why it belongs on this
+    // side of the boundary rather than in the freeze.
+    event_title: null,
   },
   ui: {
     // UI-SPEC §5's documented fallback cadence when the SSE stream drops. Served to
@@ -118,6 +124,7 @@ const OPERATIONAL_KEYS = {
   'pantheon.twirp_path_template': 'runtime.json → pantheon.twirp_path_template',
   'pantheon.frey_service': 'runtime.json → pantheon.frey_service',
   'pantheon.mimir_service': 'runtime.json → pantheon.mimir_service',
+  'pantheon.event_title': 'runtime.json → pantheon.event_title',
 };
 
 function posInt(section, key, value) {
@@ -161,6 +168,12 @@ function validate(r) {
   if (r.pantheon.frey_public_url != null) {
     baseUrl('pantheon', 'frey_public_url', r.pantheon.frey_public_url);
     r.pantheon.frey_public_url = r.pantheon.frey_public_url.replace(/\/+$/, '');
+  }
+  if (r.pantheon.event_title != null) {
+    if (typeof r.pantheon.event_title !== 'string' || r.pantheon.event_title.trim() === '') {
+      throw new Error('runtime.json: pantheon.event_title must be a non-empty string, or null to read it from Mimir');
+    }
+    r.pantheon.event_title = r.pantheon.event_title.trim();
   }
   for (const k of ['twirp_path_template', 'frey_service', 'mimir_service']) {
     if (typeof r.pantheon[k] !== 'string' || r.pantheon[k] === '') {
@@ -228,6 +241,7 @@ function loadRuntime(dataDir, env = process.env) {
   if (env.DRAND_API) r.drand.api = baseUrl('drand', 'api', env.DRAND_API);
   if (env.PANTHEON_FREY_URL) r.pantheon.frey_base_url = baseUrl('pantheon', 'frey_base_url', env.PANTHEON_FREY_URL);
   if (env.PANTHEON_MIMIR_URL) r.pantheon.mimir_base_url = baseUrl('pantheon', 'mimir_base_url', env.PANTHEON_MIMIR_URL);
+  if (env.PANTHEON_EVENT_TITLE) r.pantheon.event_title = env.PANTHEON_EVENT_TITLE.trim() || null;
   if (env.PANTHEON_FREY_PUBLIC_URL) {
     r.pantheon.frey_public_url = baseUrl('pantheon', 'frey_public_url', env.PANTHEON_FREY_PUBLIC_URL).replace(/\/+$/, '');
   }

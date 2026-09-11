@@ -30,8 +30,17 @@ client/generated/
 # SQLite state and scratch output. Losing var/ loses nothing that matters: every
 # ciphertext is also mirrored into the repository as it arrives.
 var/
-# Written by the draw itself; committed only as part of publishing a finished result.
+# Written by the draw itself: one event's outcome, not source. Same rule as the two
+# frozen files above — it is published in the OPERATOR's repository, where that event was
+# run, because that is where it proves something. A developer's test draw committed here
+# would publish a dozen real Pantheon ids and be evidence to nobody.
+#
+# Unlike those two, nothing has to force-add it: server/mirror.js publishes results.json
+# and everything under events/ through the GitHub contents API, which never consults this
+# file. Nothing in the repository reads a results.json at the root either — every test
+# writes its own into a temporary directory.
 events/
+results.json
 decrypted.json
 my-results.json
 independent.json

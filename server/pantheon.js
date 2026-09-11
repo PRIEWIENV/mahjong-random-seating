@@ -167,6 +167,24 @@ class TwirpPantheon {
     return ok === true;
   }
 
+  /**
+   * Mimir GetEventsById — the event's own name, for the page title.
+   *
+   * A label and nothing more: it names the draw a player is looking at, and no value
+   * it could take changes who sits where. So it is fetched rather than frozen, it is
+   * allowed to fail, and a deployment that cannot reach Mimir simply shows the generic
+   * title. Never let this throw into a request path.
+   */
+  async getEventTitle(eventId) {
+    const out = await this.#call(this.mimirBase, this.mimirService, 'GetEventsById', {
+      ids: [eventId],
+    });
+    const events = out.events || field(out, 'event_data') || [];
+    const ev = Array.isArray(events) ? events[0] : events;
+    const title = ev?.title ?? field(ev || {}, 'event_title');
+    return typeof title === 'string' && title.trim() !== '' ? title.trim() : null;
+  }
+
   /** Mimir GetAllRegisteredPlayers — the live event roster, with local ids. */
   async getEventRoster(eventId) {
     const out = await this.#call(this.mimirBase, this.mimirService, 'GetAllRegisteredPlayers', {
@@ -219,11 +237,12 @@ class StubPantheon {
    * @param {object} o.roster            frozen roster.json, used to seed the event
    * @param {Array}  [o.extraAccounts]   [{person_id, auth_token, title}] valid but unregistered
    * @param {number} [o.eventId]        the event these players are registered to
+   * @param {string} [o.eventTitle]     what Mimir would call the event
    *
    * Tokens default to "token-<person_id>"; a test that needs a specific one writes it
    * into `accounts` after construction.
    */
-  constructor({ roster, extraAccounts = [], eventId } = {}) {
+  constructor({ roster, extraAccounts = [], eventId, eventTitle } = {}) {
     this.eventId = eventId ?? roster?.pantheon_event_id ?? 42;
     this.registered = (roster?.players || []).map((p) => ({
       person_id: p.person_id, title: p.title, local_id: p.local_id,
@@ -235,6 +254,7 @@ class StubPantheon {
     this.accounts = new Map();
     for (const p of this.registered) this.accounts.set(p.person_id, `token-${p.person_id}`);
     for (const a of extraAccounts) this.accounts.set(a.person_id, a.auth_token || `token-${a.person_id}`);
+    this.eventTitle = eventTitle ?? null;
     this.prescript = '';
     this.nextSessionIndex = 0;
     this.calls = [];
@@ -249,6 +269,11 @@ class StubPantheon {
   async getEventRoster(eventId) {
     this.calls.push(['getEventRoster', eventId]);
     return eventId === this.eventId ? [...this.registered] : [];
+  }
+
+  async getEventTitle(eventId) {
+    this.calls.push(['getEventTitle', eventId]);
+    return eventId === this.eventId ? this.eventTitle : null;
   }
 
   async getPrescript(eventId) {

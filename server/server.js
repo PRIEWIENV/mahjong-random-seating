@@ -143,6 +143,36 @@ function createServer(opts = {}) {
   const adminToken = opts.adminToken ?? process.env.ADMIN_TOKEN ?? null;
   const isStub = pantheon.constructor?.name === 'StubPantheon';
 
+  // ---- the event's name, fetched once ------------------------------------
+  /**
+   * What Mimir calls this event, shown in the page title (UI-SPEC §1).
+   *
+   * A label, not a parameter: no value it can take changes who sits where, so it is
+   * read from Pantheon rather than frozen, and a deployment that cannot reach Mimir
+   * falls back to the generic title rather than failing. runtime.json wins when it is
+   * set, because an operator who typed a name meant it.
+   *
+   * Fetched on a slow retry rather than per request: twelve waiting browsers poll this
+   * status, and an event's name does not change during a draw.
+   */
+  let eventTitle = cfg.runtime.pantheon.event_title || null;
+  let titleTimer = null;
+  async function refreshEventTitle() {
+    if (cfg.runtime.pantheon.event_title) return; // configured; nothing to ask
+    const eventId = cfg.roster.pantheon_event_id;
+    if (!Number.isFinite(eventId) || typeof pantheon.getEventTitle !== 'function') return;
+    try {
+      const title = await pantheon.getEventTitle(eventId);
+      if (title) {
+        eventTitle = title;
+        if (titleTimer) { clearInterval(titleTimer); titleTimer = null; }
+      }
+    } catch (err) {
+      // Never fatal, and never noisy: the page works without a name.
+      log.warn?.(`[server] could not read the event name from Pantheon: ${err.message}`);
+    }
+  }
+
   // ---- drand health, refreshed in the background --------------------------
   // /api/status is polled by every waiting client; it must not make an upstream call
   // per request. UI-SPEC §5 asks for real liveness, so this is cached, not invented.
@@ -188,6 +218,13 @@ function createServer(opts = {}) {
     return () => { if (timer) clearTimeout(timer); };
   }
 
+  if (opts.eventTitlePollMs !== 0) {
+    refreshEventTitle();
+    // A Pantheon that is down at boot comes back; the name appears when it does.
+    titleTimer = setInterval(refreshEventTitle, opts.eventTitlePollMs ?? 5 * 60_000);
+    titleTimer.unref?.();
+  }
+
   if (opts.drandPollMs !== 0) {
     refreshDrand();
     healthTimer = pace(
@@ -198,6 +235,37 @@ function createServer(opts = {}) {
   }
 
   // ---- GET /api/status ----------------------------------------------------
+  /**
+   * One line per ciphertext held: who sent it, when, and its SHA-256.
+   *
+   * §9 forbids exposing what a player submitted before the reveal. This does not: the
+   * ciphertext itself is public the moment it arrives — mirrored to the repository with
+   * a commit time, precisely so the organiser cannot drop one later (PROTOCOL.md §5) —
+   * and a digest of a public value discloses strictly less than the value. Nothing here
+   * helps anyone open anything early; only the beacon does that.
+   *
+   * What it buys is that a player can watch their own envelope land and keep the
+   * fingerprint of it, rather than being told "9 of 12" and taking our word for the
+   * rest. The digests are also what the published roll is built from, so twelve people
+   * comparing them are comparing the same evidence.
+   *
+   * Cached by arrival time: twelve browsers poll this, and a ciphertext never changes
+   * once stored.
+   */
+  const digestCache = new Map(); // local_id -> {received_ms, digest}
+  function submissionDigests() {
+    const rows = store.listSubmissions();
+    return rows.map((r) => {
+      const hit = digestCache.get(r.local_id);
+      let digest = hit && hit.received_ms === r.received_ms ? hit.digest : null;
+      if (!digest) {
+        digest = crypto.createHash('sha256').update(r.ciphertext, 'utf8').digest('hex');
+        digestCache.set(r.local_id, { received_ms: r.received_ms, digest });
+      }
+      return { local_id: r.local_id, digest, received_at: r.received_at };
+    });
+  }
+
   /** What has been published about the roll: digest, when, and whether it is anchored. */
   function rollStatus() {
     const r = store.get(KEY_ROLL);
@@ -256,6 +324,9 @@ function createServer(opts = {}) {
       total_slots: cfg.protocol.total_slots,
       // Who, not what (§9). The titles come from the frozen roster, never from a payload.
       submitted_local_ids: submitted,
+      // The same set with the fingerprint of each sealed envelope. See submissionDigests:
+      // a digest of an already-public ciphertext, never its contents.
+      submissions: submissionDigests(),
       players: cfg.roster.players.map((p) => ({ local_id: p.local_id, title: p.title })),
       cutoff_utc: cfg.protocol.submission_cutoff_utc,
       // Submissions close at cutoff_utc; the beacon that opens them arrives
@@ -284,6 +355,10 @@ function createServer(opts = {}) {
       // Tells the sign-in stage which path to use. "stub" means no real Frey is
       // reachable and the dev stand-in is in play; it can never be true in production.
       auth_mode: isStub ? 'stub' : 'pantheon',
+      // What Mimir calls this event, so the page says which draw this is. Null until
+      // Pantheon answers, and null forever where it cannot be reached — the page then
+      // shows its generic title rather than a blank.
+      event_title: eventTitle,
       // The BROWSER's Frey, which is not always the backend's. See runtime.js:
       // localhost is this machine here and the player's own device there.
       frey_base_url: freyPublicUrl(cfg.runtime),
@@ -690,6 +765,7 @@ function createServer(opts = {}) {
     // Both are paced timers now, so they are stopped by calling what pace() returned.
     healthTimer?.();
     statusTimer?.();
+    if (titleTimer) clearInterval(titleTimer);
     hub.close();
     if (!opts.store) store.close();
   });
