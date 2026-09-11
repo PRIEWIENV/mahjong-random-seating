@@ -4,9 +4,9 @@
 
 **面向十二人的座位抽签：没有人能预测，没有人能操纵，任何人事后都能自己验算——包括办这场抽签的人。**
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](package.json)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-311%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-313%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -62,7 +62,7 @@ flowchart LR
 ```sh
 git clone <本仓库> && cd mahjong-random-seating
 npm ci
-npm test                  # 311 个单元测试，完全离线，约 12 秒
+npm test                  # 313 个单元测试，完全离线，约 12 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
 ```
 
@@ -86,7 +86,7 @@ npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分�
 
 ```sh
 npm ci
-npm test                  # 311 个单元测试，离线，约 12 秒
+npm test                  # 313 个单元测试，离线，约 12 秒
 npm run verify-template   # 重新推导冻结模板的每一条不变量
 npm run e2e               # 对着真实 drand 跑 RUNBOOK A2-A7，约 90 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
@@ -246,6 +246,8 @@ client/
 public/
   app.js  app.css            # 构建产物 —— 提交，属于冻结范围
   figures/                   # 构建时从 docs/figures 复制；提交，但不在冻结摘要内
+LICENSE                      # MIT
+THIRD-PARTY-NOTICES.md       # bundle 里那些库的许可声明；由构建写出
 docs/
   seating-design.md          # 原理说明，会被渲染进应用（UI-SPEC §10）
   PROTOCOL.md  PANTHEON-INTEGRATION.md  UI-SPEC.md  RUNBOOK.md
@@ -290,6 +292,9 @@ python3 tools/verify_template.py data/schedule_template.json
 
 ## 许可证
 
-MIT，见 [`package.json`](package.json) 中的声明。
+MIT —— 见 [`LICENSE`](LICENSE)。
+
+`public/app.js` 是构建产物，而它被刻意提交进仓库，因为封存选手数字的那一页属于冻结所承诺的范围。这使得本仓库成为编译进那个 bundle 的十七个库的一次二进制分发，所以它们的许可声明被复制在
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) 里——该文件在每次构建时依据 esbuild 自己记录的「到底放进去了什么」重新生成，因此不会落后于后来新增的依赖。
 
 `generate.js` 和 `data/schedule_template.json` 本来就是给人拷走、重跑、挑刺用的。公开它们就是为了这个。

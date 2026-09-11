@@ -419,7 +419,7 @@ if (roundTime(chainInfo, roundNumber) > Date.now()) {
 | 检查项 | 状态 |
 |---|---|
 | `tools/verify_template.py` 重新推导模板的每一条不变量 | 通过 |
-| 单元测试（`npm test`）—— 311 个，覆盖 generate、编码、config、点名核对、恢复、多次尝试、admin、freeze、checkout、API、stats、Pantheon、登录、密文准入、镜像、SSE、时间戳、提交名单、开奖调度、文档渲染器、文档集 | 通过 |
+| 单元测试（`npm test`）—— 313 个，覆盖 generate、编码、config、点名核对、恢复、多次尝试、admin、freeze、checkout、API、stats、Pantheon、登录、密文准入、镜像、SSE、时间戳、提交名单、开奖调度、文档渲染器、文档集、许可声明 | 通过 |
 | 冻结/运营的划分，从两侧分别测试（`test/config.test.js`） | 通过 |
 | 一位选手同时从两份名单里漏掉时能逐字节复现，而点名核对能抓住它 | 通过 |
 | 一次完成的抽签在数据库丢失后仍然存活，不会被判作废 | 通过 |
@@ -457,6 +457,7 @@ if (roundTime(chainInfo, roundNumber) > Date.now()) {
 | 文档渲染器对画不出来的图直接拒绝，而不是丢掉它 | 通过 |
 | 两个语言版本拥有相同的小节、插图和示意图 | 通过 |
 | 生成的原理页是确定性的：一份在 tag 处的全新克隆能重建出字节一致的 bundle | 通过 |
+| `THIRD-PARTY-NOTICES.md` 覆盖 bundle 里全部十七个库，且 `--check` 会在它落后时失败 | 通过 |
 | RUNBOOK A2/A3/A6 对着真实 Pantheon 实例（`cdda3fc`，本地 Docker） | 通过 *（在六处修正之后 —— §6f）* |
 | 通过 `tools/freeze.js` 从一场真实活动做名册快照 | 通过 |
 | 实时登录门禁：正确 token、错误 token、不存在的人 | 通过，三种不同答案 |

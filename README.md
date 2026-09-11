@@ -4,9 +4,9 @@
 
 **A seating draw for twelve players that nobody can predict, nobody can steer, and anybody can check afterwards — including the person running it.**
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](package.json)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-311%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-313%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -86,7 +86,7 @@ one of which admits the "opposite once" condition. The design is not chosen; it 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 311 unit tests, fully offline, ~12 s
+npm test                  # 313 unit tests, fully offline, ~12 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 ```
 
@@ -113,7 +113,7 @@ performs the check a player does afterwards. Nothing is simulated except Pantheo
 
 ```sh
 npm ci
-npm test                  # 311 unit tests, offline, ~12 s
+npm test                  # 313 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -331,6 +331,8 @@ client/
 public/
   app.js  app.css            # the built bundle — committed, part of the freeze
   figures/                   # copied from docs/figures by the build; committed, not frozen
+LICENSE                      # MIT
+THIRD-PARTY-NOTICES.md       # the libraries inside the bundle; written by the build
 docs/
   seating-design.md          # the explainer, rendered into the app (UI-SPEC §10)
   PROTOCOL.md  PANTHEON-INTEGRATION.md  UI-SPEC.md  RUNBOOK.md
@@ -397,7 +399,14 @@ the same set of invariants in JavaScript, which is what the freeze path runs.
 
 ## License
 
-MIT, as declared in [`package.json`](package.json).
+MIT — see [`LICENSE`](LICENSE).
+
+`public/app.js` is a build artefact and is committed on purpose, because the page that
+seals a player's number is part of what the freeze commits to. That makes this repository
+a binary distribution of the seventeen libraries compiled into it, so their notices are
+reproduced in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) — regenerated on every
+build from esbuild's own record of what went in, so it cannot fall behind a dependency
+added later.
 
 `generate.js` and `data/schedule_template.json` are meant to be copied, re-run and argued
-with. That is the point of publishing them.
+with. Publishing them is the point.

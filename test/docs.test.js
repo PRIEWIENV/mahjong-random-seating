@@ -41,8 +41,15 @@ test('every document exists in both languages', () => {
   }
 });
 
+/**
+ * Generated, and legal text rather than prose: translating a licence would be claiming
+ * that the translation is the licence, which it is not. It is excluded by name so that
+ * adding a second generated file does not silently widen the exemption.
+ */
+const NOT_A_DOCUMENT = new Set(['THIRD-PARTY-NOTICES.md']);
+
 test('no markdown document is left out of the pairing', () => {
-  const listed = new Set(PAIRS.flat());
+  const listed = new Set([...PAIRS.flat(), ...NOT_A_DOCUMENT]);
   const found = [];
   for (const dir of ['docs', 'deploy', '.']) {
     const abs = path.join(ROOT, dir);
@@ -72,6 +79,41 @@ test('the implementation notes keep the same section numbering in both languages
   const zh = numbers(read('docs/IMPLEMENTATION_NOTES.zh.md'));
   assert.ok(en.length > 10, 'the English notes lost their numbered sections');
   assert.deepEqual(zh, en, 'the two versions of the implementation notes have diverged');
+});
+
+/**
+ * The bundle is committed, so this repository redistributes every library inside it in
+ * binary form, and MIT and BSD-3-Clause both ask for their notices to travel with that.
+ * `tools/build-client.js` regenerates the file from esbuild's metafile; this checks the
+ * committed copy has not fallen behind the committed bundle — which is the state a
+ * checkout would be in if somebody added a dependency and did not rebuild.
+ */
+test('every library in the committed bundle has its notice reproduced', () => {
+  const notices = read('THIRD-PARTY-NOTICES.md');
+  // The four that are imported by name in the client; the rest arrive transitively and
+  // are exactly what the generator exists to catch.
+  for (const name of ['react', 'react-dom', 'tlock-js', 'buffer']) {
+    assert.ok(notices.includes(`## ${name} `), `THIRD-PARTY-NOTICES.md does not cover ${name}`);
+  }
+  // ieee754 is the one package here that is not MIT, and its second condition names
+  // binary redistribution explicitly. If it ever drops out of the file, that is the row
+  // worth failing on.
+  assert.ok(notices.includes('## ieee754 '), 'the BSD-3-Clause notice is missing');
+  assert.ok(notices.includes('Redistributions in binary form'), 'the BSD conditions are not reproduced');
+
+  // Every row of the summary table must have a section with its text underneath.
+  const rows = [...notices.matchAll(/^\| `([^`]+)` \| ([^|]+) \|/gm)].map((m) => m[1]);
+  assert.ok(rows.length >= 15, `expected the full bundle, got ${rows.length} rows`);
+  for (const name of rows) {
+    assert.ok(notices.includes(`## ${name} `), `${name} is listed but its licence text is missing`);
+  }
+});
+
+test('the licence file exists and agrees with package.json', () => {
+  const licence = read('LICENSE');
+  assert.match(licence, /^MIT License/, 'LICENSE does not open as MIT');
+  assert.match(licence, /Copyright \(c\) \d{4}/, 'LICENSE carries no copyright line');
+  assert.equal(require('../package.json').license, 'MIT', 'package.json disagrees with LICENSE');
 });
 
 /**

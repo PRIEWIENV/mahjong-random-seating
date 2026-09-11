@@ -865,7 +865,7 @@ The password field has a reveal toggle, off by default.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 311 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set | pass |
+| Unit tests (`npm test`) — 313 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -903,6 +903,7 @@ The password field has a reveal toggle, off by default.
 | The document renderer refuses a diagram it cannot draw, rather than dropping it | passes |
 | The two language versions have the same sections, figures and diagrams | passes |
 | The generated explanation page is deterministic: a fresh clone at the tag rebuilds the bundle byte-identically | passes |
+| `THIRD-PARTY-NOTICES.md` covers every one of the seventeen libraries in the bundle, and `--check` fails if it has fallen behind | passes |
 | RUNBOOK A2/A3/A6 against a real Pantheon instance (`cdda3fc`, local Docker) | passes *(after six fixes — §6f)* |
 | Roster snapshot from a live event, through `tools/freeze.js` | passes |
 | Sign-in gate live: correct token, wrong token, unknown person | passes, three distinct answers |

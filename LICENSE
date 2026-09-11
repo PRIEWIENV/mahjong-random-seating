@@ -1,0 +1,46 @@
+MIT License
+
+Copyright (c) 2026 PRIEWIENV
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+THE COMMITTED BROWSER BUNDLE
+============================
+
+`public/app.js` and `public/app.css` are build artefacts, and they are committed
+on purpose: the page that seals a player's number is part of what the freeze
+commits to (docs/PROTOCOL.md §4.1), so it has to be in the tag a player is given.
+That makes this repository a binary distribution of the seventeen libraries
+compiled into that bundle — sixteen MIT, one BSD-3-Clause — and both of those
+licences ask that their notices travel with such a distribution.
+
+The bundle is built with `legalComments: 'none'`, so those notices live in
+THIRD-PARTY-NOTICES.md instead. That file is regenerated on every build from
+esbuild's own record of what went into the bundle, so it cannot fall behind a
+dependency that was added later, and the build fails outright on a package whose
+terms it cannot reproduce.
+
+Everything else in this repository is original work under the licence above:
+`generate.js`, every module under `server/`, `client/` and `tools/`, the
+documents under `docs/`, and `data/schedule_template.json`. The runtime
+dependency tree is one package.
+
+`generate.js` and `data/schedule_template.json` in particular are meant to be
+copied, re-run and argued with. Publishing them is the point.
