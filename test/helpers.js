@@ -32,12 +32,22 @@ function makeRoster(n = 12, eventId = 42) {
 }
 
 function makeProtocol(over = {}) {
+  // The cutoff and the round it waits for are a pair, separated by reveal_gap_seconds:
+  // submissions close, and the beacon that opens them arrives that much later. Derived
+  // here rather than written out so a test that moves one moves all three.
+  const gapSec = over.reveal_gap_seconds ?? 600;
+  const cutoffMs = over.submission_cutoff_utc
+    ? Date.parse(over.submission_cutoff_utc)
+    : Date.now() + 3_600_000;
+  const iso = (ms) => new Date(ms).toISOString();
   return {
     drand_chain: 'quicknet',
     chain_hash: QUICKNET_HASH,
     chain_public_key: QUICKNET_PK,
     target_round: 1_000_000,
-    submission_cutoff_utc: new Date(Date.now() + 3_600_000).toISOString(),
+    submission_cutoff_utc: iso(cutoffMs),
+    target_round_utc: iso(cutoffMs + gapSec * 1000),
+    reveal_gap_seconds: gapSec,
     quorum: 8,
     total_slots: 12,
     user_input_max: 255,

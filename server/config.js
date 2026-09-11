@@ -19,6 +19,9 @@ const { loadRuntime, OPERATIONAL_KEYS } = require('./runtime');
 const { ENCODING_LIMITS } = require('../generate.js');
 
 const ROOT = path.join(__dirname, '..');
+// Below a minute the interval is theatre: nobody can take a roll, publish its digest
+// and get it timestamped in that time. PROTOCOL.md section 9.
+const MIN_REVEAL_GAP_SECONDS = 60;
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX_PUBKEY = /^[0-9a-f]{96}$|^[0-9a-f]{192}$/; // G1 or G2 group key
 
@@ -96,11 +99,23 @@ function validateProtocol(p) {
 
   const required = [
     'drand_chain', 'chain_hash', 'chain_public_key', 'target_round',
+    'target_round_utc', 'reveal_gap_seconds',
     'submission_cutoff_utc', 'quorum', 'total_slots', 'user_input_max',
     'seed_domain_separation',
   ];
+  // These two arrived after the first protocol.json files were written, and every one
+  // of those is missing them. The remedy is a command, so the error names it.
+  const WRITTEN_BY_PICK_ROUND = new Set(['target_round_utc', 'reveal_gap_seconds']);
   for (const k of required) {
-    if (p[k] === undefined || p[k] === null || p[k] === '') throw new Error(`protocol.json: missing "${k}"`);
+    if (p[k] === undefined || p[k] === null || p[k] === '') {
+      throw new Error(
+        `protocol.json: missing "${k}"` +
+        (WRITTEN_BY_PICK_ROUND.has(k)
+          ? '. Run this to write it, with target_round and submission_cutoff_utc, in one go:'
+            + ' node tools/pick-round.js --in 72h --write'
+          : '')
+      );
+    }
   }
   if (!Number.isInteger(p.target_round) || p.target_round < 1) {
     throw new Error(`protocol.json: target_round must be a positive integer, got ${JSON.stringify(p.target_round)}`);
@@ -145,6 +160,37 @@ function validateProtocol(p) {
   const cutoff = Date.parse(p.submission_cutoff_utc);
   if (Number.isNaN(cutoff)) throw new Error('protocol.json: submission_cutoff_utc is not a parseable timestamp');
   p.cutoff_ms = cutoff;
+
+  // The interval between the roll being taken and the decryption key existing
+  // (PROTOCOL.md section 9). Submissions close at submission_cutoff_utc; the beacon
+  // that opens them is emitted reveal_gap_seconds later, at target_round_utc.
+  //
+  // The two were the same instant until this field existed, and that left nowhere to
+  // stand: a timestamp on the roll of who submitted was simultaneous with the key, so
+  // it could not show the roll had been settled before anyone could work out which
+  // late submission would be useful. The interval is what makes publishing the roll
+  // mean something.
+  if (!Number.isInteger(p.reveal_gap_seconds) || p.reveal_gap_seconds < MIN_REVEAL_GAP_SECONDS) {
+    throw new Error(
+      'protocol.json: reveal_gap_seconds must be a whole number of seconds, at least ' +
+      `${MIN_REVEAL_GAP_SECONDS}; got ${JSON.stringify(p.reveal_gap_seconds)}. ` +
+      'Run: node tools/pick-round.js --in 72h --write'
+    );
+  }
+  const roundMs = Date.parse(p.target_round_utc);
+  if (Number.isNaN(roundMs)) {
+    throw new Error(`protocol.json: target_round_utc is not a parseable timestamp: ${JSON.stringify(p.target_round_utc)}`);
+  }
+  // The three are written together by tools/pick-round.js so they cannot disagree.
+  // This checks them because a hand-edited file is exactly where they would.
+  if (roundMs - cutoff !== p.reveal_gap_seconds * 1000) {
+    throw new Error(
+      `protocol.json: target_round_utc is ${(roundMs - cutoff) / 1000}s after submission_cutoff_utc, ` +
+      `but reveal_gap_seconds says ${p.reveal_gap_seconds}. These three fields are written ` +
+      'together: node tools/pick-round.js --write'
+    );
+  }
+  p.target_round_ms = roundMs;
 
   const mode = p.pantheon?.wind_shuffle_mode;
   if (mode && mode !== 'WIND_SHUFFLE_MODE_PRESCRIPTED') {
@@ -224,4 +270,4 @@ function load(opts = {}) {
   };
 }
 
-module.exports = { load, readJson, ROOT, ENCODING_LIMITS };
+module.exports = { MIN_REVEAL_GAP_SECONDS, load, readJson, ROOT, ENCODING_LIMITS };

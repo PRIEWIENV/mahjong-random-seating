@@ -92,7 +92,10 @@ class Mirror {
     const sha = await this.#sha(repoPath);
     return await this.#api('PUT', `/repos/${this.repo}/contents/${encodeURI(repoPath)}`, {
       message,
-      content: Buffer.from(content, 'utf8').toString('base64'),
+      // A Buffer goes through as it is. The OpenTimestamps proof for the roll is
+      // binary, and utf8-decoding it first would put a mangled text file in the
+      // repository that no ots client can read.
+      content: (Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')).toString('base64'),
       branch: this.branch,
       ...(sha ? { sha } : {}),
     });
@@ -103,6 +106,11 @@ class Mirror {
    * best-effort by design (see the header comment).
    */
   enqueue(repoPath, content, message) {
+    // With no repo and no token there is nothing to flush to, and queuing anyway is
+    // not harmless: flush() returns immediately when disabled without emptying the
+    // queue, so drain() at the end of the draw spins until its two-minute timeout and
+    // then reports failure. The local copy under events/ is already on disk.
+    if (!this.enabled) return;
     this.queue.push({ repoPath, content, message, attempts: 0 });
     this.flush();
   }

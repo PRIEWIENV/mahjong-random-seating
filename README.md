@@ -40,10 +40,10 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 243 unit tests, offline, ~6s
+npm test                  # 264 unit tests, offline, ~5s
 npm run verify-template   # re-derives every invariant of the frozen template
-npm run e2e               # RUNBOOK A2-A7 against live drand, ~3 min
-npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~5 min
+npm run e2e               # RUNBOOK A2-A7 against live drand, ~90s
+npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~2 min
 ```
 
 `.github/workflows/reproducibility.yml` runs the first three on every push, on Linux and

@@ -19,6 +19,13 @@
  *   node tools/freeze.js                     snapshot + check, write nothing
  *   node tools/freeze.js --write             write data/roster.json too
  *   node tools/freeze.js --write --tag frozen-v1     ...and commit and tag
+ *   node tools/freeze.js --write --tag frozen-v1 --push   ...and push it, which is
+ *                                                   what makes it a public commitment
+ *   --no-anchor                                     skip the OpenTimestamps stamp
+ *
+ * Tagging without pushing leaves the freeze on one machine, where the organiser could
+ * still choose which commit it names after seeing the outcome (PROTOCOL.md section 9).
+ * --push is not tidiness; the tag is only evidence once somebody else can fetch it.
  *
  * PANTHEON_MODE=stub exercises the whole thing without a Pantheon deployment;
  * tools/rehearse.js drives section B end to end that way, which is how the first-freeze
@@ -26,6 +33,8 @@
  */
 
 const { execFileSync } = require('node:child_process');
+const { stamp } = require('../server/ots');
+const LF = String.fromCharCode(10);
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -343,9 +352,59 @@ async function main(argv) {
 
   git(['tag', args.tag], 'git tag');
   const head = git(['rev-parse', '--short', 'HEAD'], 'git rev-parse').trim();
+  const fullHead = git(['rev-parse', 'HEAD'], 'git rev-parse').trim();
   process.stdout.write(`\n${ok(`${staged ? 'committed' : 'tagged existing commit'} ${head} as ${args.tag}`)}\n`);
 
   // ---- step 12: what to tell the players ----------------------------------
+
+  // A tag that exists only here is not a commitment.
+  //
+  // PROTOCOL.md §9: what makes the freeze binding is that it was public BEFORE
+  // submissions opened. A tag created now and pushed after the draw proves nothing —
+  // the organiser could have chosen which commit to point it at once the outcome was
+  // known. So this pushes, and says plainly when it has not.
+  if (args.push) {
+    const remote = typeof args.push === 'string' ? args.push : 'origin';
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], 'git rev-parse').trim();
+    git(['push', remote, branch], `git push ${remote} ${branch}`);
+    git(['push', remote, args.tag], `git push ${remote} ${args.tag}`);
+    process.stdout.write(`${ok(`pushed ${branch} and ${args.tag} to ${remote}`)}\n`);
+  } else {
+    process.stdout.write(
+      `${warn(`${args.tag} exists only on this machine`)}\n` +
+      `        Push it before submissions open, or the freeze is not a public commitment:\n` +
+      `          git push origin HEAD --tags\n` +
+      `        Then confirm it from somewhere else: git ls-remote --tags <url> ${args.tag}\n`
+    );
+  }
+
+  // The same argument as the roll at the cutoff, one step earlier: a third party who is
+  // not the organiser records that this commit existed at this time. Best-effort — the
+  // commit id in the announcement below is what players actually compare.
+  let anchored = null;
+  if (args['no-anchor']) {
+    process.stdout.write(`${warn('not anchored (--no-anchor)')}\n`);
+  } else {
+    try {
+      const out = await stamp(Buffer.from(fullHead + LF, 'utf8'));
+      const dir = path.join(ROOT, 'events', 'freeze');
+      fs.mkdirSync(dir, { recursive: true });
+      const otsPath = path.join(dir, `${args.tag}.commit.ots`);
+      fs.writeFileSync(otsPath, out.ots);
+      fs.writeFileSync(path.join(dir, `${args.tag}.commit`), fullHead + LF);
+      anchored = out;
+      process.stdout.write(
+        `${ok(`commit ${head} anchored by ${out.calendars.length} calendar(s)`)}\n` +
+        `        events/freeze/${args.tag}.commit.ots — keep it, and give it to anyone who asks\n`
+      );
+    } catch (err) {
+      process.stdout.write(
+        `${warn(`could not anchor the commit: ${err.message}`)}\n` +
+        `        Retry while the window is still open; a stamp made later proves less.\n`
+      );
+    }
+  }
+
   process.stdout.write(`
 \x1b[1m  Announcement (RUNBOOK step 12) — three things, no personal links:\x1b[0m
 
@@ -355,7 +414,9 @@ async function main(argv) {
     截止时间：${cfg.protocol.submission_cutoff_utc}（drand 第 ${cfg.protocol.target_round} 轮）
     ${cfg.protocol.total_slots} 人中至少 ${cfg.protocol.quorum} 人提交，抽签才会进行。
 
-    冻结的四个文件已经打上 tag ${args.tag}，抽签结束后任何人都能用它自己复算一遍。
+    冻结的四个文件已经打上 tag ${args.tag}，对应 commit ${fullHead}。
+    抽签结束后任何人都能用它自己复算一遍。这两个值请一并保存：如果有人
+    事后给你的 tag 指向别的 commit，你手上的这一行就是证据。
 
 `);
   return 0;

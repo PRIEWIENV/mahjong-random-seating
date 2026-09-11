@@ -17,6 +17,7 @@
  * second run.
  */
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -25,12 +26,18 @@ const { Store } = require('./db');
 const { Drand } = require('./drand');
 const { decryptPayload } = require('./tlock');
 const { Mirror, writeLocal } = require('./mirror');
+const { stamp } = require('./ots');
 const { computeStats } = require('./stats');
 const { createPantheon, PantheonError } = require('./pantheon');
 const { archiveVoidedAttempt } = require('./rounds');
 const { generate, serialise } = require('../generate');
 
+const LF = String.fromCharCode(10);
 const KEY_SNAPSHOT = 'snapshot';
+// What was published about the roll, and when: its digest, and whether the
+// OpenTimestamps anchor succeeded. Read by /api/status so the waiting page can show
+// the digest during the interval (PROTOCOL.md section 9).
+const KEY_ROLL = 'roll_published';
 const KEY_PHASE = 'phase';
 const KEY_RESULT = 'result';
 const KEY_SYNC = 'pantheon_sync';
@@ -74,6 +81,68 @@ function phaseOf(cfg, store, nowMs = Date.now()) {
   const snap = store.get(KEY_SNAPSHOT);
   const count = snap ? snap.local_ids.length : store.snapshotAt(cfg.protocol.cutoff_ms).length;
   return count >= cfg.protocol.quorum ? 'awaiting_round' : 'void';
+}
+
+/** The bytes of the roll, fixed the moment it is taken. */
+const rollBody = (snap) => JSON.stringify(snap, null, 2) + LF;
+const rollDigest = (body) => crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+
+/**
+ * Publish the roll, and get it timestamped by somebody who is not us.
+ *
+ * This runs at the cutoff, inside reveal_gap_seconds, while the beacon that opens the
+ * ciphertexts does not yet exist. That is the whole point (PROTOCOL.md section 9): a
+ * roll fixed only after the key is out cannot show it was fixed before, and a twelfth
+ * submission forged from the decrypted eleven is indistinguishable from a real one that
+ * arrived late. Published here, it is neither.
+ *
+ * Two things happen and they are not equally important. The digest goes into the status
+ * the waiting page is already showing, so twelve people see one short string while the
+ * outcome is still unknowable; that needs nobody else to be up. The OpenTimestamps
+ * anchor is the durable half and depends on calendars being reachable, so it is
+ * best-effort and its failure is recorded rather than thrown.
+ */
+async function publishRoll(cfg, store, snap, { mirror, log, stampFn } = {}) {
+  const body = rollBody(snap);
+  const digest = rollDigest(body);
+  writeLocal(cfg.root, 'events/snapshot.json', body);
+  mirror?.enqueue?.('events/snapshot.json', body, `roll taken at the cutoff (${snap.local_ids.length} submissions)`);
+  const record = {
+    digest,
+    published_at: new Date().toISOString(),
+    local_ids: snap.local_ids,
+    ots: null,
+  };
+  store.set(KEY_ROLL, record);
+  log.info?.(`[finalise] roll published, sha256 ${digest}`);
+
+  if (!stampFn) {
+    // No stamper, no anchor. The real one is wired in by the command-line entry
+    // point below; a library caller that has not asked for it — every unit test —
+    // gets the roll published and nothing dialled. A default that reached four
+    // calendars made the offline suite depend on the network and cost a second per
+    // test, which is how this was noticed.
+    record.ots = { skipped: true, at: new Date().toISOString() };
+    store.set(KEY_ROLL, record);
+    return record;
+  }
+
+  try {
+    const out = await stampFn(Buffer.from(body, 'utf8'));
+    writeLocal(cfg.root, 'events/snapshot.json.ots', out.ots);
+    mirror?.enqueue?.('events/snapshot.json.ots', out.ots, 'opentimestamps proof for the roll');
+    record.ots = { calendars: out.calendars, at: new Date().toISOString(), bytes: out.ots.length };
+    store.set(KEY_ROLL, record);
+    log.info?.(`[finalise] roll anchored with ${out.calendars.length} calendar(s)`);
+  } catch (err) {
+    // Not fatal. The digest is out and the players can compare it; what is lost is the
+    // proof that survives everyone forgetting. Loud, because it is not recoverable
+    // later: a stamp made after the beacon proves nothing about before it.
+    record.ots = { failed: err.message, at: new Date().toISOString() };
+    store.set(KEY_ROLL, record);
+    log.error?.(`[finalise] roll NOT anchored: ${err.message}`);
+  }
+  return record;
 }
 
 /** §8: take the snapshot once, at the cutoff, then never again. */
@@ -286,6 +355,11 @@ async function run(opts = {}) {
   }
 
   const snapshot = takeSnapshot(cfg, store, log);
+  // Inside the interval, before the beacon exists. Idempotent: the roll is taken once
+  // and this records that it was published, so a later tick does not restamp it.
+  if (!store.get(KEY_ROLL)) {
+    await publishRoll(cfg, store, snapshot, { mirror, log, stampFn: opts.stamp });
+  }
 
   if (snapshot.local_ids.length < cfg.protocol.quorum) {
     const notice = publishVoid(cfg, store, mirror, 'quorum not met at the cutoff',
@@ -354,9 +428,15 @@ async function run(opts = {}) {
   // The snapshot goes out first. It is what lets a verifier check that results.json
   // accounts for every submission taken at the cutoff, so a reader should never find a
   // result published without the file needed to audit its roll-call.
-  const snapBody = JSON.stringify(snapshot, null, 2) + '\n';
-  writeLocal(cfg.root, 'events/snapshot.json', snapBody);
-  mirror.enqueue('events/snapshot.json', snapBody, `snapshot at cutoff (round ${beacon.round})`);
+  // Already written and mirrored at the cutoff by publishRoll, which is the only
+  // time it can mean anything. Re-published only if that never happened — a database
+  // restored from a backup, say — so a result is still never readable without the
+  // file needed to audit its roll-call.
+  if (!store.get(KEY_ROLL)) {
+    const snapBody = rollBody(snapshot);
+    writeLocal(cfg.root, 'events/snapshot.json', snapBody);
+    mirror.enqueue('events/snapshot.json', snapBody, `snapshot at cutoff (round ${beacon.round})`);
+  }
   const body = serialise(results);
   writeLocal(cfg.root, 'results.json', body);
   mirror.enqueue('results.json', body, `results for drand round ${beacon.round}`);
@@ -377,12 +457,14 @@ async function run(opts = {}) {
 }
 
 module.exports = {
-  run, phaseOf, takeSnapshot, decryptSnapshot, syncToPantheon, publishSync,
-  readPublishedResults, KEY_PHASE, KEY_SNAPSHOT, KEY_RESULT, KEY_SYNC,
+  run, phaseOf, takeSnapshot, publishRoll, rollBody, rollDigest, decryptSnapshot, syncToPantheon, publishSync,
+  readPublishedResults, KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC,
 };
 
 if (require.main === module) {
-  run({ wait: !process.argv.includes('--no-wait') })
+  // The real stamper, here and nowhere else: PROTOCOL.md §9's anchor belongs to a
+  // deployment, not to every caller of run().
+  run({ wait: !process.argv.includes('--no-wait'), stamp })
     .then((out) => process.exit(['done', 'void', 'open', 'awaiting_round'].includes(out.phase) ? 0 : 1))
     .catch((err) => {
       console.error(`[finalise] ERROR ${err.stack || err.message}`);

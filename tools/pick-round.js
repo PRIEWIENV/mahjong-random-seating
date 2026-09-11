@@ -37,6 +37,12 @@ function parseArgs(argv) {
 }
 
 /** "72h", "90m", "3d" -> milliseconds */
+// PROTOCOL.md section 4.1. Ten minutes is long enough to take the roll, publish its
+// digest and get an OpenTimestamps commitment for it, and short enough that nobody
+// stops watching. The floor is a minute: below that the interval is theatre.
+const DEFAULT_GAP_SECONDS = 600;
+const MIN_GAP_SECONDS = 60;
+
 function parseDuration(s) {
   const m = /^(\d+(?:\.\d+)?)\s*(s|m|h|d)$/.exec(String(s).trim());
   if (!m) throw new Error(`cannot parse duration "${s}" — use forms like 90m, 72h, 3d`);
@@ -77,7 +83,22 @@ async function main() {
   }
 
   const emitMs = roundTimeMs(round);
-  const cutoff = new Date(emitMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // The cutoff is deliberately EARLIER than the round, by reveal_gap_seconds.
+  //
+  // They used to be the same instant, which left no interval in which the roll of who
+  // submitted was fixed while the decryption key did not yet exist. Without such an
+  // interval there is nowhere to publish that roll: any timestamp on it is simultaneous
+  // with the key, so it cannot show the roll was settled before anyone could see what a
+  // useful late submission would be (PROTOCOL.md section 9).
+  const gapSec = Number(
+    args.gap !== undefined ? args.gap : (protocol.reveal_gap_seconds ?? DEFAULT_GAP_SECONDS)
+  );
+  if (!Number.isInteger(gapSec) || gapSec < MIN_GAP_SECONDS) {
+    throw new Error(`--gap must be a whole number of seconds, at least ${MIN_GAP_SECONDS}`);
+  }
+  const cutoffMs = emitMs - gapSec * 1000;
+  const cutoff = new Date(cutoffMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const roundUtc = new Date(emitMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const nowRound = Math.floor((Math.floor(Date.now() / 1000) - genesis) / period) + 1;
 
   console.log(`  chain          ${info.metadata?.beaconID || '?'}  (${chainHash})`);
@@ -86,14 +107,20 @@ async function main() {
   console.log(`  current round  ${nowRound}`);
   console.log('');
   console.log(`  target_round             ${round}`);
+  console.log(`  target_round_utc         ${roundUtc}`);
   console.log(`  submission_cutoff_utc    ${cutoff}`);
-  console.log(`  window from now          ${((emitMs - Date.now()) / 3_600_000).toFixed(1)} hours`);
+  console.log(`  reveal_gap_seconds       ${gapSec}  (the roll is fixed this long before the key)`);
+  console.log(`  window from now          ${((cutoffMs - Date.now()) / 3_600_000).toFixed(1)} hours`);
 
   if (emitMs <= Date.now()) {
     console.error('\n  REFUSING: that round is already in the past. Nothing would be secret.');
     return 1;
   }
-  if (emitMs - Date.now() < 3_600_000) {
+  if (cutoffMs <= Date.now()) {
+    console.error('\n  REFUSING: the cutoff would already have passed. Nobody could submit.');
+    return 1;
+  }
+  if (cutoffMs - Date.now() < 3_600_000) {
     console.warn('\n  WARNING: under an hour of submission window. RUNBOOK step 7 suggests 72 hours.');
   }
 
@@ -103,7 +130,9 @@ async function main() {
       return 1;
     }
     protocol.target_round = round;
+    protocol.target_round_utc = roundUtc;
     protocol.submission_cutoff_utc = cutoff;
+    protocol.reveal_gap_seconds = gapSec;
     protocol.chain_hash = chainHash;
     protocol.chain_public_key = info.public_key;
     // Deliberately NOT written: the endpoint this was looked up through is operational

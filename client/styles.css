@@ -150,6 +150,20 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
 .note.bad { background: var(--bad-soft); color: var(--bad); }
 .note.info { background: var(--t1-soft); color: var(--t1); }
 .note a { color: inherit; }
+/* The roll card: one short string a player is asked to compare with eleven others,
+   so the string itself is the focal element and everything else is support. */
+.roll-card { border-left: 3px solid var(--accent); }
+.roll-digest {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 14px 0 6px;
+}
+.roll-digest code {
+  font: 700 clamp(20px, 5.5vw, 30px)/1.2 var(--mono);
+  letter-spacing: 0.06em; word-break: break-all;
+}
+.roll-ask { margin: 0 0 10px; font-weight: 600; }
+.roll-files { display: flex; gap: 16px; flex-wrap: wrap; margin: 14px 0 0; }
+
 /* The technical line under a failure a player cannot act on: present so it can be
    forwarded to an organiser, quiet enough not to read as the message itself. */
 .note .detail {

@@ -49,6 +49,17 @@ const TEXT = {
     lastSeen: '最近确认',
     stale: '信标暂时联系不上。这只是延迟，不是安全问题——密文和轮次都已固定，结果早已确定，信标恢复后会自动继续。',
     polling: (s) => `实时连接中断，正在每 ${s} 秒刷新一次…`,
+    rollTitle: '名单已封存，开奖尚未开始',
+    rollLede: (n) => `截止时收到 ${n} 份密文。下面是这份名单的指纹：`,
+    rollAsk: '把它发到群里，和别人核对一遍。' ,
+    rollWhy: '现在还没有人能解开任何一份密文——解密要等的那一轮信标尚未产生。所以此刻公布名单，等于承诺了参与者就是这些人，而且承诺时谁也不知道换个人会带来什么结果。十二个人看到的指纹必须一样。',
+    rollCopy: '复制',
+    rollCopied: '已复制',
+    rollFile: '下载名单',
+    rollProof: '下载时间戳证明',
+    rollAnchored: (n) => `已由 ${n} 个独立日历服务器做了区块链时间戳存证。`,
+    rollNotAnchored: '外部时间戳存证这次没能完成，指纹本身仍然有效——但请务必和别人核对。',
+    rollHow: '验证方法：ots verify snapshot.json.ots，或用任意工具算 snapshot.json 的 sha256。',
   },
   en: {
     until: 'Until the draw',
@@ -70,8 +81,58 @@ const TEXT = {
     lastSeen: 'Last seen',
     stale: 'The beacon is not reachable right now. That is a delay, not a safety problem: the ciphertexts and the round are already fixed, so the outcome is already determined. It resumes on its own.',
     polling: (s) => `Live connection dropped. Refreshing every ${s} seconds…`,
+    rollTitle: 'The roll is closed; the draw has not happened',
+    rollLede: (n) => `${n} ciphertexts were held at the cutoff. This is the fingerprint of that list:`,
+    rollAsk: 'Post it to the group chat and check it against everybody else.',
+    rollWhy: 'Nobody can open any of those ciphertexts yet: the beacon that unlocks them has not been produced. So publishing the list now commits to who took part, at a moment when nobody knows what swapping someone would do to the outcome. All twelve of you should see the same fingerprint.',
+    rollCopy: 'Copy',
+    rollCopied: 'Copied',
+    rollFile: 'Download the roll',
+    rollProof: 'Download the timestamp proof',
+    rollAnchored: (n) => `Timestamped into Bitcoin by ${n} independent calendars.`,
+    rollNotAnchored: 'The external timestamp did not go through this time. The fingerprint still holds, so comparing it with others matters more than usual.',
+    rollHow: 'To check: ots verify snapshot.json.ots, or take the sha256 of snapshot.json with any tool you like.',
   },
 };
+
+/**
+ * The one thing a player is asked to do that is not submitting: look at a short
+ * string and check it against everybody else's.
+ *
+ * An OpenTimestamps anchor proves the roll existed before a Bitcoin block, which is
+ * what a forged late submission cannot satisfy. It does not prove it was the only
+ * roll anchored — anchoring is cheap. Twelve people agreeing on one value does.
+ */
+function RollCard({ roll, t }) {
+  const [copied, setCopied] = useState(false);
+  const short = (roll.digest || '').slice(0, 16);
+  const copy = () => {
+    navigator.clipboard?.writeText(roll.digest).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
+      () => {}
+    );
+  };
+  return (
+    <section className="card roll-card">
+      <h2>{t.rollTitle}</h2>
+      <p className="lede">{t.rollLede(roll.submitted_count)}</p>
+      <p className="roll-digest">
+        <code title={roll.digest}>{short}</code>
+        <button className="linkish" onClick={copy}>{copied ? t.rollCopied : t.rollCopy}</button>
+      </p>
+      <p className="roll-ask">{t.rollAsk}</p>
+      <p className="hint">{t.rollWhy}</p>
+      <p className={roll.anchored ? 'note ok' : 'note warn'}>
+        {roll.anchored ? t.rollAnchored(roll.calendars.length) : t.rollNotAnchored}
+      </p>
+      <p className="roll-files">
+        <a href="/snapshot.json" download>{t.rollFile}</a>
+        {roll.anchored && <a href="/snapshot.json.ots" download>{t.rollProof}</a>}
+      </p>
+      <p className="fineprint">{t.rollHow}</p>
+    </section>
+  );
+}
 
 export default function Waiting({ status, me, serverNow, connection }) {
   useTick(1000);
@@ -89,6 +150,11 @@ export default function Waiting({ status, me, serverNow, connection }) {
   // The real cadence, not a number typed into a sentence: it is served in the status
   // and can be changed without rebuilding this bundle.
   const pollSeconds = Math.round((status.status_poll_interval_ms || 5000) / 1000);
+  // Shown only while it means something: after the roll is taken and before the
+  // beacon that opens the ciphertexts exists (PROTOCOL.md §9). Once the draw has
+  // happened the fingerprint is still true but no longer a commitment to anything,
+  // and the result page is where people should be looking.
+  const roll = elapsed && status.phase === 'awaiting_round' ? status.roll : null;
 
   return (
     <div className="stage waiting">
@@ -109,6 +175,8 @@ export default function Waiting({ status, me, serverNow, connection }) {
         </p>
         {me?.submitted && <p className="note ok">{t.yours}</p>}
       </section>
+
+      {roll && <RollCard roll={roll} t={t} />}
 
       <section className="card tally">
         <div className="tally-head">

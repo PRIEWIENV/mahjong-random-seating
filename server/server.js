@@ -42,7 +42,7 @@ const { load } = require('./config');
 const { Store } = require('./db');
 const { assertAdmissible, CiphertextError } = require('./ciphertext');
 const { Mirror, writeLocal } = require('./mirror');
-const { phaseOf, KEY_RESULT, KEY_SYNC } = require('./finalise');
+const { phaseOf, KEY_RESULT, KEY_ROLL, KEY_SYNC } = require('./finalise');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
@@ -197,6 +197,21 @@ function createServer(opts = {}) {
   }
 
   // ---- GET /api/status ----------------------------------------------------
+  /** What has been published about the roll: digest, when, and whether it is anchored. */
+  function rollStatus() {
+    const r = store.get(KEY_ROLL);
+    if (!r) return null;
+    return {
+      digest: r.digest,
+      published_at: r.published_at,
+      submitted_count: (r.local_ids || []).length,
+      // The proof itself is a file to download, not something to put in a status
+      // payload. This says only whether it exists and who witnessed it.
+      anchored: Boolean(r.ots && !r.ots.failed),
+      calendars: r.ots && !r.ots.failed ? r.ots.calendars : null,
+    };
+  }
+
   function status() {
     const submitted = store.submittedLocalIds();
     const previous = readIndex(cfg);
@@ -209,6 +224,16 @@ function createServer(opts = {}) {
       submitted_local_ids: submitted,
       players: cfg.roster.players.map((p) => ({ local_id: p.local_id, title: p.title })),
       cutoff_utc: cfg.protocol.submission_cutoff_utc,
+      // Submissions close at cutoff_utc; the beacon that opens them arrives
+      // reveal_gap_seconds later, at target_round_utc. The page needs both, because
+      // the interval between them is not dead time: it is when the roll of who
+      // submitted is published, while the outcome is still unknowable (PROTOCOL.md §9).
+      target_round_utc: cfg.protocol.target_round_utc,
+      // The roll, once it has been taken. Its digest is the value twelve people are
+      // asked to compare with each other while the beacon does not yet exist
+      // (PROTOCOL.md §9); an anchor nobody can check against anybody is not evidence.
+      roll: rollStatus(),
+      reveal_gap_seconds: cfg.protocol.reveal_gap_seconds,
       target_round: cfg.protocol.target_round,
       user_input_max: cfg.userInputMax,
       drand: {
@@ -481,6 +506,7 @@ function createServer(opts = {}) {
   }
 
   const DATA_FILES = new Set(['protocol.json', 'roster.json', 'schedule_template.json']);
+  const ROLL_FILES = new Set(['snapshot.json', 'snapshot.json.ots']);
 
   /**
    * Who to charge a request to, for rate limiting.
@@ -583,6 +609,18 @@ function createServer(opts = {}) {
       // repository cannot drift apart.
       const dataName = p.replace(/^\//, '');
       if (DATA_FILES.has(dataName)) return serveFile(res, path.join(cfg.dataDir, dataName));
+
+      // The roll and its OpenTimestamps proof, served from the same origin as the page
+      // that names them (PROTOCOL.md §9). A player is asked to compare a digest during
+      // the interval; these are what they check it against, and what they keep if they
+      // would rather not depend on the organiser's repository still being there.
+      // Public by construction: every ciphertext in the roll is already public, and the
+      // point of the file is that anybody can hold a copy.
+      if (ROLL_FILES.has(dataName)) {
+        const f = path.join(cfg.root, 'events', dataName);
+        if (!fs.existsSync(f)) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+        return serveFile(res, f);
+      }
 
       // The archived attempts (§8). Public by construction: every ciphertext in there is
       // safe to publish, and the whole point of keeping them is that anyone can check

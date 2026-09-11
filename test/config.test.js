@@ -242,3 +242,60 @@ test('trust_proxy is operational, so the frozen file may not carry it', () => {
   const { OPERATIONAL_KEYS } = require('../server/runtime');
   assert.ok(OPERATIONAL_KEYS['server.trust_proxy']);
 });
+
+// ---------------------------------------------------------------------------
+// the interval between the cutoff and the key (section 9)
+// ---------------------------------------------------------------------------
+
+test('the cutoff and the round it waits for are separated, not simultaneous', () => {
+  // The whole point of the field. With the two at the same instant there is no
+  // moment in which the roll of who submitted is settled and the key does not yet
+  // exist, so publishing that roll cannot show which came first.
+  const fx = makeDataDir();
+  const cfg = load({ dataDir: fx.dataDir });
+  assert.equal(cfg.protocol.target_round_ms - cfg.protocol.cutoff_ms,
+    cfg.protocol.reveal_gap_seconds * 1000);
+  assert.ok(cfg.protocol.reveal_gap_seconds >= 60);
+  cleanup(fx.dir);
+});
+
+test('a protocol.json whose three time fields disagree is refused', () => {
+  // They are written together by tools/pick-round.js. A file where they disagree is
+  // one somebody edited by hand, and the interval it promises is not the interval it
+  // has.
+  const fx = makeDataDir();
+  const file = path.join(fx.dataDir, 'protocol.json');
+  const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+  p.target_round_utc = p.submission_cutoff_utc; // the old behaviour: no interval
+  fs.writeFileSync(file, JSON.stringify(p, null, 2));
+  assert.throws(() => load({ dataDir: fx.dataDir }), /reveal_gap_seconds says 600/);
+  cleanup(fx.dir);
+});
+
+test('an interval too short to publish anything in is refused', () => {
+  const fx = makeDataDir({ protocol: { reveal_gap_seconds: 30 } });
+  assert.throws(() => load({ dataDir: fx.dataDir }), /at least 60/);
+  cleanup(fx.dir);
+});
+
+test('a missing interval names the command that writes it', () => {
+  // Every existing protocol.json predates this field, so the error has to say what
+  // to run rather than only what is wrong.
+  const fx = makeDataDir();
+  const file = path.join(fx.dataDir, 'protocol.json');
+  const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete p.reveal_gap_seconds;
+  fs.writeFileSync(file, JSON.stringify(p, null, 2));
+  assert.throws(() => load({ dataDir: fx.dataDir }), /pick-round/);
+  cleanup(fx.dir);
+});
+
+test('the shipped example carries an interval, so a copy of it is not silently wrong', () => {
+  const example = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'data', 'protocol.example.json'), 'utf8'));
+  assert.equal(example.reveal_gap_seconds, 600);
+  assert.equal(
+    Date.parse(example.target_round_utc) - Date.parse(example.submission_cutoff_utc),
+    600_000
+  );
+});

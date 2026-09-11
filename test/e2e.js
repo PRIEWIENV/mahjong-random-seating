@@ -91,22 +91,34 @@ async function submitAs(sc, cookie, payload, cfg) {
 
 async function main() {
   const wIdx = process.argv.indexOf('--window');
-  const windowSec = wIdx > -1 ? Number(process.argv[wIdx + 1]) : 150;
+  // 75 leaves about fifteen seconds to submit, against the three and a half that
+  // twelve real tlock encryptions take. The rest of the wait is the interval below,
+  // which is the protocol's floor and not negotiable by a test.
+  const windowSec = wIdx > -1 ? Number(process.argv[wIdx + 1]) : 75;
+  // The smallest interval the protocol allows (PROTOCOL.md section 9). A real freeze
+  // uses ten minutes; a test that waited that long would stop being run.
+  const gapSec = 60;
 
   step('Setting up: a real drand quicknet round, minutes away');
   const drand = new Drand(QUICKNET_HASH, [DRAND_API]);
   const info = await drand.info();
   const targetRound = Math.floor((Math.ceil((Date.now() + windowSec * 1000) / 1000) - info.genesis_time) / info.period) + 2;
-  const cutoffMs = await drand.roundTimeMs(targetRound);
-  const cutoff = new Date(cutoffMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const roundMs = await drand.roundTimeMs(targetRound);
+  // Submissions close before the beacon, not with it: the roll has to be fixed while
+  // the key that opens the ciphertexts still does not exist.
+  const cutoffMs = roundMs - gapSec * 1000;
+  const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const cutoff = iso(cutoffMs);
   log(`  chain        ${info.metadata?.beaconID} (period ${info.period}s, scheme ${info.schemeID})`);
   log(`  target_round ${targetRound}`);
   log(`  cutoff       ${cutoff}  (${((cutoffMs - Date.now()) / 1000).toFixed(0)}s away)`);
+  log(`  beacon       ${iso(roundMs)}  (${gapSec}s later)`);
 
   // The frozen half (§4.1) and nothing else — config.js refuses to load it otherwise.
   const protocol = {
     drand_chain: 'quicknet', chain_hash: QUICKNET_HASH, chain_public_key: QUICKNET_PK,
-    target_round: targetRound, submission_cutoff_utc: cutoff,
+    target_round: targetRound, target_round_utc: iso(roundMs),
+    submission_cutoff_utc: cutoff, reveal_gap_seconds: gapSec,
     quorum: 8, total_slots: 12, user_input_max: 255,
     seed_domain_separation: 'mahjong-seating-v1',
     schedule_template_ref: 'data/schedule_template.json@e2e', generate_script_ref: 'generate.js@e2e',

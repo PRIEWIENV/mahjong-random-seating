@@ -581,12 +581,75 @@ left of it. Confirmed against nginx 1.28 rather than assumed: a client sending
 with three. The first version of the test encoded the opposite belief — that the proxy
 appends *itself* — and failed, which is the useful direction for a test to be wrong in.
 
+## 6i. Timestamping the roll, without a dependency tree
+
+PROTOCOL.md §9 needs the roll taken at the cutoff to be timestamped by somebody outside
+the organiser's reach. OpenTimestamps is that: a hash anchored in a Bitcoin block, and
+nobody can move a block.
+
+The official JavaScript client would do it. Its dependencies are web3, bitcore-lib, a
+keccak binding that needs a compiler, and the deprecated `request` — fourteen transitive
+packages, on a server whose only production dependency is tlock-js. A project whose
+argument is "read this and check it yourself" should not answer "can I read all of
+this?" with that.
+
+So `server/ots.js` writes the format directly, and only the part that is needed: stamp
+one digest against the public calendars, write a `.ots`. No verification, no upgrading,
+no Bitcoin. Those belong to the reader's own client, and doing them here would be this
+program marking its own homework.
+
+The format is a magic header, a version, a hash op, the digest, then the timestamp tree,
+with `0xff` between sibling branches. The calendars return exactly the branch that
+follows the submitted digest, so the file is a header and their answers. Each calendar
+becomes its own branch: they are independent witnesses and one being unreachable should
+not cost the others.
+
+Writing a proof that does not verify would be worse than writing none — it looks like
+evidence and is not — so the output was checked against the reference implementation
+rather than against our own opinion of the spec. `python-opentimestamps` deserializes
+it, reports the digest we intended, and finds four pending attestations:
+
+```
+file hash op : OpSHA256
+digest       : e57f528b0de517c006a1a40e529dd7829c1e144ff1892505ff8005ddff06f7ec
+calendars    : 4
+   pending at https://alice.btc.calendar.opentimestamps.org
+   pending at https://bob.btc.calendar.opentimestamps.org
+   pending at https://finney.calendar.eternitywall.com
+   pending at https://btc.calendar.catallaxy.com
+```
+
+The digest submitted is the bare digest of the file, not a nonced one as the reference
+client sends. That client hides what it is stamping; this roll is published in full
+moments later, and stamping it bare is what lets a reader verify the `.ots` against the
+`snapshot.json` they downloaded, with no extra step.
+
+### Two bugs the stopwatch found
+
+Timing the rehearsal turned up two things no assertion was looking at.
+
+**The unit suite had started using the network.** `publishRoll` defaulted to the real
+stamper, so every test that finalised anything dialled four calendars: `rounds.test.js`
+went from a second to nineteen, and each of its tests took suspiciously exactly 1000 ms.
+Stamping is now opt-in — `server/finalise.js`'s command-line entry point passes the real
+one, and a library caller that has not asked for it gets none. The suite went from 22
+seconds back to 4.
+
+**A deployment without mirroring waited two minutes at the end of every draw.** `enqueue`
+pushed onto the queue whether or not mirroring was configured, and `flush` returns
+immediately when it is not — without emptying it. So `drain()` at the end of the draw
+spun until its two-minute timeout and then returned false, which reads as failure. It
+had been there all along; nothing timed that path. A disabled mirror now queues nothing,
+because the local copy under `events/` is already on disk.
+
+Together they took the rehearsal from 253 seconds to 134, and `npm run e2e` to 90.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 243 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE | pass |
+| Unit tests (`npm test`) — 264 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -598,6 +661,10 @@ appends *itself* — and failed, which is the useful direction for a test to be 
 | The SSE hub replays to a late stream, suppresses repeats, and stops its heartbeat with the last client | passes |
 | The Pantheon token is verified once and appears in no table, log line or response | passes |
 | Behind a proxy the rate limit is per player, and a forged `X-Forwarded-For` buys nothing | passes |
+| The `.ots` this writes is accepted by python-opentimestamps, with four calendar attestations | passes |
+| The roll is published and anchored at the cutoff, not at the draw | passes |
+| A dead calendar records the failure and does not stop the draw | passes |
+| The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |
 | The freeze refuses a roster that would break the sync after the draw | passes |
 | A fresh clone checks out the bundle byte-identically and its digest matches | passes *(after `.gitattributes`)* |

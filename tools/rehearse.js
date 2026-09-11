@@ -15,6 +15,7 @@
  *
  *   node tools/rehearse.js               the whole of B, C and D, about five minutes
  *   node tools/rehearse.js --window 300  a longer submission window
+ *   node tools/rehearse.js --gap 120    a longer interval between cutoff and beacon
  *   node tools/rehearse.js --keep        leave the sandbox behind to poke at
  *
  * What is real here: the commands, the HTTP server as its own process, real tlock
@@ -40,9 +41,15 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 
 const bold = (s) => `\x1b[1m${s}\x1b[0m`;
+const dim = (s) => `\x1b[2m${s}\x1b[0m`;
 const ok = (s) => console.log(`  \x1b[32mOK\x1b[0m    ${s}`);
 const note = (s) => console.log(`        ${s}`);
-const step = (s) => console.log(`\n${bold(s)}`);
+// Elapsed time on every step. The rehearsal is a stopwatch as much as a check: the
+// submission window has to outlast the freeze, and the only way to choose it is to
+// know how long each step actually takes on the machine it runs on.
+const START = Date.now();
+const elapsed = () => `${String(Math.round((Date.now() - START) / 1000)).padStart(3)}s`;
+const step = (s) => console.log(`\n${dim(`[${elapsed()}]`)} ${bold(s)}`);
 
 // The "Pantheon side" of the world: thirteen registrations for an event this repository
 // has never heard of, one of whom is present but not playing (RUNBOOK step 8).
@@ -152,7 +159,16 @@ async function submit(base, cookie, payload, cfg) {
 
 async function main(argv) {
   const args = parseArgs(argv);
-  const windowSec = Number(args.window || 240);
+  // The window has to outlast step 11 itself: freeze.js re-derives the template,
+  // rebuilds the bundle from source and runs the whole unit suite before it will
+  // write anything, which is most of a minute. A window shorter than that expires
+  // during the freeze and the rehearsal fails on its own timing rather than on
+  // anything it was meant to exercise.
+  const windowSec = Number(args.window || 45);
+  // The rehearsal takes the shortest interval the protocol allows. A real freeze uses
+  // ten minutes (PROTOCOL.md section 9); waiting that long here would make the one
+  // command nobody runs the one that matters most.
+  const gapSec = Number(args.gap || 60);
   const tag = `rehearsal-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13)}`;
 
   const { dir, tracked } = makeSandbox();
@@ -175,7 +191,9 @@ async function main(argv) {
     // ---- B, step 9 --------------------------------------------------------
     step('B9: choose the target round and the cutoff together');
     fs.copyFileSync(path.join(dir, 'data', 'protocol.example.json'), path.join(dir, 'data', 'protocol.json'));
-    const picked = run(['tools/pick-round.js', '--in', `${windowSec}s`, '--write']);
+    const picked = run([
+      'tools/pick-round.js', '--in', `${windowSec + gapSec}s`, '--gap', String(gapSec), '--write',
+    ]);
     const protocol = JSON.parse(fs.readFileSync(path.join(dir, 'data', 'protocol.json'), 'utf8'));
     assert.ok(protocol.target_round > 0 && protocol.chain_public_key, 'pick-round must write both');
     ok(`target_round ${protocol.target_round}, cutoff ${protocol.submission_cutoff_utc}`);

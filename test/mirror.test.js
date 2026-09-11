@@ -84,13 +84,26 @@ test('a repo without a token is not half-enabled', () => {
 });
 
 test('disabled, it queues nothing and touches no network', async () => {
+  // Queuing while disabled is the subtle half. flush() returns without emptying the
+  // queue when there is nowhere to flush to, so anything left in it makes drain()
+  // spin until its timeout at the end of every draw — two minutes of nothing, and a
+  // false return that reads as failure.
   await withFetch(() => { throw new Error('a disabled mirror must not call out'); }, async (calls) => {
     const m = new Mirror({}, QUIET);
     m.enqueue('events/submissions/1.json', '{}', 'add 1');
+    assert.equal(m.queue.length, 0, 'a disabled mirror queued something it can never send');
     await m.flush();
     assert.equal(calls.length, 0);
     assert.deepEqual(await m.put('x', 'y', 'z'), { skipped: true });
   });
+});
+
+test('drain returns at once when mirroring is off', async () => {
+  const m = new Mirror({}, QUIET);
+  for (let i = 0; i < 5; i++) m.enqueue(`events/submissions/${i}.json`, '{}', `add ${i}`);
+  const t0 = Date.now();
+  assert.equal(await m.drain(120_000), true);
+  assert.ok(Date.now() - t0 < 1_000, 'drain waited on a queue that can never empty');
 });
 
 // ---------------------------------------------------------------------------

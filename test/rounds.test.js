@@ -69,6 +69,15 @@ function refreeze(c, over = {}) {
   p.target_round = p.target_round + 100_000;
   p.submission_cutoff_utc = FUTURE();
   Object.assign(p, over);
+  // The cutoff and the round it waits for move together, keeping reveal_gap_seconds
+  // between them; the loader refuses a protocol.json where they disagree. Derived
+  // after the overrides so a test that moves the cutoff moves both, unless it pinned
+  // target_round_utc itself.
+  if (!('target_round_utc' in over)) {
+    p.target_round_utc = new Date(
+      Date.parse(p.submission_cutoff_utc) + p.reveal_gap_seconds * 1000
+    ).toISOString();
+  }
   fs.writeFileSync(file, JSON.stringify(p, null, 2));
   c.cfg = load({ dataDir: c.fx.dataDir });
   c.cfg.root = c.fx.dir;

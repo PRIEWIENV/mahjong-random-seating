@@ -38,13 +38,28 @@ to commit and tag. Without `--tag` it changes nothing in git and prints the two 
 11. 🔒 `node tools/freeze.js --write --tag frozen-v1`. Before it writes anything to git it re-derives every proved invariant of the template, rebuilds the browser bundle from source and diffs it against the committed one, and runs the unit tests. It commits `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` — those four and no others — plus the built bundle and its hash, then tags. `runtime.json` is gitignored and is deliberately not in the tag.
     - The bundle rebuild is the check that has to happen **here**. It needs esbuild, which the VPS does not have (`npm ci --omit=dev`); the VPS runs `--verify-hash`, which only compares the committed bundle to its committed hash and cannot tell you the hash was computed from different source.
 
+    Add `--push` once a remote is configured. A tag that exists only on this machine is
+    not a commitment: nobody can fetch it, and the organiser could still choose which
+    commit it names after seeing the outcome (PROTOCOL.md §9). The command also anchors
+    the commit id with OpenTimestamps and leaves the proof in
+    `events/freeze/<tag>.commit.ots` — keep that file.
+
+    Then check it from somewhere that is not this machine:
+
+    ```sh
+    git ls-remote --tags <repo url> <tag>
+    ```
+
 ## C. Submission window
 
 `ADMIN_TOKEN=... npm run serve` puts the dashboard on `/admin?token=…`. It is read-only:
 the draw, the reset and the sync are commands run on the box, because §9 keeps anything
 that could trigger or re-time the draw off HTTP entirely.
-
 12. Send the players one link — no personal links, no tokens: they sign in with the Pantheon accounts they already have. `tools/freeze.js --tag` prints the announcement to copy, which says the three things that matter: one number between 0 and 255, once; you can close the page immediately; here is when the draw happens, and here is the tag.
+
+    The announcement `freeze.js` prints now carries the commit id as well as the tag.
+    Send both. If someone later hands you a tag pointing at a different commit, the
+    message in the group chat is what contradicts it.
 13. Chase anyone still missing as the cutoff approaches. The dashboard's first panel is that list by name, and the player-facing waiting view shows the same counts. Neither reveals anything about anyone's number — only *whether* they submitted, and when. `npm run rehearse` asserts both halves of that: the list is exactly the players with no submission, and no ciphertext reaches the page or its JSON.
     - Watch the pre-flight panel too. `Mirroring to the repository: DISABLED` means nobody but this server is timestamping the ciphertexts, and that third party is what the fairness argument leans on. `Pantheon adapter is the STUB` in production means sign-in is a fake.
 

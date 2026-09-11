@@ -91,7 +91,9 @@ The split is not tidiness. Freezing something that fails the test makes the run 
   "chain_hash": "<64 hex — the drand quicknet chain hash>",
   "chain_public_key": "<96 or 192 hex — that same chain's group public key>",
   "target_round": 123456,
+  "target_round_utc": "2026-09-10T20:10:00Z",
   "submission_cutoff_utc": "2026-09-10T20:00:00Z",
+  "reveal_gap_seconds": 600,
   "quorum": 8,
   "total_slots": 12,
   "user_input_max": 255,
@@ -106,7 +108,9 @@ The split is not tidiness. Freezing something that fails the test makes the run 
 |---|---|
 | `drand_chain`, `chain_hash`, `chain_public_key` | Identify the beacon the envelopes are sealed to. Swap the chain and you swap the randomness. |
 | `target_round` | When the envelopes open. Moving it earlier opens them early. |
+| `target_round_utc` | The same moment as a time, so the interval below can be checked without asking the network. Cross-checked against the chain when the job runs. |
 | `submission_cutoff_utc` | The snapshot boundary (§8). Moving it changes who is counted. |
+| `reveal_gap_seconds` | How long the roll of who submitted is settled before the key exists, ten minutes by default. Shortening it shrinks the window in which that roll can be published and anchored, and at zero there is no window at all — which is what makes a late submission forgeable (§9). |
 | `quorum`, `total_slots` | The rule of §8, fixed before anyone can see who is missing. |
 | `user_input_max` | The domain each player draws from, and a byte inside the contribution hash. |
 | `seed_domain_separation` | `DOMAIN` in §7. Change it and every hash in the draw changes. |
@@ -316,6 +320,35 @@ Use rejection sampling in step 5, not modulo, so the shuffle is exactly uniform.
 Nothing needs to be trusted about the server: every ciphertext it holds is safe to publish, and it holds no key that could open one early. Nothing needs to be trusted about any player: at the moment anyone submits, every other submission is still sealed, so no one can choose adaptively. The live dependencies are drand's availability at the target round, and Pantheon's answer to "who is registered for this event".
 
 A player who never submits has abstained from an outcome nobody could see yet — an absence, not a manoeuvre. Nobody can withhold a *reveal*, because opening is not an action any participant performs.
+
+### The attack this does not stop by itself
+
+The paragraph above is true about *withholding*. It is not true about **adding**, and the difference is the one real weakness in this design.
+
+Suppose one of the twelve agrees with the organiser not to submit. The cutoff passes with eleven ciphertexts. The beacon lands, the organiser decrypts all eleven, and now knows every other contribution and the drand signature. Because `R` is an exclusive-or, the twelfth contribution is a free variable: any value of `R` is reachable by choosing it. And a contribution is `SHA256(DOMAIN ‖ "contrib" ‖ local_id ‖ user_input ‖ client_nonce ‖ client_timestamp)`, where `client_nonce` is sixteen bytes the submitter picks. So they can grind: try nonces, compute the seed each one produces, run the shuffle, and keep the seat plan they like best. Each trial is two hashes and a shuffle. A few minutes of an ordinary machine buys millions of candidate seat plans.
+
+Then the organiser publishes a `snapshot.json` with twelve entries and says the last one arrived just before the cutoff.
+
+This is not a flaw in the timelock. tlock guarantees that nobody can open a ciphertext early; it says nothing about **when a ciphertext was written**. Encrypting to round *N* needs only the chain's public key, which is known from the start, so a ciphertext carries no evidence of its own age. One colluding player and the organiser are therefore enough to choose the outcome outright — not to nudge it.
+
+### What actually binds a submission to a time
+
+Nothing cryptographic. The binding has to come from the record of arrival being **public and fixed before the key exists**, and that needs three things, none of which is the server's word for it.
+
+**An interval.** `submission_cutoff_utc` is `reveal_gap_seconds` earlier than `target_round_utc`, ten minutes by default (§4.1). The two used to be the same instant, which left nowhere to stand: any record of the roll was made at the moment the key became available, so it could not show which came first. The interval is the window in which the roll is settled and the outcome is still unknowable. `config.js` refuses a `protocol.json` where the three fields disagree, and refuses an interval under a minute.
+
+**A timestamp the organiser cannot move.** The roll taken at the cutoff is anchored with OpenTimestamps during that interval. An anchor proves the set existed before a Bitcoin block, which is exactly the claim a forged twelfth submission cannot satisfy: choosing it requires the key, and the key does not exist yet.
+
+**A single published value.** An anchor alone is not enough, because anchoring is cheap and nothing stops an organiser anchoring many candidate rolls during the interval and revealing whichever one suits afterwards. What rules that out is publishing the roll's digest to the players while the interval is open. Twelve people who can compare one short string among themselves are a harder thing to lie to than any single notary, because lying requires showing different people different values and every one of them can check.
+
+The same argument applies to the freeze. A tag that exists only on the organiser's machine is not a commitment; it has to be pushed to a public host before submissions open, its commit id has to travel with the announcement, and it is anchored too.
+
+### What remains true, and what is assumed
+
+With those in place: nothing needs to be trusted about the server for *secrecy* — it holds no key that could open a submission early, and every ciphertext it holds is safe to publish. Nothing needs to be trusted about any player, because at the moment anyone submits every other submission is still sealed.
+
+What is assumed is weaker and should be said plainly: that at least one person other than the organiser looked at the roll during the interval, or kept the anchor. If nobody ever checks, the evidence is still there and still checkable years later — but an attack that nobody looks for is an attack nobody finds. The protocol makes cheating detectable. It cannot make anyone look.
+
 
 One boundary is not about the draw at all, and is easy to state too weakly. Players sign in with their Pantheon accounts, and this app is not where that credential lives: the browser posts the email and password to Frey directly, and the backend receives only `{person_id, auth_token}` (PANTHEON-INTEGRATION.md §2). No code path here reads a password field.
 
