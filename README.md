@@ -1,40 +1,111 @@
-# Randomised Mahjong Seating — handoff starter
+<div align="center">
 
-Starting point for implementation. The combinatorial work is **finished and proved**; what remains is the web app, the Pantheon integration and the operational process.
+# Randomised Mahjong Seating
 
-## What this is
+**A seating draw for twelve players that nobody can predict, nobody can steer, and anybody can check afterwards — including the person running it.**
 
-Twelve players are seated across eleven rounds at three tables. The seating *template* — who sits with whom, in which wind, at which table — is fixed and provably optimal. Which player gets which position in that template is decided by a draw that all twelve contribute to and that nobody, including whoever runs the server, can predict or steer.
+[![License](https://img.shields.io/badge/license-MIT-blue)](package.json)
+[![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
+[![Tests](https://img.shields.io/badge/tests-311%20passing-brightgreen)](test/)
+[![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
+[![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
-Start with [`docs/seating-design.md`](docs/seating-design.md): it explains the whole thing from first principles, with figures. It is not only documentation — the build renders it, and its Chinese translation, into the app itself, so the page a player opens from the header is the document in this repository rather than a summary of it that can drift away from it.
+English · [简体中文](README.zh.md)
 
-## Status
+</div>
 
-**Done, verified, ready to freeze**
+---
 
-- `data/schedule_template.json` — the reference template (12 abstract positions × 11 rounds × 3 tables × E/S/W/N). Every pair shares a table exactly 3 times; every position's wind split is exactly {3,3,3,2}; every pair sits opposite exactly once; table splits are {4,4,3} for nine positions and {5,3,3} for three; 55 of 66 pairs are "perfect".
-- Those figures are **globally optimal and proved**, not heuristic. Both optima come from integer programmes that terminated with objective == bound, and the search covered all five non-isomorphic resolvable 2-(12,4,3) designs known to exist (Morales & Velarde, 2001) — of which exactly one admits the "opposite exactly once" condition, so the design is forced.
+Twelve players are seated across eleven rounds at three tables of four. The seating
+*template* — who sits with whom, in which wind, at which table — is fixed and provably
+optimal. Which player lands on which position in that template is decided by a draw that
+all twelve contribute to, that opens itself at a pre-announced moment, and that can be
+recomputed from published data by anyone who cares to.
 
-**Built and tested**
+The two halves are independent and both are finished: the combinatorics is solved to
+proven optimality, and the draw is a working web application with a documented protocol,
+an operational runbook and an end-to-end rehearsal you can run in three minutes.
 
-- The player app — one continuous flow, no tabs: sign-in → submit → wait → reveal → seat plan explorer, per [`docs/UI-SPEC.md`](docs/UI-SPEC.md). All six stages render; the explorer's three lenses work, including on a phone.
-- The backend — session, me, submit, status, result, SSE and the scheduled finalisation job, per [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §6.
-- `generate.js` — contributions → R → seed → shuffle → seat plan → prescript, per §7, with the byte encoding pinned and cross-checked by an independent Python implementation.
-- Pantheon integration — behind one interface (`server/pantheon.js`), with a real Twirp client and an in-process stub.
+**Contents** — [How it works](#how-it-works) · [Guarantees](#guarantees) ·
+[Quick start](#quick-start) · [Documentation](#documentation) ·
+[Running it](#running-it) · [Project status](#project-status) ·
+[Repository layout](#repository-layout) · [Hard rules](#hard-rules) ·
+[License](#license)
 
-**Outstanding**
+## How it works
 
-- The Twirp client **has** now been run against a real Pantheon (`cdda3fc`, in Docker under WSL 2), twice: once against a borrowed event, and once end to end against a fresh one where all twelve players signed in with an email and a password (`tools/pantheon-fixture.js --accounts`), sealed real ciphertexts, and had the resulting seat plan read back out of Pantheon seat by seat. Nine things were wrong across the two rounds and not one of them failed loudly — see [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) §2, §3, §5.1 and §6. Three are worth knowing before you deploy: Frey needs **two** addresses, because the browser calls it as well as the backend; a sign-in that fails for any reason used to be reported to the player as a wrong password; and `MakePrescriptedSeating` randomises the winds unless the caller states the mode, which Forseti does and a script might not. What is still outstanding is narrower: **the instance you actually deploy against**. Pantheon moves, §5.1 is a fact about one commit, and the fixture plus §6 make re-checking it a half-hour job rather than a research project.
-- **The operational half of the RUNBOOK has been rehearsed, not performed.** `npm run rehearse` runs sections B, C and D end to end in a throwaway repository — roster snapshot, freeze, tag, twelve sealed submissions, the chase list, the draw, the sync, and the check a player does afterwards — against the Pantheon stub and a real drand round. Every step passes. What is left is doing it for an actual event, with real registrations and a deployment, and with the stub replaced by the instance in the first bullet.
-- **Nothing here has run a draw for people who did not know it was a test.** Everything above is reproducible and checked; none of it has yet been the thing twelve players were waiting on. That is the only item on this list that cannot be closed by writing more code.
+```mermaid
+flowchart LR
+  A["Each player seals<br/>one number, once"] --> B["Ciphertexts published<br/>as they arrive"]
+  B --> C["Cutoff: the roll is<br/>fixed and timestamped"]
+  C --> D["The drand beacon reaches<br/>the target round"]
+  D --> E["Every envelope<br/>opens at once"]
+  E --> F["The seed shuffles names<br/>onto the proved template"]
+  F --> G["Seat plan, recomputable<br/>by anyone"]
+```
 
-**Read [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) before freezing.** One item there is about what "verified" actually means:
+Each player picks a whole number between 0 and 255. Their browser mixes it with sixteen
+random bytes it generates itself and seals the result with **timelock encryption** against
+a future [drand](https://drand.love) beacon round — so the ciphertext becomes readable at a
+moment fixed in advance and not one second earlier. There is no key holder to bribe,
+subpoena or trust: opening early is not forbidden, it is infeasible.
 
-- `results.json` contains only what `generate.js` computes, so `--verify` compares every byte with no field set aside. The Pantheon sync outcome lives in `events/sync.json` instead, because it records something that happened after the file was written. Separately, the byte comparison recomputes *from* the payloads the file lists, so it cannot prove that list is complete; `events/snapshot.json` is what closes that, and `--verify` runs the roll-call whenever it is available.
+Every ciphertext is published, with a third party's timestamp, the moment it arrives.
+At the cutoff the list of who took part is fixed, digested, and anchored into Bitcoin
+through [OpenTimestamps](https://opentimestamps.org) — while the beacon that would open any
+of it still does not exist. When the target round lands, all twelve envelopes open at
+once, the numbers fold into one seed, and the seed permutes the twelve names onto the
+template.
 
-`protocol.json` holds the frozen parameters and nothing else. Operational settings — the drand endpoint, the Pantheon base URLs, poll intervals — live in `data/runtime.json`, are not tagged, and may be changed mid-window. [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §4.1 gives the test that decides which side a parameter falls on; the loader refuses to start if an operational key turns up in the frozen file.
+For the full argument from first principles, with figures, read
+**[`docs/seating-design.md`](docs/seating-design.md)**. It is not only documentation: the
+build renders it, and its Chinese translation, into the application itself, so the page a
+player opens from the header is the document in this repository rather than a summary that
+can drift from it.
 
-Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algorithm) and §8 (quorum and failure handling). The rules there are where the fairness comes from; they should not be rewritten to whatever seems more reasonable in the moment.
+## Guarantees
+
+|  | How it is obtained |
+|---|---|
+| **Uniform** | Every one of the 479,001,600 assignments is equally likely. |
+| **Unpredictable** | One honest contribution is enough. No majority is required, and the beacon is folded in on top. |
+| **Unbiasable** | At the moment anyone submits, every other submission is still sealed. The information needed to choose a favourable number does not exist yet — for anybody, the organiser included. |
+| **Unstallable** | Opening is not an action any participant performs, so refusing to open is not available. |
+| **Verifiable** | The sealed ciphertexts, the beacon signature, the shuffling code and the template are all public. `node generate.js --verify results.json` recomputes every byte. |
+| **Trust-free** | None of the above rests on believing that a particular person behaved honestly. |
+
+The seating template itself is not a heuristic. Every pair of players shares a table
+exactly three times; every position's wind split is exactly {3,3,3,2}; every pair sits
+opposite exactly once; 55 of the 66 rivalries are perfectly balanced. Those figures are
+**globally optimal and proved** — the integer programmes terminated with objective equal to
+bound, over all five non-isomorphic resolvable 2-(12,4,3) designs known to exist, exactly
+one of which admits the "opposite once" condition. The design is not chosen; it is forced.
+
+## Quick start
+
+```sh
+git clone <this repository> && cd mahjong-random-seating
+npm ci
+npm test                  # 311 unit tests, fully offline, ~12 s
+npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
+```
+
+`npm run rehearse` is the fastest way to see the whole thing work. It builds a throwaway
+git repository, snapshots a roster, freezes and tags it, seals twelve real ciphertexts
+against a genuine drand round three minutes away, runs the draw, syncs the seat plan, and
+performs the check a player does afterwards. Nothing is simulated except Pantheon.
+
+## Documentation
+
+| Document | What it covers | 中文 |
+|---|---|---|
+| [`docs/seating-design.md`](docs/seating-design.md) | Where the seating chart came from: the wish list, the two impossibility theorems, the solver, and why a proved-optimal chart still needs a lottery. No mathematical background assumed. | [中文](docs/seating-design.zh.md) |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | The protocol itself: frozen artefacts, the byte encoding, the API, quorum and failure handling, the trust boundary. **Read this before changing code.** | [中文](docs/PROTOCOL.zh.md) |
+| [`docs/UI-SPEC.md`](docs/UI-SPEC.md) | The player-facing flow, stage by stage, and the rules that make it honest. | [中文](docs/UI-SPEC.zh.md) |
+| [`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) | Sign-in through Frey, the seat-plan prescript through Mimir, and what the wire actually looks like. | [中文](docs/PANTHEON-INTEGRATION.zh.md) |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The operator's checklist, in order: implementation, freeze, submission window, draw, and what to do when something goes wrong. | [中文](docs/RUNBOOK.zh.md) |
+| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | Every decision the specification left open, every deviation from it, the bugs worth knowing about, and a table of what has actually been verified. | [中文](docs/IMPLEMENTATION_NOTES.zh.md) |
+| [`deploy/README.md`](deploy/README.md) | Putting it on a server: install, environment, the one process, the reverse proxy, TLS, and the pre-flight before you publish the URL. | [中文](deploy/README.zh.md) |
 
 ## Running it
 
@@ -42,25 +113,26 @@ Read `docs/PROTOCOL.md` end to end before changing code, particularly §7 (algor
 
 ```sh
 npm ci
-npm test                  # 285 unit tests, offline, ~5s
+npm test                  # 311 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
-npm run e2e               # RUNBOOK A2-A7 against live drand, ~90s
+npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
 ```
 
-`.github/workflows/reproducibility.yml` runs the first three on every push, on Linux and
-on Windows with `core.autocrlf=true`, plus `build-client.js --check` — the rebuild from
-source that `--verify-hash` cannot stand in for, because it needs esbuild. It runs them on
-a clone nobody has touched, which is the point: the checkout bug in
-[`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) §6d could not appear in the
-tree where the files were written. `e2e` is not in it — live drand, three minutes.
+[`.github/workflows/reproducibility.yml`](.github/workflows/reproducibility.yml) runs the
+first three on every push, on Linux and on Windows with `core.autocrlf=true`, plus
+`build-client.js --check` — the rebuild from source that `--verify-hash` cannot stand in
+for, because it needs esbuild. It runs them on a clone nobody has touched, which is the
+point: the checkout bug in [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md)
+§6d could not appear in the tree where the files were written. `e2e` is not in it — live
+drand, three minutes.
 
 ### Development
 
 The app needs `data/protocol.json` and `data/roster.json` and refuses to start without
 them. Renaming the `.example` files does not work and is not meant to: the placeholder
-`target_round: 0` and `pantheon_event_id: 0` are both rejected, so a run cannot be
-started against values nobody chose.
+`target_round: 0` and `pantheon_event_id: 0` are both rejected, so a run cannot be started
+against values nobody chose.
 
 ```sh
 cp data/protocol.example.json data/protocol.json
@@ -70,13 +142,14 @@ npm run build                                   # rebuild public/app.js + app.cs
 PANTHEON_MODE=stub npm run serve                # http://127.0.0.1:8080
 ```
 
-**Nobody types the roster by hand.** `tools/freeze.js --event <id> --write` reads the
-event's registrations from Pantheon and writes the twelve `{local_id, person_id, title}`
-rows itself, leaving out anyone marked `ignore_seating`. It refuses to write anything at
-all if a player has no `local_id` — the failure that otherwise surfaces after the draw,
-in the seat-plan sync, when nothing can be changed. Without `--write` it says what it
-would do and touches nothing. This is RUNBOOK step 10, and it is the only supported way
-to produce that file.
+> [!IMPORTANT]
+> **Nobody types the roster by hand.** `tools/freeze.js --event <id> --write` reads the
+> event's registrations from Pantheon and writes the twelve `{local_id, person_id, title}`
+> rows itself, leaving out anyone marked `ignore_seating`. It refuses to write anything at
+> all if a player has no `local_id` — the failure that otherwise surfaces after the draw,
+> in the seat-plan sync, when nothing can be changed. Without `--write` it says what it
+> would do and touches nothing. This is RUNBOOK step 10, and it is the only supported way
+> to produce that file.
 
 It needs a Pantheon to read, which in development means one of three things:
 
@@ -88,11 +161,15 @@ It needs a Pantheon to read, which in development means one of three things:
   `roster.json`: a fake that agreed with the file step 10 is supposed to write could not
   exercise step 10 at all.
 - **Neither, yet** — `npm run rehearse` does the whole of B, C and D in a throwaway
-  repository, including this step and its refusals, and is the fastest way to watch the
-  flow end to end before setting anything up.
+  repository, including this step and its refusals.
 
-**Choosing a port.** 8080 is the default and is often taken, particularly on a box that
-also runs Pantheon. Either form works, and the flag wins:
+<details>
+<summary><b>Choosing a port, the admin dashboard, and <code>runtime.json</code></b></summary>
+
+<br>
+
+8080 is the default and is often taken, particularly on a box that also runs Pantheon.
+Either form works, and the flag wins:
 
 ```sh
 node server/server.js --port 9000
@@ -118,7 +195,10 @@ ADMIN_TOKEN=$(openssl rand -hex 16) PANTHEON_MODE=stub npm run serve
 
 `data/runtime.json` is optional. Copy `runtime.example.json` to it only to change
 something — a different drand mirror, real Pantheon base URLs — and note that it is
-gitignored, because it is deliberately outside the freeze (`PROTOCOL.md` §4.2).
+gitignored, because it is deliberately outside the freeze
+([`docs/PROTOCOL.md`](docs/PROTOCOL.md) §4.2).
+
+</details>
 
 ### Production
 
@@ -134,11 +214,11 @@ There is nothing else to install and no root needed. The server spawns
 schedule it yourself, `server.run_finalise: false` hands it back.
 
 Everything else about a real deployment — the frozen checkout, the `.env`, the reverse
-proxy and TLS, keeping the one process alive on Linux or Windows, and how you find out
-if nothing is drawing — is in **[`deploy/README.md`](deploy/README.md)**.
+proxy and TLS, keeping the one process alive on Linux or Windows, and how you find out if
+nothing is drawing — is in **[`deploy/README.md`](deploy/README.md)**.
 
-Three differences from the development commands above are worth stating here, because
-each is a way to be accidentally running a test as if it were the real thing:
+Three differences from the development commands above are worth stating here, because each
+is a way to be accidentally running a test as if it were the real thing:
 
 | | development | production |
 |---|---|---|
@@ -146,15 +226,73 @@ each is a way to be accidentally running a test as if it were the real thing:
 | `PANTHEON_MODE` | `stub` | `twirp`, against the instance the players actually have accounts on |
 | the freeze | whatever is in the tree | a checkout at the tag from RUNBOOK step 11, with `--verify-hash` passing |
 
-`/admin` says all three out loud in its pre-flight panel, and refuses to call a
-deployment ready while any of them is wrong.
+`/admin` says all three out loud in its pre-flight panel, and refuses to call a deployment
+ready while any of them is wrong.
 
 ```sh
 node tools/freeze.js                            # RUNBOOK 8-11, checks only
 node tools/freeze.js --write --tag frozen-v1    # ...and commit and tag
 ```
 
-## Layout
+## Project status
+
+| Area | State |
+|---|---|
+| The seating template and its proofs | **done and verified** — globally optimal, re-derivable by `tools/verify_template.py` |
+| `generate.js` and the byte encoding | **done** — cross-checked by an independent Python implementation |
+| The player application | **done** — all stages, both languages, phone included ([`docs/UI-SPEC.md`](docs/UI-SPEC.md)) |
+| The backend, the draw job and its scheduler | **done** — one process, no root, no cron |
+| Pantheon integration | **done, and run against a real instance** — see below |
+| The operational runbook | **rehearsed, not performed** |
+| A draw for people who did not know it was a test | **not yet** |
+
+<details>
+<summary><b>What "run against a real instance" does and does not mean</b></summary>
+
+<br>
+
+The Twirp client has been run against a real Pantheon (`cdda3fc`, in Docker under WSL 2),
+twice: once against a borrowed event, and once end to end against a fresh one where all
+twelve players signed in with an email and a password
+(`tools/pantheon-fixture.js --accounts`), sealed real ciphertexts, and had the resulting
+seat plan read back out of Pantheon seat by seat. Nine things were wrong across the two
+rounds and not one of them failed loudly — see
+[`docs/PANTHEON-INTEGRATION.md`](docs/PANTHEON-INTEGRATION.md) §2, §3, §5.1 and §6.
+
+Three are worth knowing before you deploy: Frey needs **two** addresses, because the
+browser calls it as well as the backend; a sign-in that fails for any reason used to be
+reported to the player as a wrong password; and `MakePrescriptedSeating` randomises the
+winds unless the caller states the mode, which Forseti does and a script might not.
+
+What is still outstanding is narrower: **the instance you actually deploy against**.
+Pantheon moves, §5.1 is a fact about one commit, and the fixture plus §6 make re-checking
+it a half-hour job rather than a research project.
+
+</details>
+
+<details>
+<summary><b>What "rehearsed, not performed" means</b></summary>
+
+<br>
+
+`npm run rehearse` runs sections B, C and D of the runbook end to end in a throwaway
+repository — roster snapshot, freeze, tag, twelve sealed submissions, the chase list, the
+draw, the sync, and the check a player does afterwards — against the Pantheon stub and a
+real drand round. Every step passes. What is left is doing it for an actual event, with
+real registrations and a deployment, and with the stub replaced by a real instance.
+
+The last row of the table is the only item that cannot be closed by writing more code.
+
+</details>
+
+> [!WARNING]
+> Read [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) before freezing, and
+> [`docs/PROTOCOL.md`](docs/PROTOCOL.md) end to end before changing code — particularly §7
+> (the algorithm) and §8 (quorum and failure handling). The rules there are where the
+> fairness comes from, and they should not be rewritten to whatever seems more reasonable
+> in the moment.
+
+## Repository layout
 
 ```
 generate.js                  # PROTOCOL.md §7 — frozen; node:crypto only, no dependencies
@@ -195,9 +333,9 @@ public/
   figures/                   # copied from docs/figures by the build; committed, not frozen
 docs/
   seating-design.md          # the explainer, rendered into the app (UI-SPEC §10)
-  seating-design.zh.md       # the same document in Chinese; the tests catch drift
   PROTOCOL.md  PANTHEON-INTEGRATION.md  UI-SPEC.md  RUNBOOK.md
   IMPLEMENTATION_NOTES.md    # decisions, deviations, and what is not yet verified
+                             # every one of these has a .zh.md beside it
 tools/
   verify_template.py         # re-derives every invariant of the template
   verify_contribution.py     # second implementation of the byte encoding, in another language
@@ -217,21 +355,49 @@ deploy/
   nginx.conf, Caddyfile, mahjong-relay.service (optional), README.md
 ```
 
-
 ## Hard rules
 
-1. **Do not hand-edit `data/schedule_template.json`.** Any change breaks the proved properties. If it must change, re-run `tools/verify_template.py` and repeat the freeze from scratch.
-2. **`roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` are frozen and git-tagged together before submissions open, in the repository the event is run from.** After that a single changed byte voids the guarantee and the run restarts. The first two are gitignored here on purpose — they are one event's data, and `tools/freeze.js` force-adds them in the tree that event belongs to.
-3. **Those four, and nothing else.** A parameter is frozen if changing it mid-window could change or steer the outcome, and operational otherwise (`PROTOCOL.md` §4.1). Freezing more than that is not extra caution: it means the organiser will eventually have a good reason to edit a tagged file, which is the habit the freeze exists to prevent.
-4. **The quorum rule is frozen too** (see `PROTOCOL.md` §8). It must not be renegotiated when a 7-of-12 situation actually arises — deciding after the fact is itself a manipulable step.
-5. **A voided attempt is archived, never deleted.** Its ciphertexts, the roll at the cutoff and the `protocol.json` it ran under are published under `events/rounds/<target_round>/` so anyone can confirm the round really was short of quorum. Opening the next attempt requires re-freezing first, and `tools/new-round.js` refuses while the archive does not verify.
-6. **What a player submitted is never exposed before the reveal.** Only whether they submitted.
-7. **Sync to Pantheon with `WIND_SHUFFLE_MODE_PRESCRIPTED`.** Any other mode re-randomises the winds and throws away most of what the template was optimised for.
+1. **Do not hand-edit `data/schedule_template.json`.** Any change breaks the proved
+   properties. If it must change, re-run `tools/verify_template.py` and repeat the freeze
+   from scratch.
+2. **`roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` are frozen
+   and git-tagged together before submissions open, in the repository the event is run
+   from.** After that a single changed byte voids the guarantee and the run restarts. The
+   first two are gitignored here on purpose — they are one event's data, and
+   `tools/freeze.js` force-adds them in the tree that event belongs to.
+3. **Those four, and nothing else.** A parameter is frozen if changing it mid-window could
+   change or steer the outcome, and operational otherwise
+   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md) §4.1). Freezing more than that is not extra
+   caution: it means the organiser will eventually have a good reason to edit a tagged
+   file, which is the habit the freeze exists to prevent.
+4. **The quorum rule is frozen too** ([`docs/PROTOCOL.md`](docs/PROTOCOL.md) §8). It must
+   not be renegotiated when a 7-of-12 situation actually arises — deciding after the fact
+   is itself a manipulable step.
+5. **A voided attempt is archived, never deleted.** Its ciphertexts, the roll at the cutoff
+   and the `protocol.json` it ran under are published under `events/rounds/<target_round>/`
+   so anyone can confirm the round really was short of quorum. Opening the next attempt
+   requires re-freezing first, and `tools/new-round.js` refuses while the archive does not
+   verify.
+6. **What a player submitted is never exposed before the reveal.** Only whether they
+   submitted, and the fingerprint of the sealed envelope — which is a digest of an
+   already-public ciphertext and opens nothing.
+7. **Sync to Pantheon with `WIND_SHUFFLE_MODE_PRESCRIPTED`.** Any other mode re-randomises
+   the winds and throws away most of what the template was optimised for.
 
-## Verification tool
+## Checking the template yourself
 
-```
+```sh
 python3 tools/verify_template.py data/schedule_template.json
 ```
 
-It re-derives every invariant from the round data rather than trusting the file's own `verified_properties` block, and exits non-zero if anything fails to match. Safe to hand to participants who want to check the template themselves.
+It re-derives every invariant from the round data rather than trusting the file's own
+`verified_properties` block, and exits non-zero if anything fails to match. Safe to hand to
+participants who want to check the template for themselves. `npm run verify-template` is
+the same set of invariants in JavaScript, which is what the freeze path runs.
+
+## License
+
+MIT, as declared in [`package.json`](package.json).
+
+`generate.js` and `data/schedule_template.json` are meant to be copied, re-run and argued
+with. That is the point of publishing them.

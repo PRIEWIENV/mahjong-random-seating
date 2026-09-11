@@ -1,5 +1,7 @@
 # Implementation notes
 
+> English · [简体中文](IMPLEMENTATION_NOTES.zh.md)
+
 Everything the implementation had to decide that the specification does not settle,
 plus the places where following one rule literally would have broken another.
 
@@ -463,20 +465,23 @@ Everything the app needs from Pantheon goes through one interface in
 - **`StubPantheon`** — an in-process fake with the same contract, which is what the
   tests and `PANTHEON_MODE=stub` use.
 
-> **`TwirpPantheon` has NOT been verified against a running Pantheon instance.**
-> No instance was available. `PANTHEON-INTEGRATION.md` opens by saying to confirm the
-> field names against the instance you actually run, because they are the details most
-> likely to drift — that instruction is outstanding.
+> **This section predates §6f, which supersedes its first paragraph.** `TwirpPantheon`
+> has since been run against a real Pantheon (`cdda3fc`, Docker under WSL 2), and
+> RUNBOOK steps A2, A3 and A6 pass against it — including reading the prescript back and
+> comparing the seating wind by wind, which is the check
+> `PANTHEON-INTEGRATION.md` calls most likely to be silently wrong. Six of the client's
+> assumptions were wrong and none announced itself; §6f lists them.
+>
+> What remains outstanding is narrower and is **not** closed by that: **the instance you
+> actually deploy against**. §5.1 of `PANTHEON-INTEGRATION.md` is a fact about one
+> commit of one deployment, and Pantheon moves.
 
 What this means in practice: the Twirp path template, service names and base URLs are
 all configurable (`runtime.json` → `pantheon`, since where Pantheon lives cannot affect
-the draw), so drift should be a config change rather than a code change. What the sync
-is allowed to *write* stays frozen: `wind_shuffle_mode` is in `protocol.json`, because
-any other value silently discards most of what the template guarantees. But **RUNBOOK steps A2, A3 and A6 are not yet satisfied
-against real Pantheon**, and A6 — reading the prescript back and confirming the winds
-survive — is the one that document calls most likely to be silently wrong. The
-equivalent checks all pass against the stub, including the read-back and the
-wind-by-wind comparison, so the logic is exercised; only the wire format is unconfirmed.
+the draw), so drift is a config change rather than a code change — which is exactly what
+§6f's six corrections turned out to need. What the sync is allowed to *write* stays
+frozen: `wind_shuffle_mode` is in `protocol.json`, because any other value silently
+discards most of what the template guarantees.
 
 `config.js` refuses to start if `wind_shuffle_mode` is anything but
 `WIND_SHUFFLE_MODE_PRESCRIPTED`, since any other value silently discards the wind and
@@ -860,7 +865,7 @@ The password field has a reveal toggle, off by default.
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 304 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer | pass |
+| Unit tests (`npm test`) — 311 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |

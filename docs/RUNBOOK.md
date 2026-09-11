@@ -1,5 +1,7 @@
 # Pre-flight checklist
 
+> English · [简体中文](RUNBOOK.zh.md)
+
 Ordered — do not skip steps. Steps marked with a lock enter the frozen state; nothing after that point may be modified.
 
 ## A. Implementation (no real players involved yet)

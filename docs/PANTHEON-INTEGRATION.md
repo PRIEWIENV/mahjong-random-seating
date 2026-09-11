@@ -1,5 +1,7 @@
 # Pantheon integration
 
+> English · [简体中文](PANTHEON-INTEGRATION.zh.md)
+
 The draw app sits alongside a self-hosted [Pantheon](https://github.com/MahjongPantheon/pantheon) instance on the same server. Pantheon supplies identity and the event roster, and receives the finished seat plan.
 
 Everything below was read off the Pantheon protocol definitions in `Common/proto/` on `master` and then **checked against a running instance** (Pantheon `cdda3fc`, September 2026). That check was worth doing: the proto files and the running service disagreed in four places, every disagreement was silent, and §6 records what it took to find them. Re-run it against the instance you are actually going to use — the values in §5 are facts about one deployment, not about Pantheon in general.

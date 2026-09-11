@@ -1,5 +1,7 @@
 # Player-facing UI specification
 
+> English · [简体中文](UI-SPEC.zh.md)
+
 One page, one continuous flow. The player signs in, is carried through the draw, and ends on the seat plan. **No tab bar over the draw** — the six situations below are stages of one journey, not sections to browse. The app knows which stage the draw is in and shows that stage; earlier stages are behind them, not beside them.
 
 There is exactly one destination that is not a stage: **how it works**, the explanation of the draw, reachable from a two-entry menu in the header on every screen (§10). It sits *beside* the journey rather than in it — opening it leaves the stage machine untouched and returning lands on whatever the draw has become meanwhile. A player who wants to know why they should trust this before typing a number must not have to leave the app to find out.

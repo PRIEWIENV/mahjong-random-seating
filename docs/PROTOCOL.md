@@ -1,5 +1,7 @@
 # Randomised Seating Protocol (tlock edition)
 
+> English · [简体中文](PROTOCOL.zh.md)
+
 Implementation specification. Once agreed, four artefacts — `protocol.json`, `roster.json`, `schedule_template.json` and `generate.js` — are frozen together and git-tagged **before** submissions open. After the freeze, changing a single byte of any of them invalidates the fairness guarantee and the run must be restarted.
 
 Exactly four, and no more. Operational settings — which drand mirror is reachable today, where Pantheon sits on the host, how long a session cookie lives — are kept out of the freeze on purpose and live in `runtime.json`. §4.1 gives the test that decides which side a parameter falls on, and why drawing that line too generously weakens the freeze rather than strengthening it.

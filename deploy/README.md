@@ -1,5 +1,7 @@
 # Deployment (PROTOCOL.md §10)
 
+> English · [简体中文](README.zh.md)
+
 One Node process behind a reverse proxy, with SQLite for state. It serves the page and
 runs the draw on a timer of its own, so there is nothing else to install and no root
 needed. The app and Pantheon share a host, so backend-to-Pantheon calls go over

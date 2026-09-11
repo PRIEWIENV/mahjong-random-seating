@@ -43,6 +43,27 @@ test('the two language versions have not drifted apart', () => {
   assert.deepEqual(srcs(zh.html), srcs(en.html), 'the versions point at different figures');
 });
 
+/**
+ * The two translations link to each other for GitHub readers, in a blockquote under the
+ * title. The rendered page has a language toggle in its own header, so that line is
+ * navigation for a different medium and must not appear as a quoted stray sentence at
+ * the top of the explanation page.
+ */
+test('a language switcher under the title is dropped from the rendered page', () => {
+  const doc = render('# T\n\n> English · [简体中文](T.zh.md)\n\nreal prose here.\n');
+  assert.ok(!doc.html.includes('T.zh.md'), 'the switcher survived into the page');
+  assert.ok(!doc.html.includes('&gt;'), 'the switcher was rendered as a quoted line');
+  assert.match(doc.html, /^<p>real prose here\.<\/p>/);
+});
+
+test('the real documents drop their switcher and keep their first paragraph', () => {
+  for (const name of ['seating-design.md', 'seating-design.zh.md']) {
+    const doc = render(read(name));
+    assert.ok(!doc.html.includes('seating-design'), `${name} leaked its switcher`);
+    assert.match(doc.html, /^<p>/, `${name} does not open with a paragraph`);
+  }
+});
+
 test('a figure keeps the caption that follows it', () => {
   const doc = render('# T\n\n![alt text](figures/x.svg)\n\n*the caption*\n');
   assert.match(doc.html, /<figure><img src="\/figures\/x\.svg" alt="alt text"[^>]*\/><figcaption>the caption<\/figcaption><\/figure>/);

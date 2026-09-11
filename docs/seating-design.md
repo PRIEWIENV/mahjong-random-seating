@@ -1,5 +1,7 @@
 # How the Seating Chart Was Built
 
+> English · [简体中文](seating-design.zh.md)
+
 Twelve players, eleven rounds, three tables of four. This page explains where the seating chart came from: what we wanted from it, which parts of that wish list turned out to be mathematically impossible, how the remaining search was narrowed down to a handful of candidates and then solved to proven optimality, and why a chart that is provably the best possible still has to be handed out by lottery.
 
 No mathematical background is assumed. The published results the argument leans on are listed at the end.
