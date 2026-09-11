@@ -47,7 +47,7 @@ const { startScheduler } = require('./schedule');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
-const { readIndex, ROUNDS_DIR } = require('./rounds');
+const { readIndex, attemptsInThisRun, ROUNDS_DIR } = require('./rounds');
 const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
 
 /** How long before the cutoff the page switches to its lively cadence. */
@@ -318,7 +318,7 @@ function createServer(opts = {}) {
 
   function status() {
     const submitted = store.submittedLocalIds();
-    const previous = readIndex(cfg);
+    const previous = attemptsInThisRun(readIndex(cfg));
     const now = nowFn();
     const phase = phaseOf(cfg, store, now);
     return {
@@ -381,7 +381,9 @@ function createServer(opts = {}) {
       // §8: a run can take more than one attempt. Players who were told a round was
       // void need to see that this is a new one and where the last one's evidence is,
       // or being asked for a number a second time looks like the rules moving.
-      attempt: previous.length + 1,
+      // The round now open is itself in `previous` from the moment it is declared void,
+      // so counting it would title the screen announcing that attempt 2 failed "attempt 3".
+      attempt: previous.filter((a) => a.target_round !== cfg.protocol.target_round).length + 1,
       previous_rounds: previous,
       // UI-SPEC §5: the countdown is driven by this, so it never drifts. The same
       // instant the phase and the lateness above were read at, or a page could show a

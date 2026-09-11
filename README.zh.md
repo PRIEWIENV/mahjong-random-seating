@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-347%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-351%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -62,7 +62,7 @@ flowchart LR
 ```sh
 git clone <本仓库> && cd mahjong-random-seating
 npm ci
-npm test                  # 347 个单元测试，完全离线，约 12 秒
+npm test                  # 351 个单元测试，完全离线，约 12 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟
 ```
 
@@ -86,7 +86,7 @@ npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分�
 
 ```sh
 npm ci
-npm test                  # 347 个单元测试，离线，约 12 秒
+npm test                  # 351 个单元测试，离线，约 12 秒
 npm run verify-template   # 重新推导冻结模板的每一条不变量
 npm run e2e               # 对着真实 drand 跑 RUNBOOK A2-A7，约 90 秒
 npm run rehearse          # 沙箱里端到端跑完 RUNBOOK B/C/D，约 3 分钟

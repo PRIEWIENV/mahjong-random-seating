@@ -51,6 +51,29 @@ function readIndex(cfg) {
   }
 }
 
+/**
+ * The attempts that belong to the run which is open now (§8).
+ *
+ * The index is a log of every attempt this checkout has ever archived, and that is more
+ * than one event: closing out a finished draw leaves its entry in place, and the next
+ * event opens underneath it. §8's "attempt" is a narrower thing — a round that fell
+ * short of quorum and was voided, within the run that is still looking for a result. A
+ * finished or abandoned attempt ends a run, so it and everything before it belong to a
+ * different event and are not this run's history.
+ *
+ * The distinction is not cosmetic. The submission stage reads the last of these to tell
+ * a player why they are being asked for a number a second time, and over the whole index
+ * it told them that a draw which had *succeeded* with nine submissions had fallen short
+ * of eight — which is precisely the accusation §8's evidence exists to refute.
+ *
+ * An entry with no status at all predates the generalised archive, which only ever wrote
+ * voided attempts, so it counts as one.
+ */
+function attemptsInThisRun(index) {
+  const ended = index.findLastIndex((a) => (a.status ?? 'void') !== 'void');
+  return index.slice(ended + 1);
+}
+
 /** §8's case: an attempt that fell short of quorum. */
 function archiveVoidedAttempt(cfg, store, notice, mirror, log = console) {
   return archiveAttempt(cfg, store, { status: 'void', notice, reason: notice.reason }, mirror, log);
@@ -437,6 +460,6 @@ function endEvent(cfg, store, opts = {}) {
 }
 
 module.exports = {
-  archiveVoidedAttempt, archiveAttempt, verifyArchive, resetForNewRound, endEvent, attemptRound, readIndex,
+  archiveVoidedAttempt, archiveAttempt, verifyArchive, resetForNewRound, endEvent, attemptRound, readIndex, attemptsInThisRun,
   ROUNDS_DIR, INDEX_PATH, archiveRel, LIVE_FILES,
 };

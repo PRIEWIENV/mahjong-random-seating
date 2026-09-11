@@ -247,7 +247,13 @@ input:focus-visible, button:focus-visible, .grid th:focus-visible, .lang-toggle:
 
 /* ---- submit ---------------------------------------------------------- */
 .card.submit { max-width: 460px; text-align: center; }
-.bignum { margin: 22px 0 6px; }
+/* The heading names the field directly below it, so nothing goes between them and the
+   gap is a label's, not a section's. The deadline band and the void notice both sit
+   above the greeting for that reason. */
+.card.submit h1 { margin-bottom: 0; }
+.bignum { margin: 10px 0 6px; }
+/* It explains the band above it, so it closes that block rather than opening the next. */
+.card.submit .note.retry { margin: 0 0 20px; }
 .bignum-input {
   width: 100%; text-align: center; font: 700 clamp(46px, 13vw, 64px)/1 var(--mono);
   padding: 14px 12px; border: 1px solid var(--line); border-radius: var(--r);
@@ -493,24 +499,45 @@ table.opponents tr.imperfect { color: var(--warn); }
 .pw-reveal .eye-slash { stroke-width: 1.9; }
 
 /* ---- the deadline band on the submission stage ------------------------ */
-/* §4 keeps one focal element, so this is a band: the thing a player most needs that is
-   not the number field, stated once and never competing with it. */
+/* The time remaining leads, because it is the only number here a player acts on without
+   first doing arithmetic. It is still set below .bignum-input, which keeps §4's focal
+   element where it belongs: this band is the loudest support, not a second headline. */
 .deadline-band {
   border: 1px solid var(--line); border-radius: var(--r);
-  background: var(--bg); padding: 10px 14px; margin: 0 0 18px;
+  background: var(--bg); padding: 14px 14px 12px; margin: 0 0 20px;
 }
 .deadline-band.urgent { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); background: var(--warn-soft); }
-.dl-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 0.9rem; }
-.dl-row + .dl-row { margin-top: 4px; }
-.dl-row.quiet { color: var(--muted); font-size: 0.85rem; }
-.dl-name { color: var(--muted); flex: none; min-width: 4.5em; }
-.dl-when { font-variant-numeric: tabular-nums; }
-.dl-when em { font-style: normal; color: var(--muted); font-size: 0.85em; margin-left: 5px; }
-.dl-left { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.deadline-band.urgent .dl-left { color: var(--warn); font-weight: 600; }
-.dl-left b { font-weight: 600; margin-right: 8px; }
-.dl-utc { color: var(--muted); font-size: 0.74rem; margin: 8px 0 0; line-height: 1.5; }
-.dl-utc code { font-family: var(--mono); font-size: 0.95em; }
+
+.dl-countdown { text-align: center; }
+.dl-cd-label {
+  display: block; color: var(--muted); font-size: 0.76rem;
+  text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 2px;
+}
+.deadline-band.urgent .dl-cd-label { color: var(--warn); font-weight: 600; }
+.dl-clock {
+  display: inline-flex; align-items: baseline; justify-content: center; flex-wrap: wrap;
+  gap: 12px; font-variant-numeric: tabular-nums;
+}
+.cd-seg b { font: 700 clamp(30px, 8.5vw, 40px)/1.05 var(--mono); letter-spacing: -0.01em; }
+.cd-seg i { font-style: normal; font-size: 0.85rem; color: var(--muted); margin-left: 3px; }
+.deadline-band.urgent .cd-seg b { color: var(--warn); }
+
+/* The two instants, under a rule so they read as reference rather than as more headline.
+   One grid for both rows rather than one per row: the labels are different lengths in
+   both languages, and two independently centred label-and-value pairs sit at two
+   different left edges, which reads as a mistake. `display: contents` lets each row keep
+   its own class — .quiet is still the second one — while its two cells join the shared
+   grid, so the column edge is common and the pair of rows is centred as a block. */
+.dl-times { display: grid; grid-template-columns: auto auto; justify-content: center; align-items: baseline; column-gap: 10px; row-gap: 5px; }
+.dl-countdown + .dl-times { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.deadline-band.urgent .dl-countdown + .dl-times { border-top-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.dl-row { display: contents; font-size: 1rem; }
+.dl-row.quiet { color: var(--muted); font-size: 0.95rem; }
+.dl-name { color: var(--muted); text-align: right; }
+.dl-when { text-align: left; font-variant-numeric: tabular-nums; font-weight: 600; }
+.dl-row.quiet .dl-when { font-weight: 500; }
+.dl-when em { font-style: normal; color: var(--muted); font-size: 0.85em; margin-left: 5px; font-weight: 400; }
+.dl-round { color: var(--muted); font-size: 0.76rem; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
 
 /* ---- the timeline ----------------------------------------------------- */
 .timeline-card { margin-bottom: 18px; }

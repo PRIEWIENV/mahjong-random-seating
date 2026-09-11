@@ -63,7 +63,9 @@ On submit the client builds `{user_input, client_nonce, client_timestamp}` — t
 
 Do not offer an edit or withdraw affordance. A submission is final by design; say so before the button, not after.
 
-**Both deadlines, on this screen.** A quiet band under the heading carries the cutoff — as a live countdown *and* as an exact instant — and the draw time beneath it, each in the reader's own timezone with the offset named, and both in UTC underneath. They are different instants, `reveal_gap_seconds` apart (PROTOCOL.md §9), and until now neither appeared anywhere on the one screen where a player still has something to do. Inside the last half hour the band takes the warning colour and says so.
+**Both deadlines, on this screen, and the time remaining above them.** A band at the top of the card, above the heading, leads with how long is left — set large and centred, because it is the only figure here a player can act on without doing the arithmetic themselves. Under a rule beneath it sit the two exact instants: entries close, and the draw, each in the reader's own timezone with the offset named, and the drand round in small type under both. They are different instants, `reveal_gap_seconds` apart (PROTOCOL.md §9), and until now neither appeared anywhere on the one screen where a player still has something to do. Inside the last half hour the band takes the warning colour and says so.
+
+The countdown is set a size below the number field, which keeps §1's single focal element where it belongs. No UTC restatement: every instant already carries its own offset, so repeating them in UTC said the same thing twice on the screen that should hold nothing spare. Nothing goes between the heading and the field it names — the band and the void notice both sit above the greeting for that reason.
 
 ## 5. Submitted, and waiting
 

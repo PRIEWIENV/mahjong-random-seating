@@ -1132,12 +1132,79 @@ else by definition, and what a player reports is a wrong password. Single-label 
 `.local`-style names are now flagged too, and a real domain still is not, because a
 warning that fires on correct configurations is one people learn to ignore.
 
+## 6p. A finished draw, accused of falling short
+
+An event was closed out with `tools/end-event.js`, a second one was frozen into the same
+checkout, and the first thing the submission page told everybody was this:
+
+> This is draw attempt 2. Last time only 9 numbers were sealed by the cutoff, short of
+> the 8 required, so that round was voided under the rule set before it started.
+
+Nine is not short of eight. That round had not fallen short of anything: it had drawn,
+published a seat plan, and been closed. Every number in the sentence was read from a real
+record, and the sentence was still false, which is the kind of wrongness that is worth
+tracing rather than patching at the word.
+
+### An index is a log, not a history of one run
+
+`events/rounds/index.json` records every attempt this checkout has ever archived. That is
+deliberate and it is the whole point of §8's archive: nothing is deleted, so anybody can
+open the ciphertexts of a round that was declared void and count them. But `/api/status`
+was reading it as though it were the history of the run now open:
+
+```js
+attempt: previous.length + 1,
+previous_rounds: previous,     // previous = readIndex(cfg)
+```
+
+Two events had been archived, so the new one called itself attempt 3 — and the submission
+stage, which takes the last entry to explain why a player is being asked for a number
+again, took the finished event and described it in the only terms §8 has for a previous
+attempt: it fell short.
+
+A run ends when a draw completes. `attemptsInThisRun` slices the index after the last
+entry that is not a void, so a closed event leaves nothing behind it and a new event
+starts at attempt 1 with no notice at all. The round now open is excluded from the count
+separately, because it joins the index the instant it is declared void — without that, the
+screen announcing that attempt 2 had failed would have called itself attempt 3.
+
+The client carries the same check a second time. `status.attempt > 1` is not enough to
+print that sentence; the entry it is about has to say `status: "void"`. Defence in depth is
+usually worth arguing about, but not here: the sentence accuses a draw of failing, and
+there is nothing worse to say about one that didn't.
+
+It is a §8 fault rather than a display fault, which is why it is in this file. §8's
+evidence exists to stop an organiser claiming a round fell short in order to get a
+do-over. An app that makes that claim by itself, about a round that succeeded, does the
+damage §8 is built to prevent — and it does it in the one place where all twelve players
+are looking.
+
+### The submission screen, reordered
+
+Three things came out of reading that screen again with a player's question in mind
+("how long have I got?"):
+
+- **The countdown leads.** It was a line of small print at the right-hand end of the
+  deadline row. It is now large, centred and the first thing in the card, because it is
+  the only figure on the screen a player can act on without doing arithmetic against
+  their own clock. It is still set a size below the number field, so §1's single focal
+  element is unchanged.
+- **The UTC restatement is gone.** Both instants already print with their own offset —
+  `18:38 UTC+8` — so repeating them as `10:38Z` underneath said the same thing twice,
+  on the screen that should hold nothing spare.
+- **The heading rejoined its field.** "Pick a number" had the deadline band wedged
+  between it and the input it names. The band and the void notice now sit above the
+  greeting, and nothing at all comes between the heading and the field.
+
+The label moved with the layout: "sealed at" was the protocol's word for what happens to
+the number, not the player's word for what happens to them. It now says entries close.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 347 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event | pass |
+| Unit tests (`npm test`) — 351 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1178,6 +1245,9 @@ warning that fires on correct configurations is one people learn to ignore.
 | `THIRD-PARTY-NOTICES.md` covers every one of the seventeen libraries in the bundle, and `--check` fails if it has fallen behind | passes |
 | Ctrl+C stops the relay while a player is attached to the stream, and a stream nothing releases is dropped rather than waited on | passes |
 | A reset clears every key that describes the round, and the attempt after it publishes its own roll | passes |
+| A closed event is not counted as a failed attempt of the next one, and a new event opens at attempt 1 | passes |
+| The round now open is excluded from its own attempt count, so a void screen does not skip a number | passes |
+| Every submission-stage layout rendered to static HTML in both languages, with and without a void notice | passes |
 | A database from another round is refused at startup by both the server and the draw job | passes |
 | A finished event is archived, verified and then cleared; an unfinished one is not closed without saying so | passes |
 | A Frey address that resolves on one machine only is flagged, and a real domain is not | passes |

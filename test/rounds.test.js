@@ -23,7 +23,7 @@ const { run, phaseOf, publishRoll, KEY_ROLL, KEY_TICK } = require('../server/fin
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
-const { verifyArchive, resetForNewRound, endEvent, readIndex } = require('../server/rounds');
+const { verifyArchive, resetForNewRound, endEvent, readIndex, attemptsInThisRun } = require('../server/rounds');
 const { makeDataDir, fakeCiphertext, cleanup } = require('./helpers');
 
 const QUIET = { info() {}, warn() {}, error() {} };
@@ -343,7 +343,19 @@ async function boot(c) {
       r.on('end', () => res({ status: r.statusCode, type: (r.headers['content-type'] || '').split(';')[0], body: b }));
     });
   });
-  return { get, close: () => new Promise((r) => server.close(r)) };
+  const close = () => new Promise((r) => server.close(r));
+  /**
+   * Ask for the status and close, whatever the body of the check does.
+   *
+   * Without the finally, an assertion that fails leaves the socket listening and
+   * `node --test` never exits: the run reports nothing at all rather than reporting the
+   * failure. Found the hard way, by breaking one of these on purpose.
+   */
+  const withStatus = async (fn) => {
+    try { return await fn(JSON.parse((await get('/api/status')).body)); }
+    finally { await close(); }
+  };
+  return { get, close, withStatus };
 }
 
 test('/api/status says which attempt this is and where the last one is published', async () => {
@@ -361,6 +373,87 @@ test('/api/status says which attempt this is and where the last one is published
   assert.equal(status.previous_rounds[0].submitted_count, 7);
   assert.equal(status.previous_rounds[0].archive, `events/rounds/${voided}`);
   await s.close();
+  cleanup(c.fx.dir);
+});
+
+test('the run is the voided attempts since the last one that ended', () => {
+  const log = [
+    { target_round: 1, status: 'void' },
+    { target_round: 2, status: 'done' },
+    { target_round: 3, status: 'void' },
+    { target_round: 4, status: 'void' },
+  ];
+  const rounds = (index) => attemptsInThisRun(index).map((a) => a.target_round);
+  assert.deepEqual(rounds(log), [3, 4]);
+  assert.deepEqual(rounds([]), []);
+  assert.deepEqual(rounds(log.slice(0, 2)), [], 'a finished event leaves no attempts behind it');
+  // Abandoning ends a run as surely as finishing one does: whatever opens next is a
+  // different event, and its players were never asked for a number in this one.
+  assert.deepEqual(
+    rounds([{ target_round: 1, status: 'abandoned' }, { target_round: 2, status: 'void' }]), [2]);
+  // An entry with no status predates the field, and only voided attempts were archived
+  // back then.
+  assert.deepEqual(rounds([{ target_round: 9 }]), [9]);
+});
+
+test('a closed event is not counted as a failed attempt of the next one', async () => {
+  // The bug as a player met it. An event that had DRAWN, with nine of twelve submitting
+  // against a quorum of eight, was closed out and a new one frozen — and the submission
+  // page for the new one opened with "last time only 9 submitted, short of the 8
+  // required". Nine is not short of eight, and that round had not fallen short of
+  // anything: it had succeeded. §8's notice is about a void in THIS run, and a finished
+  // event is neither.
+  const c = attempt(9);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'),
+    JSON.stringify({ round_used: c.cfg.protocol.target_round, seating: {} }, null, 2) + '\n');
+  c.store.set('phase', 'done');
+  assert.equal(endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET }).ok, true);
+  refreeze(c);
+
+  await (await boot(c)).withStatus((status) => {
+    assert.equal(status.attempt, 1, 'a new event starts at attempt 1');
+    assert.deepEqual(status.previous_rounds, [], 'the closed event is not this run’s history');
+  });
+  cleanup(c.fx.dir);
+});
+
+test('a void in the second event is its attempt 2, not the log’s attempt 3', async () => {
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'),
+    JSON.stringify({ round_used: c.cfg.protocol.target_round, seating: {} }, null, 2) + '\n');
+  c.store.set('phase', 'done');
+  endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+
+  // A second event opens, and this one does fall short.
+  refreeze(c, { submission_cutoff_utc: PAST() });
+  const short = c.cfg.protocol.target_round;
+  c.store.insertSubmission(1, fakeCiphertext(short, c.cfg.protocol.chain_hash), c.cfg.protocol.cutoff_ms - 60_000);
+  await voidIt(c);
+  refreeze(c);
+  resetForNewRound(c.cfg, c.store, { log: QUIET });
+
+  await (await boot(c)).withStatus((status) => {
+    assert.equal(status.attempt, 2, 'the first event is over; this run has had one void');
+    assert.equal(status.previous_rounds.length, 1);
+    assert.equal(status.previous_rounds[0].target_round, short);
+    assert.equal(status.previous_rounds[0].submitted_count, 1);
+  });
+  cleanup(c.fx.dir);
+});
+
+test('the attempt now open is not counted among the attempts before it', async () => {
+  // It is archived the instant it is declared void, so from that instant it is in the
+  // index — and the screen that announces attempt 2 failed would have called itself 3.
+  const c = attempt(7);
+  const voided = c.cfg.protocol.target_round;
+  await voidIt(c);
+
+  await (await boot(c)).withStatus((status) => {
+    assert.equal(status.phase, 'void');
+    assert.equal(status.attempt, 1);
+    assert.equal(status.previous_rounds[0].target_round, voided,
+      'the void screen finds its own archive here');
+  });
   cleanup(c.fx.dir);
 });
 
