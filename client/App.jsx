@@ -8,6 +8,7 @@ import Waiting from './stages/Waiting';
 import Revealing from './stages/Revealing';
 import Void from './stages/Void';
 import Result from './stages/Result';
+import Doc from './Doc';
 
 /**
  * The stage machine (UI-SPEC.md §2).
@@ -27,6 +28,10 @@ import Result from './stages/Result';
  * The one piece of genuinely local state is `justSubmitted`, the ~2.5 s confirmation.
  * It is a transient acknowledgement of something this browser just did, not a phase of
  * the draw, so it cannot come from the server.
+ *
+ * `view` is the other piece, and it is not a stage either. The explanation page sits
+ * beside the draw rather than inside it: opening it leaves the stage machine exactly
+ * where it was, and closing it returns to whatever the draw has become meanwhile.
  */
 function deriveStage({ me, status, justSubmitted, revealSeen }) {
   if (!status) return 'loading';
@@ -64,12 +69,37 @@ function reducer(state, action) {
   }
 }
 
+/**
+ * The app's name, with the event's own name in front of it when Pantheon has told us
+ * one. A club runs several events a year and a player may have two of these open; a
+ * page that only says "Seating draw" cannot be told apart from last month's.
+ */
 const TEXT = {
-  zh: { brand: '座位抽签', sub: 'Seating draw', signOut: '退出', lang: '切换到 English', loading: '载入中' },
-  en: { brand: 'Seating draw', sub: '座位抽签', signOut: 'Sign out', lang: '切换到中文', loading: 'Loading' },
+  zh: {
+    brand: '座位抽签',
+    branded: (event) => `${event}座位抽签`,
+    sub: 'Seating draw',
+    signOut: '退出',
+    lang: '切换到 English',
+    loading: '载入中',
+    navDraw: '抽签',
+    navDoc: '原理',
+    navLabel: '页面',
+  },
+  en: {
+    brand: 'Seating draw',
+    branded: (event) => `${event} seating draw`,
+    sub: '座位抽签',
+    signOut: 'Sign out',
+    lang: '切换到中文',
+    loading: 'Loading',
+    navDraw: 'The draw',
+    navDoc: 'How it works',
+    navLabel: 'Pages',
+  },
 };
 
-function Chrome({ lang, setLang, me, onSignOut, children, stage }) {
+function Chrome({ lang, setLang, me, onSignOut, children, stage, view, setView, eventTitle }) {
   const t = useText(TEXT);
   return (
     <>
@@ -82,8 +112,29 @@ function Chrome({ lang, setLang, me, onSignOut, children, stage }) {
               <path d="M8.4 16.2h7.2" className="pip-line" />
             </svg>
           </span>
-          {t.brand} <span className="en">{t.sub}</span>
+          <span className="brand-name">{eventTitle ? t.branded(eventTitle) : t.brand}</span>
+          {!eventTitle && <span className="en">{t.sub}</span>}
         </div>
+
+        {/* Two destinations, not a tab bar over the draw: the left one is wherever the
+            draw currently is, the right one is the explanation of it. */}
+        <nav className="site-nav" aria-label={t.navLabel}>
+          <button
+            className={view === 'draw' ? 'on' : ''}
+            onClick={() => setView('draw')}
+            aria-current={view === 'draw' ? 'page' : undefined}
+          >
+            {t.navDraw}
+          </button>
+          <button
+            className={view === 'doc' ? 'on' : ''}
+            onClick={() => setView('doc')}
+            aria-current={view === 'doc' ? 'page' : undefined}
+          >
+            {t.navDoc}
+          </button>
+        </nav>
+
         <div className="who">
           {me && <span className="who-name">{me.title}</span>}
           <button
@@ -98,8 +149,8 @@ function Chrome({ lang, setLang, me, onSignOut, children, stage }) {
           {me && <button className="linkish" onClick={onSignOut}>{t.signOut}</button>}
         </div>
       </header>
-      {/* One <main> that cross-fades between stages. No tab bar anywhere (UI-SPEC §1). */}
-      <main key={stage} className="stage-wrap">{children}</main>
+      {/* One <main> that cross-fades between stages (UI-SPEC §1). */}
+      <main key={view === 'doc' ? 'doc' : stage} className="stage-wrap">{children}</main>
     </>
   );
 }
@@ -109,6 +160,7 @@ export default function App() {
   const [protocol, setProtocol] = useState(null);
   const [result, setResult] = useState(null);
   const [lang, setLangState] = useState(initialLang);
+  const [view, setViewState] = useState('draw');
 
   const setLang = useCallback((next) => {
     setLangState(next);
@@ -116,6 +168,15 @@ export default function App() {
     document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
   }, []);
   useEffect(() => { document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; }, [lang]);
+
+  // The browser tab, for the same reason as the header: two of these open at once is
+  // the ordinary case in a club that runs several events, and "座位抽签" twice over
+  // tells a player nothing about which one they are about to submit into.
+  const eventTitle = state.status?.event_title || null;
+  useEffect(() => {
+    const t = TEXT[lang] || TEXT.zh;
+    document.title = eventTitle ? t.branded(eventTitle) : t.brand;
+  }, [lang, eventTitle]);
 
   // Measured once at load so the countdown is driven by server time, not the client's
   // clock (UI-SPEC §5 — "so it never drifts").
@@ -138,6 +199,12 @@ export default function App() {
   }, []);
 
   const stage = deriveStage(state);
+
+  /** Switching views starts the new one at the top; a half-scrolled page is disorienting. */
+  const setView = useCallback((next) => {
+    setViewState(next);
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
 
   // Fetch the result once the draw is finished, whichever way the player arrived.
   useEffect(() => {
@@ -162,15 +229,17 @@ export default function App() {
     () => api.signOut().then(() => dispatch({ type: 'signedOut' })),
     []
   );
+  const backToDraw = useCallback(() => setView('draw'), [setView]);
 
   const body = useMemo(() => {
+    if (view === 'doc') return <Doc onBack={backToDraw} />;
     switch (stage) {
       case 'loading':
         return <div className="stage centre"><div className="spinner" /></div>;
       case 'signin':
         return <SignIn status={state.status} onSignedIn={onSignedIn} />;
       case 'submit':
-        return <Submit protocol={protocol} status={state.status} me={state.me} onSubmitted={onSubmitted} />;
+        return <Submit protocol={protocol} status={state.status} me={state.me} serverNow={serverNow} onSubmitted={onSubmitted} />;
       case 'submitted':
         return <Submitted me={state.me} />;
       case 'waiting':
@@ -184,11 +253,20 @@ export default function App() {
       default:
         return null;
     }
-  }, [stage, state, protocol, result, serverNow, onSignedIn, onSubmitted, onRevealDone]);
+  }, [view, backToDraw, stage, state, protocol, result, serverNow, onSignedIn, onSubmitted, onRevealDone]);
 
   return (
     <LangContext.Provider value={lang}>
-      <Chrome lang={lang} setLang={setLang} me={state.me} onSignOut={onSignOut} stage={stage}>
+      <Chrome
+        lang={lang}
+        setLang={setLang}
+        me={state.me}
+        onSignOut={onSignOut}
+        stage={stage}
+        view={view}
+        setView={setView}
+        eventTitle={eventTitle}
+      >
         {body}
       </Chrome>
     </LangContext.Provider>

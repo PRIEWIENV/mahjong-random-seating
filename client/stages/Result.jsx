@@ -1,4 +1,5 @@
 import Explorer from '../explorer/Explorer';
+import RollCard from '../RollCard';
 import { useLang, useText, WINDS, tableName } from '../i18n';
 
 /**
@@ -105,6 +106,12 @@ export default function Result({ status, me, result }) {
       </section>
 
       <Explorer result={result} me={me} />
+
+      {/* The sealed ciphertexts do not stop being evidence once they are opened — they
+          start being checkable. Offering them only during the wait meant the download
+          disappeared at the exact moment someone might want to recompute the result
+          from it. Same file, same fingerprint, same timestamp proof. */}
+      {status?.roll && <RollCard roll={status.roll} sealed={false} />}
     </div>
   );
 }

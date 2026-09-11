@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 440" width="700" height="440" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7078"/>
+    </marker>
+  </defs>
+  <rect width="700" height="440" fill="#ffffff"/>
+  <text x="676" y="28" text-anchor="end" font-size="12" fill="#9aa0a8">arrows: play passes counter-clockwise</text>
+
+  <g transform="translate(0,36)">
+    <!-- table -->
+    <rect x="282" y="147" width="96" height="96" rx="10" fill="#f4f5f7" stroke="#dfe2e6" stroke-width="1.5"/>
+    <text x="330" y="234" text-anchor="middle" font-size="12.5" fill="#b9bec5">table</text>
+
+    <!-- opposite (diagonal) links -->
+    <line x1="330" y1="278" x2="330" y2="112" stroke="#cdd2d8" stroke-width="1.6" stroke-dasharray="6 5"/>
+    <line x1="438" y1="195" x2="222" y2="195" stroke="#b3441d" stroke-width="1.8" stroke-dasharray="6 5"/>
+
+    <!-- turn-order arrows: E -> S -> W -> N -> E (counter-clockwise) -->
+    <line x1="360.9" y1="284.6" x2="439.1" y2="220.4" stroke="#6b7078" stroke-width="2" marker-end="url(#ar)"/>
+    <line x1="439.1" y1="169.6" x2="360.9" y2="105.4" stroke="#6b7078" stroke-width="2" marker-end="url(#ar)"/>
+    <line x1="299.1" y1="105.4" x2="220.9" y2="169.6" stroke="#6b7078" stroke-width="2" marker-end="url(#ar)"/>
+    <line x1="220.9" y1="220.4" x2="299.1" y2="284.6" stroke="#6b7078" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- seats -->
+    <circle cx="330" cy="310" r="32" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.8"/>
+    <text x="330" y="316" text-anchor="middle" font-size="18" font-weight="bold" fill="#3f4650">E</text>
+
+    <circle cx="470" cy="195" r="32" fill="#fdeee6" stroke="#b3441d" stroke-width="2.4"/>
+    <text x="470" y="201" text-anchor="middle" font-size="18" font-weight="bold" fill="#b3441d">S</text>
+
+    <circle cx="330" cy="80" r="32" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.8"/>
+    <text x="330" y="86" text-anchor="middle" font-size="18" font-weight="bold" fill="#3f4650">W</text>
+
+    <circle cx="190" cy="195" r="32" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.8"/>
+    <text x="190" y="201" text-anchor="middle" font-size="18" font-weight="bold" fill="#3f4650">N</text>
+
+    <!-- labels -->
+    <text x="514" y="190" font-size="14.5" font-weight="bold" fill="#b3441d">you</text>
+    <text x="514" y="210" font-size="12.5" fill="#6b7078">(the reference seat)</text>
+
+    <text x="330" y="370" text-anchor="middle" font-size="14" fill="#22252a">upper hand</text>
+    <text x="330" y="388" text-anchor="middle" font-size="12" fill="#6b7078">discards just before you</text>
+
+    <text x="330" y="30" text-anchor="middle" font-size="14" fill="#22252a">lower hand</text>
+    <text x="330" y="12" text-anchor="middle" font-size="12" fill="#6b7078">you discard just before them</text>
+
+    <text x="148" y="190" text-anchor="end" font-size="14" fill="#b3441d">opposite</text>
+    <text x="148" y="209" text-anchor="end" font-size="12" fill="#6b7078">across the table</text>
+  </g>
+</svg>

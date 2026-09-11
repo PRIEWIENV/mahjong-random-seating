@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const path = require('node:path');
 
 const { createServer, listenOn } = require('../server/server');
@@ -13,14 +14,15 @@ const { makeDataDir, fakeCiphertext, cleanup, ROOT } = require('./helpers');
 const QUIET = { info() {}, warn() {}, error() {} };
 
 async function boot(opts = {}) {
-  const fx = makeDataDir({ protocol: opts.protocol });
+  const fx = makeDataDir({ protocol: opts.protocol, runtime: opts.runtime });
   const cfg = load({ dataDir: fx.dataDir });
   cfg.root = fx.dir; // keep events/ out of the working tree
   const store = new Store(':memory:');
   const mirrored = [];
   const mirror = { enabled: false, enqueue: (p, c) => mirrored.push({ p, c }), flush: async () => {}, drain: async () => true };
-  const pantheon = new StubPantheon({
+  const pantheon = opts.pantheon || new StubPantheon({
     roster: fx.roster,
+    eventTitle: opts.eventTitle,
     // A genuinely valid Pantheon account that is NOT in the event — UI-SPEC §3's
     // second failure message only exists if the fake can represent this case.
     extraAccounts: [{ person_id: 9999, auth_token: 'token-9999' }],
@@ -31,6 +33,7 @@ async function boot(opts = {}) {
     now: opts.now, rateLimit: opts.rateLimit, trustProxy: opts.trustProxy,
     drand: { latest: async () => ({ round: 123 }) },
     drandPollMs: 0,
+    eventTitlePollMs: opts.eventTitlePollMs,
     log: opts.log || QUIET,
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -285,6 +288,79 @@ test('/api/status reports who submitted, never what', async () => {
   for (const leak of ['ciphertext', 'user_input"', 'client_nonce', 'AGE ENCRYPTED', 'person_id']) {
     assert.ok(!raw.includes(leak), `/api/status leaked ${leak}`);
   }
+  await s.close();
+});
+
+/**
+ * UI-SPEC §5 asks the waiting view to show real state. "9 of 12" is real but
+ * unverifiable: it is our count of our own rows. The digest of each ciphertext is what
+ * a player can keep and check afterwards, and it discloses nothing — the ciphertext it
+ * hashes is already public the moment it arrives (PROTOCOL.md §5), and only the beacon
+ * opens it. So this test pins both halves: the digest is right, and the thing it is a
+ * digest OF never appears.
+ */
+test('the status carries a fingerprint of each sealed envelope, never its contents', async () => {
+  const s = await boot();
+  const { cookie } = await s.signIn(1002);
+  const ciphertext = ct(s.cfg.protocol);
+  await s.submit(cookie, ciphertext);
+
+  const { body } = await s.get('/api/status');
+  assert.equal(body.submissions.length, 1);
+  const [only] = body.submissions;
+  assert.equal(only.local_id, 2);
+  assert.equal(only.digest, crypto.createHash('sha256').update(ciphertext, 'utf8').digest('hex'));
+  assert.ok(Date.parse(only.received_at) > 0, 'received_at is a real instant');
+  assert.ok(!JSON.stringify(body).includes('AGE ENCRYPTED'), 'the status leaked a ciphertext');
+  await s.close();
+});
+
+test('every player who has not submitted is absent from the fingerprints', async () => {
+  const s = await boot();
+  for (const pid of [1001, 1003, 1007]) {
+    const { cookie } = await s.signIn(pid);
+    await s.submit(cookie, ct(s.cfg.protocol));
+  }
+  const { body } = await s.get('/api/status');
+  assert.deepEqual(body.submissions.map((x) => x.local_id), [1, 3, 7]);
+  assert.equal(new Set(body.submissions.map((x) => x.digest)).size, 3, 'digests are distinct');
+  await s.close();
+});
+
+/**
+ * The event's name is a label. It is fetched rather than frozen precisely because no
+ * value it can take changes anything, and the page has to work when Pantheon is down —
+ * which is the state every other test here leaves it in.
+ */
+test('the event name is read from Pantheon and served to the page', async () => {
+  const s = await boot({ eventTitle: '2026 春季赛' });
+  // The fetch is fired at construction and is a promise; give it the event loop.
+  for (let i = 0; i < 20 && (await s.get('/api/status')).body.event_title == null; i += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const { body } = await s.get('/api/status');
+  assert.equal(body.event_title, '2026 春季赛');
+  await s.close();
+});
+
+test('a Pantheon that answers nothing leaves the page its generic title', async () => {
+  const s = await boot();
+  const { body } = await s.get('/api/status');
+  assert.equal(body.event_title, null);
+  await s.close();
+});
+
+test('an event name configured in runtime.json is not asked of Pantheon at all', async () => {
+  const s = await boot({
+    eventTitle: 'what Mimir would say',
+    runtime: { pantheon: { event_title: 'what the operator typed' } },
+  });
+  const { body } = await s.get('/api/status');
+  assert.equal(body.event_title, 'what the operator typed');
+  assert.ok(
+    !s.pantheon.calls.some(([m]) => m === 'getEventTitle'),
+    'a configured title should not send a request'
+  );
   await s.close();
 });
 

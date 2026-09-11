@@ -138,7 +138,8 @@ The split is not tidiness. Freezing something that fails the test makes the run 
     "mimir_base_url": "http://localhost:4002",
     "twirp_path_template": "/twirp/{service}/{method}",
     "frey_service": "frey.Frey",
-    "mimir_service": "mimir.Mimir"
+    "mimir_service": "mimir.Mimir",
+    "event_title": null
   },
   "ui":     { "status_poll_interval_ms": 15000 },
   "server": { "sse_heartbeat_ms": 25000, "session_ttl_days": 30, "rate_limit_per_minute": 30,
@@ -151,6 +152,8 @@ The split is not tidiness. Freezing something that fails the test makes the run 
 The file is optional and so is every key in it; anything absent falls back to the defaults shown, which are the ones compiled into `server/runtime.js`. None of this is a promise to players, and all of it may be changed mid-window without voiding anything — that is the whole point of it being here.
 
 `drand.api` is where beacons are fetched from. `drand.mirrors` is the set the server cross-checks the answer against before it will draw: if two mirrors disagree about the signature for a round, the job stops rather than picking one (§9). Neither field can influence the result, because the chain is pinned by the two frozen fields above.
+
+`pantheon.event_title` is what the page calls this draw. Left null it is read from Mimir at boot and re-read until Mimir answers; set, it wins, which is what a deployment whose server cannot reach Mimir needs. It is on this side of the boundary because it is a label: no value it can take reaches the seed, the roster or the round, and a draw whose title is wrong is a draw with a typo, not a draw that has been steered.
 
 Pantheon admin credentials for the sync are **not** in this file and never in the repository. They are environment variables (`deploy/README.md` §2).
 
@@ -341,6 +344,8 @@ Nothing cryptographic. The binding has to come from the record of arrival being 
 **An interval.** `submission_cutoff_utc` is `reveal_gap_seconds` earlier than `target_round_utc`, ten minutes by default (§4.1). The two used to be the same instant, which left nowhere to stand: any record of the roll was made at the moment the key became available, so it could not show which came first. The interval is the window in which the roll is settled and the outcome is still unknowable. `config.js` refuses a `protocol.json` where the three fields disagree, and refuses an interval under a minute.
 
 **A timestamp the organiser cannot move.** The roll taken at the cutoff is anchored with OpenTimestamps during that interval. An anchor proves the set existed before a Bitcoin block, which is exactly the claim a forged twelfth submission cannot satisfy: choosing it requires the key, and the key does not exist yet.
+
+The player-facing UI calls this file *the sealed ciphertexts* rather than *the roll* — same file, `events/snapshot.json`, and the same digest. "Roll" is this document's word for it and is not a word a player has to learn in order to compare a string with eleven other people.
 
 **A single published value.** An anchor alone is not enough, because anchoring is cheap and nothing stops an organiser anchoring many candidate rolls during the interval and revealing whichever one suits afterwards. What rules that out is publishing the roll's digest to the players while the interval is open. Twelve people who can compare one short string among themselves are a harder thing to lie to than any single notary, because lying requires showing different people different values and every one of them can check.
 

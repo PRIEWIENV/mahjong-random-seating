@@ -6,7 +6,7 @@ Starting point for implementation. The combinatorial work is **finished and prov
 
 Twelve players are seated across eleven rounds at three tables. The seating *template* — who sits with whom, in which wind, at which table — is fixed and provably optimal. Which player gets which position in that template is decided by a draw that all twelve contribute to and that nobody, including whoever runs the server, can predict or steer.
 
-Start with [`docs/seating-design.md`](docs/seating-design.md): it explains the whole thing from first principles, with figures, and is also the page meant to be published for the players themselves.
+Start with [`docs/seating-design.md`](docs/seating-design.md): it explains the whole thing from first principles, with figures. It is not only documentation — the build renders it, and its Chinese translation, into the app itself, so the page a player opens from the header is the document in this repository rather than a summary of it that can drift away from it.
 
 ## Status
 
@@ -184,18 +184,25 @@ server/
 client/
   App.jsx                    # the stage machine (UI-SPEC §2)
   stages/                    # signin, submit, submitted, waiting, revealing, void, result
+  waiting/                   # the timeline and the twelve envelopes
   explorer/                  # the seat plan: grid, player lens, round lens
+  Doc.jsx                    # the explanation page, from docs/seating-design*.md
+  RollCard.jsx               # the sealed ciphertexts, their digest and its proof
   seal.js                    # builds and seals {user_input, client_nonce, client_timestamp}
+  generated/                 # design-doc.js, written by the build — not committed
 public/
   app.js  app.css            # the built bundle — committed, part of the freeze
+  figures/                   # copied from docs/figures by the build; committed, not frozen
 docs/
-  seating-design.md          # the explainer page (publishable to players)
+  seating-design.md          # the explainer, rendered into the app (UI-SPEC §10)
+  seating-design.zh.md       # the same document in Chinese; the tests catch drift
   PROTOCOL.md  PANTHEON-INTEGRATION.md  UI-SPEC.md  RUNBOOK.md
   IMPLEMENTATION_NOTES.md    # decisions, deviations, and what is not yet verified
 tools/
   verify_template.py         # re-derives every invariant of the template
   verify_contribution.py     # second implementation of the byte encoding, in another language
   build-client.js            # builds and hash-pins the browser bundle
+  md-to-page.js              # renders seating-design*.md into the explanation page
   verify-template.js         # the same invariants as the Python one, for the freeze path
   pick-round.js              # target_round and cutoff, kept consistent
   new-round.js               # after a void: verify the archive, then open the next attempt

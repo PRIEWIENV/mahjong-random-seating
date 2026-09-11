@@ -16,7 +16,10 @@ import { useText } from '../i18n';
 const TEXT = {
   zh: {
     title: '座位抽签',
+    branded: (event) => `${event}座位抽签`,
     lede: '用你的 Pantheon 账号登录，参加本次座位抽签。',
+    show: '显示密码',
+    hide: '隐藏密码',
     devMode: '开发模式',
     devHint: '本机没有可连的 Pantheon 实例，所以走的是开发替代路径；正式部署时这里是邮箱和密码。',
     email: '邮箱',
@@ -32,7 +35,10 @@ const TEXT = {
   },
   en: {
     title: 'Seating draw',
+    branded: (event) => `${event} seating draw`,
     lede: 'Sign in with your Pantheon account to take part in the draw.',
+    show: 'Show password',
+    hide: 'Hide password',
     devMode: 'dev mode',
     devHint: 'No Pantheon instance is reachable here, so this is the development stand-in. A real deployment asks for an email and password.',
     email: 'Email',
@@ -48,6 +54,18 @@ const TEXT = {
   },
 };
 
+/** An eye, struck through while the password is visible: the icon shows what tapping
+ *  it will do next, which is the convention every password field on a phone uses. */
+function Eye({ off }) {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" className="eye">
+      <path d="M1.6 12S5.6 5.5 12 5.5 22.4 12 22.4 12 18.4 18.5 12 18.5 1.6 12 1.6 12Z" />
+      <circle cx="12" cy="12" r="3.1" />
+      {off && <path d="M4 20 20 4" className="eye-slash" />}
+    </svg>
+  );
+}
+
 export default function SignIn({ status, onSignedIn }) {
   const t = useText(TEXT);
   const [email, setEmail] = useState('');
@@ -55,6 +73,10 @@ export default function SignIn({ status, onSignedIn }) {
   const [personId, setPersonId] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null); // {kind: 'error'|'info', text}
+  // Off by default, because a shoulder is a likelier threat than a typo on a phone in a
+  // clubhouse. On by one tap, because the alternative is a player mistyping a password
+  // three times and concluding Pantheon has forgotten them.
+  const [showPassword, setShowPassword] = useState(false);
 
   const stub = status?.auth_mode === 'stub';
 
@@ -107,7 +129,7 @@ export default function SignIn({ status, onSignedIn }) {
   return (
     <div className="stage centre">
       <form className="card signin" onSubmit={onSubmit}>
-        <h1>{t.title}</h1>
+        <h1>{status?.event_title ? t.branded(status.event_title) : t.title}</h1>
         <p className="lede">{t.lede}</p>
 
         {stub ? (
@@ -123,8 +145,21 @@ export default function SignIn({ status, onSignedIn }) {
             <input id="email" type="email" autoComplete="username" value={email}
                    onChange={(e) => setEmail(e.target.value)} required />
             <label htmlFor="pw">{t.password}</label>
-            <input id="pw" type="password" autoComplete="current-password" value={password}
-                   onChange={(e) => setPassword(e.target.value)} required />
+            <div className="pw-field">
+              <input id="pw" type={showPassword ? 'text' : 'password'}
+                     autoComplete="current-password" value={password}
+                     onChange={(e) => setPassword(e.target.value)} required />
+              <button
+                type="button"
+                className="pw-reveal"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-pressed={showPassword}
+                aria-label={showPassword ? t.hide : t.show}
+                title={showPassword ? t.hide : t.show}
+              >
+                <Eye off={showPassword} />
+              </button>
+            </div>
           </>
         )}
 

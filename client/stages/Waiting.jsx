@@ -1,5 +1,8 @@
-import { useEffect, useState } from 'react';
-import { useLang, useText, formatDateTime, formatTime } from '../i18n';
+import { useLang, useText, formatTime } from '../i18n';
+import { useTick, split } from '../clock';
+import RollCard from '../RollCard';
+import Timeline from '../waiting/Timeline';
+import Envelopes from '../waiting/Envelopes';
 
 /**
  * The waiting stage (UI-SPEC.md §5).
@@ -15,19 +18,6 @@ import { useLang, useText, formatDateTime, formatTime } from '../i18n';
  * figure that sits still for half a minute is indistinguishable from a broken page.
  */
 
-function useTick(ms = 1000) {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => force((n) => n + 1), ms);
-    return () => clearInterval(t);
-  }, [ms]);
-}
-
-function split(msLeft) {
-  const s = Math.max(0, Math.floor(msLeft / 1000));
-  return { d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600), m: Math.floor((s % 3600) / 60), s: s % 60 };
-}
-
 const TEXT = {
   zh: {
     until: '距离开奖',
@@ -37,36 +27,18 @@ const TEXT = {
     stuckLate: (mins) => `目标轮次的信标已经在 ${mins} 分钟前产生，但开奖仍未进行。`,
     stuckSafe: '这不会改变结果。参与名单在截止时就已冻结，信标也已公开，谁坐哪里此刻其实已经定下，只是还没有人把它算出来。',
     stuckWho: '请联系组织者。',
-    sealedAt: '封存截止',
-    drawAt: '开奖',
     countdown: '倒计时',
     d: '天', h: '时', m: '分', s: '秒',
-    round: (n) => `drand 第 ${n} 轮`,
     yours: '你的数字已封存，不需要再做什么。',
-    sealedOf: (n, total) => `${n} / ${total} 已封存`,
-    quorumMet: '已达门槛',
-    quorumShort: (n) => `还差 ${n} 位`,
-    quorumMark: (n) => `门槛 ${n}`,
-    whoNotWhat: ['这里只显示', '谁', '已经封存，不显示', '封存了什么', '——那些内容在开奖前谁也读不到。'],
+    missedTitle: '提交已截止',
+    missedBody: '你没有在截止之前封存数字，所以这一轮你不参与抽签。这不影响其他人，抽签会照常进行。',
+    missedWhy: '截止时间是抽签开始之前就定好的。事后补交会让「在任何人提交的那一刻，其余每一份都还封着」这句话不再成立——而整个方案就靠这句话。',
     beacon: 'drand 信标',
     live: '运行中',
     down: '暂时联系不上',
-    current: '当前轮次',
-    awaiting: '等待轮次',
     lastSeen: '最近确认',
     stale: '信标暂时联系不上。这只是延迟，不是安全问题——密文和轮次都已固定，结果早已确定，信标恢复后会自动继续。',
     polling: (s) => `实时连接中断，正在每 ${s} 秒刷新一次…`,
-    rollTitle: '名单已封存，开奖尚未开始',
-    rollLede: (n) => `截止时收到 ${n} 份密文。下面是这份名单的指纹：`,
-    rollAsk: '把它发到群里，和别人核对一遍。' ,
-    rollWhy: '现在还没有人能解开任何一份密文——解密要等的那一轮信标尚未产生。所以此刻公布名单，等于承诺了参与者就是这些人，而且承诺时谁也不知道换个人会带来什么结果。十二个人看到的指纹必须一样。',
-    rollCopy: '复制',
-    rollCopied: '已复制',
-    rollFile: '下载名单',
-    rollProof: '下载时间戳证明',
-    rollAnchored: (n) => `已由 ${n} 个独立日历服务器做了区块链时间戳存证。`,
-    rollNotAnchored: '外部时间戳存证这次没能完成，指纹本身仍然有效——但请务必和别人核对。',
-    rollHow: '验证方法：ots verify snapshot.json.ots，或用任意工具算 snapshot.json 的 sha256。',
   },
   en: {
     until: 'Until the draw',
@@ -76,77 +48,20 @@ const TEXT = {
     stuckLate: (mins) => `The beacon for the target round arrived ${mins} minutes ago and the draw still has not run.`,
     stuckSafe: 'This cannot change the outcome. The list of participants was frozen at the cutoff and the beacon is public, so who sits where is already decided. Nobody has computed it yet.',
     stuckWho: 'Please contact the organiser.',
-    sealedAt: 'Sealed at',
-    drawAt: 'Draw',
     countdown: 'Countdown',
     d: 'd', h: 'h', m: 'm', s: 's',
-    round: (n) => `drand round ${n}`,
     yours: 'Your number is sealed. There is nothing more for you to do.',
-    sealedOf: (n, total) => `${n} / ${total} sealed`,
-    quorumMet: 'Quorum met',
-    quorumShort: (n) => `${n} more needed`,
-    quorumMark: (n) => `quorum ${n}`,
-    whoNotWhat: ['This shows ', 'who', ' has sealed a number, never ', 'what they sealed', '. Nobody can read that before the draw.'],
+    missedTitle: 'Submissions are closed',
+    missedBody: 'You did not seal a number before the cutoff, so you are not in this draw. It changes nothing for anyone else; the draw goes ahead.',
+    missedWhy: 'The cutoff was fixed before the draw opened. Accepting a late number would break the one sentence the whole scheme rests on: that nobody can act after seeing how things stand.',
     beacon: 'drand beacon',
     live: 'Live',
     down: 'Not reachable',
-    current: 'Current round',
-    awaiting: 'Waiting for round',
     lastSeen: 'Last seen',
     stale: 'The beacon is not reachable right now. That is a delay, not a safety problem: the ciphertexts and the round are already fixed, so the outcome is already determined. It resumes on its own.',
     polling: (s) => `Live connection dropped. Refreshing every ${s} seconds…`,
-    rollTitle: 'The roll is closed; the draw has not happened',
-    rollLede: (n) => `${n} ciphertexts were held at the cutoff. This is the fingerprint of that list:`,
-    rollAsk: 'Post it to the group chat and check it against everybody else.',
-    rollWhy: 'Nobody can open any of those ciphertexts yet: the beacon that unlocks them has not been produced. So publishing the list now commits to who took part, at a moment when nobody knows what swapping someone would do to the outcome. All twelve of you should see the same fingerprint.',
-    rollCopy: 'Copy',
-    rollCopied: 'Copied',
-    rollFile: 'Download the roll',
-    rollProof: 'Download the timestamp proof',
-    rollAnchored: (n) => `Timestamped into Bitcoin by ${n} independent calendars.`,
-    rollNotAnchored: 'The external timestamp did not go through this time. The fingerprint still holds, so comparing it with others matters more than usual.',
-    rollHow: 'To check: ots verify snapshot.json.ots, or take the sha256 of snapshot.json with any tool you like.',
   },
 };
-
-/**
- * The one thing a player is asked to do that is not submitting: look at a short
- * string and check it against everybody else's.
- *
- * An OpenTimestamps anchor proves the roll existed before a Bitcoin block, which is
- * what a forged late submission cannot satisfy. It does not prove it was the only
- * roll anchored — anchoring is cheap. Twelve people agreeing on one value does.
- */
-function RollCard({ roll, t }) {
-  const [copied, setCopied] = useState(false);
-  const short = (roll.digest || '').slice(0, 16);
-  const copy = () => {
-    navigator.clipboard?.writeText(roll.digest).then(
-      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
-      () => {}
-    );
-  };
-  return (
-    <section className="card roll-card">
-      <h2>{t.rollTitle}</h2>
-      <p className="lede">{t.rollLede(roll.submitted_count)}</p>
-      <p className="roll-digest">
-        <code title={roll.digest}>{short}</code>
-        <button className="linkish" onClick={copy}>{copied ? t.rollCopied : t.rollCopy}</button>
-      </p>
-      <p className="roll-ask">{t.rollAsk}</p>
-      <p className="hint">{t.rollWhy}</p>
-      <p className={roll.anchored ? 'note ok' : 'note warn'}>
-        {roll.anchored ? t.rollAnchored(roll.calendars.length) : t.rollNotAnchored}
-      </p>
-      <p className="roll-files">
-        <a href="/snapshot.json" download>{t.rollFile}</a>
-        {roll.anchored && <a href="/snapshot.json.ots" download>{t.rollProof}</a>}
-      </p>
-      <p className="fineprint">{t.rollHow}</p>
-    </section>
-  );
-}
 
 export default function Waiting({ status, me, serverNow, connection }) {
   useTick(1000);
@@ -154,6 +69,7 @@ export default function Waiting({ status, me, serverNow, connection }) {
   const t = useText(TEXT);
   if (!status) return null;
 
+  const now = serverNow();
   // UI-SPEC §5 anchors the countdown on the target round, not on the cutoff. The two
   // are reveal_gap_seconds apart (PROTOCOL.md §9), and the interval between them is not
   // dead time: the roll of who submitted is published in it, while the beacon that
@@ -162,29 +78,29 @@ export default function Waiting({ status, me, serverNow, connection }) {
   const cutoffAt = Date.parse(status.cutoff_utc);
   const roundAt = Date.parse(status.target_round_utc);
   const drawAt = Number.isFinite(roundAt) ? roundAt : cutoffAt;
-  const left = drawAt - serverNow();
+  const left = drawAt - now;
   const { d, h, m, s } = split(left);
   const elapsed = left <= 0;
-  const sealed = serverNow() >= cutoffAt;
+  const sealed = now >= cutoffAt;
   // The server says whether the draw is merely pending or actually late; this page does
   // not guess, because the answer depends on a schedule it cannot see.
   const overdue = Boolean(status.draw?.overdue);
   const lateMinutes = Math.floor((status.draw?.seconds_late || 0) / 60);
-  const met = status.submitted_count >= status.quorum;
-  const pct = (status.submitted_count / status.total_slots) * 100;
-  const quorumPct = (status.quorum / status.total_slots) * 100;
-  const submitted = new Set(status.submitted_local_ids || []);
+  // A player who is on this stage without having submitted, after the cutoff, has
+  // missed it. Before the cutoff they would be on `submit` instead, so this is not a
+  // state anyone can be shown by mistake.
+  const missed = sealed && me && !me.submitted;
   // The real cadence, not a number typed into a sentence: it is served in the status
   // and can be changed without rebuilding this bundle.
   const pollSeconds = Math.round((status.status_poll_interval_ms || 5000) / 1000);
   // Shown only while it means something: after the roll is taken and before the
   // beacon that opens the ciphertexts exists (PROTOCOL.md §9). Once the draw has
-  // happened the fingerprint is still true but no longer a commitment to anything,
-  // and the result page is where people should be looking.
+  // happened the same card reappears on the result stage, where it is evidence rather
+  // than a commitment.
   const roll = sealed && status.phase === 'awaiting_round' ? status.roll : null;
 
   return (
-    <div className="stage waiting">
+    <div className={missed ? 'stage waiting missed' : 'stage waiting'}>
       <section className="countdown-block">
         <p className="eyebrow">{t.until}</p>
         {elapsed && overdue ? (
@@ -199,11 +115,6 @@ export default function Waiting({ status, me, serverNow, connection }) {
             <span className="cd-unit"><b>{String(s).padStart(2, '0')}</b><i>{t.s}</i></span>
           </div>
         )}
-        <p className="hint">
-          {t.sealedAt} {formatDateTime(status.cutoff_utc, lang)}
-          {status.target_round_utc && <> · {t.drawAt} {formatDateTime(status.target_round_utc, lang)}</>}
-          {' · '}{t.round(status.target_round)}
-        </p>
         {elapsed && !overdue && <p className="note">{t.drawingHint}</p>}
         {/* Not an error message so much as a correction: the page has been saying
             "Drawing" and nothing is drawing. Say what is actually missing, and say in
@@ -219,35 +130,20 @@ export default function Waiting({ status, me, serverNow, connection }) {
         {me?.submitted && <p className="note ok">{t.yours}</p>}
       </section>
 
-      {roll && <RollCard roll={roll} t={t} />}
+      {/* The one thing this player needs to know before anything else on the page. */}
+      {missed && (
+        <section className="card closed-card" role="status">
+          <h2>{t.missedTitle}</h2>
+          <p>{t.missedBody}</p>
+          <p className="hint">{t.missedWhy}</p>
+        </section>
+      )}
 
-      <section className="card tally">
-        <div className="tally-head">
-          <h2>{t.sealedOf(status.submitted_count, status.total_slots)}</h2>
-          <span className={met ? 'pill ok' : 'pill warn'}>
-            {met ? t.quorumMet : t.quorumShort(status.quorum - status.submitted_count)}
-          </span>
-        </div>
+      <Timeline status={status} now={now} />
 
-        <div className="track" role="img" aria-label={t.sealedOf(status.submitted_count, status.total_slots)}>
-          <div className="track-fill" style={{ width: `${pct}%` }} />
-          <div className="track-quorum" style={{ left: `${quorumPct}%` }} title={t.quorumMark(status.quorum)} />
-        </div>
+      {roll && <RollCard roll={roll} sealed />}
 
-        {/* Who has submitted is public; what they submitted is not. §9 asks the UI to
-            make that distinction obvious in words, not just by omission. */}
-        <ul className="chips">
-          {(status.players || []).map((p) => (
-            <li key={p.local_id} className={submitted.has(p.local_id) ? 'chip sealed' : 'chip'}>
-              <span className="dot" />{p.title}
-            </li>
-          ))}
-        </ul>
-        <p className="hint">
-          {t.whoNotWhat[0]}<strong>{t.whoNotWhat[1]}</strong>{t.whoNotWhat[2]}
-          <strong>{t.whoNotWhat[3]}</strong>{t.whoNotWhat[4]}
-        </p>
-      </section>
+      <Envelopes status={status} me={me} closed={sealed} />
 
       <section className="card beacon">
         <div className="beacon-head">
@@ -257,8 +153,6 @@ export default function Waiting({ status, me, serverNow, connection }) {
           </span>
         </div>
         <dl className="facts">
-          <dt>{t.current}</dt><dd>{status.drand?.latest_round ?? '—'}</dd>
-          <dt>{t.awaiting}</dt><dd>{status.target_round}</dd>
           <dt>{t.lastSeen}</dt>
           <dd>{status.drand?.last_seen_utc ? formatTime(status.drand.last_seen_utc, lang) : '—'}</dd>
         </dl>

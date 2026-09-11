@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../api';
 import { sealSubmission, rollNumber } from '../seal';
-import { useText } from '../i18n';
+import { useLang, useText } from '../i18n';
+import { useTick, split, formatExact } from '../clock';
 
 /**
  * The submission stage (UI-SPEC.md §4) — the focal element of the whole app.
@@ -19,6 +20,12 @@ const TEXT = {
   zh: {
     greeting: (name) => `你好，${name}`,
     title: '选一个数字',
+    deadline: '封存截止',
+    drawAt: '开奖',
+    left: (d, h, m, s) => (d > 0 ? `还剩 ${d} 天 ${h} 小时` : h > 0 ? `还剩 ${h} 小时 ${m} 分` : `还剩 ${m} 分 ${s} 秒`),
+    closingSoon: '快要截止了',
+    roundIs: (n) => `drand 第 ${n.toLocaleString()} 轮`,
+    zoneNote: '上面的时间按你这台设备的时区显示，对应的世界时是：',
     retry: (n, had, quorum) =>
       `这是第 ${n} 次开奖。上一次截止时只有 ${had} 位提交，未达到 ${quorum} 位的门槛，按事先定好的规则作废了。`,
     retryLink: '上一次的全部密文和参数都在这里',
@@ -37,6 +44,12 @@ const TEXT = {
   en: {
     greeting: (name) => `Hello, ${name}`,
     title: 'Pick a number',
+    deadline: 'Sealed at',
+    drawAt: 'Drawn at',
+    left: (d, h, m, s) => (d > 0 ? `${d}d ${h}h left` : h > 0 ? `${h}h ${m}m left` : `${m}m ${s}s left`),
+    closingSoon: 'Closing soon',
+    roundIs: (n) => `drand round ${n.toLocaleString()}`,
+    zoneNote: 'Shown in this device’s timezone. The same instants in UTC:',
     retry: (n, had, quorum) =>
       `This is draw attempt ${n}. Last time only ${had} numbers were sealed by the cutoff, short of the ${quorum} required, so that round was voided under the rule set before it started.`,
     retryLink: 'Every ciphertext and parameter from that attempt is here',
@@ -54,8 +67,10 @@ const TEXT = {
   },
 };
 
-export default function Submit({ protocol, status, me, onSubmitted }) {
+export default function Submit({ protocol, status, me, serverNow, onSubmitted }) {
   const t = useText(TEXT);
+  const lang = useLang();
+  useTick(1000);
   const [value, setValue] = useState('');
   const [phase, setPhase] = useState('idle'); // idle | rolling | sealing | posting
   const [error, setError] = useState(null);
@@ -68,6 +83,19 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
   const max = status?.user_input_max;
   const last = status?.previous_rounds?.[status.previous_rounds.length - 1];
   const busy = phase === 'sealing' || phase === 'posting';
+
+  // §4 asks for one focal element, so this is a band and not a panel: the deadline is
+  // the thing a player most needs that is not the number field itself, and up to now it
+  // appeared nowhere on this screen at all. Both instants are given, because they are
+  // different instants — submissions close, and reveal_gap_seconds later the beacon
+  // that opens them exists (PROTOCOL.md §9).
+  const now = typeof serverNow === 'function' ? serverNow() : Date.now();
+  const cutoffMs = Date.parse(status?.cutoff_utc);
+  const msLeft = Number.isFinite(cutoffMs) ? cutoffMs - now : null;
+  const cd = split(msLeft ?? 0);
+  const urgent = msLeft != null && msLeft < 30 * 60_000;
+  const cutoffExact = status?.cutoff_utc ? formatExact(status.cutoff_utc, lang) : null;
+  const drawExact = status?.target_round_utc ? formatExact(status.target_round_utc, lang) : null;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -127,6 +155,38 @@ export default function Submit({ protocol, status, me, onSubmitted }) {
       <form className="card submit" onSubmit={onSubmit}>
         <p className="eyebrow">{t.greeting(me?.title || '')}</p>
         <h1>{t.title}</h1>
+
+        {cutoffExact && (
+          <div className={urgent ? 'deadline-band urgent' : 'deadline-band'}>
+            <div className="dl-row">
+              <span className="dl-name">{t.deadline}</span>
+              <span className="dl-when">
+                {cutoffExact.local} <em>{cutoffExact.offset}</em>
+              </span>
+              {msLeft != null && msLeft > 0 && (
+                <span className="dl-left">
+                  {urgent && <b>{t.closingSoon}</b>}
+                  {t.left(cd.d, cd.h, cd.m, cd.s)}
+                </span>
+              )}
+            </div>
+            {drawExact && (
+              <div className="dl-row quiet">
+                <span className="dl-name">{t.drawAt}</span>
+                <span className="dl-when">
+                  {drawExact.local} <em>{drawExact.offset}</em>
+                </span>
+                <span className="dl-left">{t.roundIs(status.target_round)}</span>
+              </div>
+            )}
+            <p className="dl-utc">
+              {t.zoneNote}
+              {' '}
+              <code>{cutoffExact.utc}</code>
+              {drawExact && <> · <code>{drawExact.utc}</code></>}
+            </p>
+          </div>
+        )}
 
         {/*
           §8: a run can take more than one attempt. Someone who was told the last round

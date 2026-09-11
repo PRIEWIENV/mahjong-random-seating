@@ -23,6 +23,10 @@ data/runtime.json
 
 # Build and runtime artefacts
 node_modules/
+# docs/seating-design{,.zh}.md, rendered into a module the client imports. Generated on
+# every build from the markdown, which IS committed, so there is one source and it is
+# the one an auditor reads. See tools/build-client.js.
+client/generated/
 # SQLite state and scratch output. Losing var/ loses nothing that matters: every
 # ciphertext is also mirrored into the repository as it arrives.
 var/
@@ -35,3 +39,7 @@ independent.json
 # Note: public/app.js, public/app.css and public/app.js.sha256 MUST be committed. The
 # submission stage is where plaintext numbers exist, so the code running there is part
 # of the freeze.
+#
+# public/figures/ is copied from docs/figures/ by the build and is also committed, but
+# it is NOT part of the freeze digest: they are illustrations on the explanation page,
+# and no byte of them reaches the code that seals a number.

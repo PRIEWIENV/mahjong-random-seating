@@ -746,12 +746,121 @@ Keeping both is deliberate. An exclusion is irreversible and published, so the b
 producing one has to be a failure that cannot be a timing artefact — and that bar should
 not rest on one arithmetic identity holding between two codebases.
 
+## 6k. The waiting screen was honest and unverifiable
+
+Eleven changes to the player-facing UI, and four of them turned on the same distinction.
+
+### A count is our word for it; a fingerprint is not
+
+The waiting screen said "9 of 12 sealed" and drew nine filled chips. Every part of that
+is true and none of it is checkable: it is this server's count of this server's own rows,
+rendered by this server's own bundle. A player watching it has been asked to trust
+exactly the party the rest of the protocol is built to avoid trusting.
+
+So each envelope now carries the SHA-256 of the ciphertext being held, short by default
+and stretching to its full length on hover or tap.
+
+The obvious objection is UI-SPEC §9: *what each player submitted is never exposed before
+the reveal.* It does not apply, and the reason is worth writing down because the rule
+reads as if it does. The ciphertext is **already public** the moment it arrives — §5 has
+it mirrored to the repository with a commit time, precisely so the organiser cannot drop
+an inconvenient one after seeing the outcome. A digest of a published value discloses
+strictly less than the value. Nothing here opens anything early; only the beacon does
+that, and it does not exist yet.
+
+What was actually being protected by omitting the digests was nobody, and the cost was a
+player with nothing to check. The rule's real content is *the plaintext number*, and that
+is untouched: §9's line has been restated in those terms rather than widened or narrowed.
+
+### An empty slot changes meaning at the cutoff
+
+Before it, an unfilled envelope means "not yet". After it, the same envelope means
+"never". They rendered identically — an outlined chip — and they are opposite facts, one
+of which is still actionable. The cards now say which, and a player who is themselves
+unsealed at that point gets the page desaturated and a card of its own: closed, you are
+not in this draw, it changes nothing for anyone else, and why a late number cannot be
+taken. That last sentence matters more than it looks: without it the page reads as a
+punishment rather than as the thing that makes everybody else's submission safe.
+
+Below quorum the tally bar is amber rather than green, for the same reason. At that count
+the round would be void if the cutoff arrived now. A green bar saying so reads as "fine".
+
+### A timeline that does not invent its own beginning
+
+The two instants and the round used to be a line of small print: *sealed at 20:30 · draw
+at 20:40 · drand round 8,234,500*. Every fact correct, the relationship between them
+invisible. They are a sequence, ten minutes apart, one of them days away, and the round is
+what ties both to something nobody here operates.
+
+Drawing that as a track ran straight into a small honesty problem. The right-hand segment
+has a real duration — `reveal_gap_seconds` — so it can be drawn to scale. The left-hand
+one has no origin at all: submissions may have opened a fortnight ago, and the server does
+not record when. Giving the bar a start date would have been the same lie as an invented
+progress bar, one step subtler. So the lead-in is drawn as one reveal-gap, and while now
+is earlier than that the marker pins to the edge and the label says *opened earlier*.
+
+### The evidence was split into three paragraphs
+
+The roll card asserted "timestamped into Bitcoin by four independent calendars" in one
+paragraph, offered two downloads in another, and named `ots verify` in a third. The
+reader had to work out that the second is how you check the first, and then that the third
+requires installing a Python package. A verification step that needs a package manager is
+a verification step that does not happen.
+
+The three are now one block, and the check is a web page you drop two files onto
+(opentimestamps.org, Verify). The card also appears on the result stage, where it had been
+withdrawn at exactly the moment it became checkable — before the draw the digest is a
+commitment, after it the same file is what a verifier recomputes from, and there is no
+reading under which it should be available for only the first of those.
+
+And it is no longer called "the roll" to players. That is this document's word.
+`events/snapshot.json` is its name on disk; what a player reads is *the sealed
+ciphertexts*, which is what it is.
+
+### The explanation page is generated, not written twice
+
+`docs/seating-design.md` explains the whole scheme from first principles and was
+reachable only by finding this repository. It is now a page in the app, on a two-entry
+menu in the header, from every screen including sign-in — a player deciding whether to
+trust this before typing a number should not have to leave to find out.
+
+Generated at build time rather than re-written in JSX, because the page a player reads
+and the document an auditor reviews have to be the same text. A copy drifts, and the
+paragraph that drifts is the one explaining why the draw cannot be steered.
+
+That needed a markdown renderer, and pulling one in would have put a hundred transitive
+dependencies inside the bundle that seals a number. `tools/md-to-page.js` handles what
+this document uses and **throws on anything else** rather than dropping it — the failure
+mode of a lenient renderer is a missing paragraph nobody notices. The two mermaid
+diagrams are both simple chains, so they are parsed into their nodes and drawn as boxes
+and arrows; a diagram that turns out not to be a chain is a build error.
+
+The Chinese translation is a second document, not a fallback to English. The app has said
+since it was written that a player who does not read Chinese gets English on every screen;
+159 lines of English combinatorics is the same gap pointing the other way, on the one page
+whose job is to earn trust. `test/md-to-page.test.js` fails if either version gains or
+loses a section, a figure or a diagram.
+
+### The rest
+
+The event's name, read from Mimir at boot, now prefixes the app title and the browser tab
+— a club runs several of these a year and two open tabs saying *座位抽签* tell a player
+nothing about which one they are about to submit into. It is operational, not frozen: a
+label whose every possible value leaves the seed, the roster and the round alone.
+
+The submission screen shows both deadlines, as a live countdown and as exact instants in
+the reader's own timezone with the offset named and UTC underneath. Until now the one
+screen where a player still had something to do was the one screen that never said when
+they had to do it by.
+
+The password field has a reveal toggle, off by default.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 283 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule | pass |
+| Unit tests (`npm test`) — 304 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -783,6 +892,12 @@ not rest on one arithmetic identity holding between two codebases.
 | e2e A5/A7: recomputed offline in a fresh process, and again in Python | byte-identical |
 | e2e A6: prescript read back, session 1 matches **including winds** | passes *(against the stub)* |
 | UI: all six stages rendered and inspected, including the phone grid | passes |
+| Every stage rendered to static HTML in both languages, and read | passes |
+| The status carries a digest per sealed envelope, and no ciphertext | passes |
+| The event name is read from Pantheon, and a configured one is not asked for | passes |
+| The document renderer refuses a diagram it cannot draw, rather than dropping it | passes |
+| The two language versions have the same sections, figures and diagrams | passes |
+| The generated explanation page is deterministic: a fresh clone at the tag rebuilds the bundle byte-identically | passes |
 | RUNBOOK A2/A3/A6 against a real Pantheon instance (`cdda3fc`, local Docker) | passes *(after six fixes — §6f)* |
 | Roster snapshot from a live event, through `tools/freeze.js` | passes |
 | Sign-in gate live: correct token, wrong token, unknown person | passes, three distinct answers |
