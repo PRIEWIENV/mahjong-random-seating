@@ -196,6 +196,9 @@ async function main(argv) {
   const env = { PANTHEON_MODE: 'stub', PANTHEON_STUB_ROSTER: eventFile, NODE_ENV: 'development' };
   const run = makeRunner(dir, env);
   let child = null;
+  // Kept out here so the failure path can read it: everything after step 12 talks to
+  // a server in another process, and an assertion there reports a status code.
+  let serverLog = '';
 
   console.log(bold('\nRehearsal — RUNBOOK B, C and D, in a sandbox'));
   note(`${dir}`);
@@ -286,8 +289,8 @@ async function main(argv) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const base = `http://127.0.0.1:${port}`;
-    // Kept for the whole run, not just the boot: step 14 asks this log who drew.
-    let serverLog = '';
+    // Kept for the whole run, not just the boot: step 14 asks this log who drew, and
+    // the failure path below prints its tail.
     child.stdout.on('data', (d) => { serverLog += d; });
     child.stderr.on('data', (d) => { serverLog += d; });
     const boot = await new Promise((resolve, reject) => {
@@ -461,6 +464,16 @@ async function main(argv) {
 
     console.log(`\n${bold('B, C and D done.')} Everything above ran; nothing was simulated except Pantheon.`);
     return 0;
+  } catch (err) {
+    // Past step 12 the thing being exercised is a server in another process, and what
+    // reaches this catch is a status code: "sign-in for 5001 returned 500" names the
+    // symptom and nothing else. The stack that explains it was printed by that process
+    // into a pipe read by nobody. Attach it.
+    if (serverLog.trim()) {
+      const tail = serverLog.slice(-3000).replace(/^/gm, '    ');
+      err.message += `\n\n  last of the server log:\n${tail}`;
+    }
+    throw err;
   } finally {
     if (child && child.exitCode === null) {
       child.kill();

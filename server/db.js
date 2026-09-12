@@ -94,6 +94,23 @@ class Store {
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
+    // Two processes write this file, by design. The draw is a separate program
+    // (server/schedule.js spawns server/finalise.js, every 60s deployed) and it writes on
+    // every tick, not only on the tick that draws: `finalise_tick` records that the
+    // schedule is alive at all. WAL lets readers and a writer coexist; it does not let two
+    // writers, and SQLite defaults to giving up on a held write lock immediately rather
+    // than waiting. So a sign-in or a submission landing in the same millisecond as a tick
+    // threw SQLITE_BUSY out of an INSERT, which nothing catches, and the player got a bare
+    // 500 — at the cutoff, when every one of the twelve is submitting and the job is
+    // ticking hardest. It cost a rehearsal at step 13 before it cost an event.
+    //
+    // Every write here is a single autocommit statement — there is not one explicit
+    // transaction in this codebase — so a lock is held for one commit and the wait is
+    // sub-millisecond. Five seconds is a ceiling that should never be approached, not a
+    // budget. It is deliberately generous: this database is synchronous, so waiting blocks
+    // the event loop, but the choice is between a page that stalls for a moment it will
+    // never actually spend and a player told to try again with seconds left.
+    this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
   }

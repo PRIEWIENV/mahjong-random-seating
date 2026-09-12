@@ -230,3 +230,76 @@ test('a half-written lock file is not a claim', () => {
     fs.rmSync(cfg.root, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// the database the two processes share
+// ---------------------------------------------------------------------------
+
+// Spawning the job rather than calling it in-process buys the three properties at the
+// top of server/schedule.js, and costs one: two processes now write var/state.sqlite.
+// WAL lets a writer and any number of readers coexist, but not two writers, and SQLite's
+// default on a held write lock is to give up at once rather than wait. So a sign-in or a
+// submission landing in the same millisecond as a tick threw SQLITE_BUSY out of an
+// INSERT and the player got a 500 — and the job writes on every tick, not just the one
+// that draws. It failed a rehearsal at step 13 before it could fail an event.
+//
+// This has to be two processes to mean anything: one connection never contends with
+// itself, so an in-process test of it passes on the broken code.
+const { spawn } = require('node:child_process');
+const { Store } = require('../server/db');
+
+const HOLDER = (dbPath, holdMs) => `
+  const { Store } = require(${JSON.stringify(path.join(__dirname, '..', 'server', 'db'))});
+  const store = new Store(${JSON.stringify(dbPath)});
+  store.db.exec('BEGIN IMMEDIATE');
+  store.set('finalise_tick', { at: new Date().toISOString() });
+  console.log('held');
+  const until = Date.now() + ${holdMs};
+  while (Date.now() < until);
+  store.db.exec('COMMIT');
+`;
+
+test('a player writing while the draw job holds the lock waits, and is not refused', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mahjong-busy-'));
+  const dbPath = path.join(root, 'var', 'state.sqlite');
+  const holdMs = 600;
+  // Opened first, so the schema is in place and the constructor is not itself the thing
+  // waiting: what is under test is a write on a connection that is already up.
+  const store = new Store(dbPath);
+  const holder = path.join(root, 'holder.js');
+  fs.writeFileSync(holder, HOLDER(dbPath, holdMs));
+  const child = spawn(process.execPath, [holder], { stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += d; });
+    await new Promise((resolve, reject) => {
+      child.stdout.on('data', (d) => { if (String(d).includes('held')) resolve(); });
+      child.on('exit', (c) => reject(new Error(`the holder exited ${c} before taking the lock:
+${stderr}`)));
+      setTimeout(() => reject(new Error('the holder never took the lock')), 10_000);
+    });
+
+    const t0 = Date.now();
+    // Both of the writes a player causes. Neither may throw.
+    const token = store.createSession(1, 5001, Date.now());
+    const stored = store.insertSubmission(1, 'ciphertext', Date.now());
+    const waited = Date.now() - t0;
+
+    assert.ok(token, 'sign-in must produce a session');
+    assert.equal(stored.stored, true, 'the submission must be stored');
+    // Waited rather than raced past: proof the lock was really held, so a pass cannot be
+    // the holder having finished early.
+    assert.ok(waited > holdMs / 2, `the write returned in ${waited}ms, so the lock was not held`);
+  } finally {
+    // Windows keeps a handle on state.sqlite until every process holding one is gone,
+    // and a rmSync that races that fails with EPERM, which would then mask whatever the
+    // assertions above found. The holder commits and exits on its own; it is killed only
+    // if it overruns.
+    try { store.close(); } catch { /* already closed, or never opened */ }
+    await new Promise((r) => {
+      child.once('exit', r);
+      setTimeout(() => { child.kill(); setTimeout(r, 1000); }, 5000);
+    });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }
+});

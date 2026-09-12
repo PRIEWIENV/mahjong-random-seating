@@ -1495,12 +1495,56 @@ Three methods had no callers. `Drand.roundAt` and `Drand.isAvailable` are gone.
 `Store.purgeExpiredSessions` was kept and given one: sessions deliberately outlive a round,
 so nothing else ever removed an expired row, and a restart is its moment.
 
+## 6v. Two processes, one database, and no patience
+
+`npm run rehearse` stopped at step 13 with `sign-in for 5001 returned 500`. Run again it
+passed, and the whole rehearsal went green to the end.
+
+An intermittent 500 on the first thing a player does is worth more than a re-run. The
+server's own log said `database is locked`, thrown out of the `INSERT` in
+`createSession`, through a handler that catches nothing below it, into the router's
+catch-all — which is where `{error:"internal"}` comes from.
+
+Section 6j put the draw in a second process on purpose, and gave three reasons for it
+that all still hold. The cost was never written down: `var/state.sqlite` now has two
+writers. WAL lets a writer and any number of readers coexist, which is why this looked
+safe, but it does not let two writers, and SQLite's default on a held write lock is to
+fail immediately rather than wait — a busy timeout of zero.
+
+The job writes on every tick, not only on the tick that draws. `finalise_tick` records
+that the schedule is alive at all, which is what the dashboard's "the draw job is
+firing" check reads. Deployed, that is a write every sixty seconds for the whole of the
+submission window, against a database twelve people are signing in and submitting to. The
+window it opens is one commit wide, which is why it takes a rehearsal or an unlucky event
+to see it, and why it will eventually be seen: the odds are worst in the last minutes
+before the cutoff, when everyone submits at once and the job ticks hardest.
+
+`PRAGMA busy_timeout = 5000` on the connection, so both processes wait for each other
+instead of one of them giving up. Not one write in this codebase is inside an explicit
+transaction, so a lock is held for a single commit and the real wait is sub-millisecond;
+five seconds is a ceiling nothing should approach. It is generous on purpose. The
+database is synchronous, so waiting does block the event loop — and the choice is between
+a page that pauses for a moment it will never actually spend, and a player refused with
+seconds left on the clock.
+
+The test has to be two processes. One connection never contends with itself, so an
+in-process version of it passes on the broken code; `test/schedule.test.js` spawns a
+holder that takes the write lock the way a tick does, and asserts that a sign-in and a
+submission both go through — and that they waited, so a pass cannot be the holder having
+finished early.
+
+The rehearsal's report was the other half of the problem. Everything after step 12 is
+exercised through HTTP against a server in another process, so what an assertion can see
+is a status code: `sign-in for 5001 returned 500` names the symptom and nothing else,
+while the stack that explains it goes into a pipe nobody reads. `tools/rehearse.js` keeps
+that log for step 14 already; it now attaches its tail to any failure past step 12.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 419 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing | pass |
+| Unit tests (`npm test`) — 420 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1516,6 +1560,7 @@ so nothing else ever removed an expired row, and a restart is its moment.
 | The roll is published and anchored at the cutoff, not at the draw | passes |
 | A clock short of the round delays the draw instead of excluding whoever was decrypted first | passes |
 | The server draws on its own timer, with no systemd and no root (`npm run rehearse` step 14) | passes |
+| A sign-in and a submission that land while the draw job holds the write lock both go through, and waited | passes |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |
