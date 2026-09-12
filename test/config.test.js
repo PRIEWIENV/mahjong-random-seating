@@ -140,6 +140,34 @@ test('a typo in runtime.json is an error, not a silently ignored setting', () =>
   cleanup(dir);
 });
 
+test('the example runtime.json loads exactly as shipped', () => {
+  // The README tells an operator to copy it and change what they need, and it could not be
+  // copied at all. Its notes sit beside the settings they explain, as `_frey_public_url`
+  // inside `pantheon`, and the loader only skipped `_` keys at the top level. Nothing
+  // loaded the example, so nothing noticed until a real deployment refused to start.
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mahjong-rt-'));
+  fs.copyFileSync(path.join(__dirname, '..', 'data', 'runtime.example.json'), path.join(dir, 'runtime.json'));
+  const r = loadRuntime(dir, {});
+  assert.equal(r.pantheon.frey_base_url, 'http://frey.pantheon.local:4004');
+  assert.equal(r.server.trust_proxy, false);
+  cleanup(dir);
+});
+
+test('a note inside a section is skipped and never becomes a setting, while a typo is still refused', () => {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mahjong-rt-'));
+  fs.writeFileSync(path.join(dir, 'runtime.json'), JSON.stringify({
+    pantheon: { _frey_public_url: 'an explanation', frey_public_url: 'https://pantheon.example.com' },
+  }));
+  const r = loadRuntime(dir, {});
+  assert.equal(r.pantheon.frey_public_url, 'https://pantheon.example.com');
+  assert.ok(!('_frey_public_url' in r.pantheon), 'a note must not reach the settings object');
+
+  // The escape hatch is the underscore, not any unknown name.
+  fs.writeFileSync(path.join(dir, 'runtime.json'), JSON.stringify({ pantheon: { frey_publc_url: 'x' } }));
+  assert.throws(() => loadRuntime(dir, {}), /unknown key pantheon.frey_publc_url/);
+  cleanup(dir);
+});
+
 test('operational settings can be overridden from the environment without a re-tag', () => {
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mahjong-rt-'));
   const r = loadRuntime(dir, { DRAND_API: 'https://api2.drand.sh' });

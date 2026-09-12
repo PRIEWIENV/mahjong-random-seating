@@ -204,13 +204,21 @@ function validate(r) {
 function merge(file) {
   const out = {};
   for (const section of Object.keys(DEFAULTS)) {
-    out[section] = { ...DEFAULTS[section], ...(file[section] || {}) };
-    for (const k of Object.keys(file[section] || {})) {
+    out[section] = { ...DEFAULTS[section] };
+    for (const [k, v] of Object.entries(file[section] || {})) {
+      // A note, not a setting. JSON has no comments, so data/runtime.example.json explains
+      // a setting with a `_` key beside it: `_frey_public_url` inside `pantheon`,
+      // `_trust_proxy` inside `server`. The `_` rule used to hold at the top level only,
+      // so the file the README says to copy could not be copied. The first server to try
+      // refused to start with "unknown key pantheon._frey_public_url". Skipped here rather
+      // than merged, so a note never shows up as a value in the settings object.
+      if (k.startsWith('_')) continue;
       if (!(k in DEFAULTS[section])) {
         // A typo in an operational setting is silent otherwise, and only shows up as
         // "the timeout I configured did nothing".
         throw new Error(`runtime.json: unknown key ${section}.${k}`);
       }
+      out[section][k] = v;
     }
   }
   for (const k of Object.keys(file)) {

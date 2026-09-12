@@ -1626,12 +1626,41 @@ nothing, and a plain `curl` to the same URL still got a 404 from somewhere. No p
 variable was set. Whatever answered, it was not reached the way Node resolves names, which
 is why the guide says to check with `getent` and not with `curl`.
 
+## 6y. The file the README says to copy
+
+The same deployment, a step later. Pantheon's two names are served through nginx on public
+addresses there, so the operator did what the README says: copied
+`data/runtime.example.json` to `data/runtime.json` to change the base URLs. The server
+refused to start:
+
+```
+runtime.json: unknown key pantheon._frey_public_url
+```
+
+JSON has no comments, so the example explains a setting with a `_` key beside it:
+`_frey_public_url` inside `pantheon`, `_trust_proxy` inside `server`. The loader honoured
+that convention at the top level, where `_comment` sits, and nowhere else. Inside a section
+it applied the check that makes a typo in an operational setting an error, and a note is
+not a known key. So the example could be read but not used. The first key failed, and the
+second would have failed right after it.
+
+Nothing loaded the example. Every runtime test writes its own small file, and the example
+is documentation that happens to parse, so it and the loader drifted apart with nothing
+between them. That is the same way `protocol.example.json` came to ship a tag name that
+had never existed (§6u).
+
+`merge` in `server/runtime.js` skips a `_` key at any level now, and does not copy it into
+the result, so a note never shows up as a value in the settings object. The typo check is
+unchanged: the escape is the underscore, not any unknown name. `test/config.test.js` loads
+the example exactly as shipped, so the next note added to it is tested by the same run
+that tests the loader.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 422 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon | pass |
+| Unit tests (`npm test`) — 424 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1650,6 +1679,7 @@ is why the guide says to check with `getent` and not with `curl`.
 | A sign-in and a submission that land while the draw job holds the write lock both go through, and waited | passes |
 | The rehearsal sandbox commits exactly the files it copied in, and refuses on anything else | passes |
 | A Pantheon that cannot be reached is reported with the URL tried and the underlying reason, never as `fetch failed` | passes |
+| `data/runtime.example.json` loads exactly as shipped, and a note inside a section never becomes a setting | passes |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |
