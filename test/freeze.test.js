@@ -342,3 +342,26 @@ test('the frozen set is exactly the four PROTOCOL.md §4 names', () => {
     );
   }
 });
+
+// A freeze commits and tags, and what lands in the tag is what twelve people are told to
+// check out. .gitignore is the only thing deciding what does not land there, so its rules
+// are part of the freeze rather than housekeeping.
+//
+// A pattern ending in `/` matches directories only, and a symbolic link is a file to git,
+// not a directory. `node_modules/` therefore did not stop `git add -A` from committing a
+// symlink named node_modules — which is exactly how tools/rehearse.js attaches the
+// sandbox to this tree, so the rehearsal tagged a link into the operator's home directory
+// and fell over three minutes later cloning that tag. It only ever happened on Linux: the
+// same call on Windows makes a junction, which git does read as a directory.
+//
+// None of the names in that file is ever a file this repository wants to keep, so the
+// rule is simply that none of them carries the slash. `secrets` is the one where the cost
+// of being wrong is not a failed rehearsal.
+test('no ignore rule is written so that a symlink slips past it', () => {
+  const raw = fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8');
+  const dirOnly = raw.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && line.endsWith('/'));
+  assert.deepEqual(dirOnly, [], 'these match directories only, so a symlink of the same name is committed: '
+    + `${dirOnly.join(', ')}. Drop the trailing slash.`);
+});

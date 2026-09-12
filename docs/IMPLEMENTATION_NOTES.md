@@ -1539,12 +1539,57 @@ is a status code: `sign-in for 5001 returned 500` names the symptom and nothing 
 while the stack that explains it goes into a pipe nobody reads. `tools/rehearse.js` keeps
 that log for step 14 already; it now attaches its tail to any failure past step 12.
 
+## 6w. A trailing slash, and the machine the rehearsal is for
+
+The rehearsal reached step 16 on the server and failed there:
+
+```
+EEXIST: file already exists, symlink
+  '/home/pantheon/mahjong-random-seating/node_modules' -> '/tmp/mjs-verifier-EpxDyq/repo/node_modules'
+```
+
+Step 16 clones the tag into a fresh directory and links `node_modules` into it, because a
+participant's verification has to run and installing from the network would be testing
+npm. It could not link: the clone already had a `node_modules`. Which means the tag had
+one — that the sandbox had committed the symlink attaching it to this tree, frozen it, and
+tagged it.
+
+`.gitignore` said `node_modules/`. A pattern ending in a slash matches directories only,
+and a symbolic link is not a directory to git; it is a file whose content is a path. So
+`git add -A` took it. `git check-ignore node_modules` reports it as ignored, because it
+matches the pattern against the name without looking at what is on disk — the tool you
+would ask disagrees with what `add` does, which is most of why this survived reading.
+
+It could only happen on Linux. `fs.symlinkSync(..., 'junction')` makes a junction on
+Windows, which git does read as a directory, so the pattern matched and the rehearsal was
+green on the machine it was developed on and broken on the machine it is for. The
+rehearsal exists to be the thing that runs on the day, on the box; this is the second
+failure it has found that is invisible here.
+
+The slash is gone from every pattern in the file. None of those names — `secrets`,
+`node_modules`, `client/generated`, `var`, `events` — is ever a file this repository wants
+to keep, so none of them needs to say "directory". `test/freeze.test.js` asserts that no
+rule in the file carries one, because what `.gitignore` keeps out is what does not reach
+the tag, and the tag is the artefact twelve people are told to check out.
+
+The real freeze was never exposed: `tools/freeze.js` adds a named list with `-f` and
+never `-A`, so an operator's published tag could not pick up a stray this way. An
+operator's own `git add -A` in their own tree could, and `secrets` is the name where that
+matters — a committed symlink carries the target path, not the contents, but a `secrets`
+entry has no business in a repository that exists to be cloned by strangers.
+
+And the sandbox now checks rather than trusts. `makeSandbox` knows exactly which files it
+copied in, so it compares that against what `git add -A` actually staged and refuses on
+anything extra, naming it. The same fault now stops the rehearsal in its third second
+with the file named, instead of in its third minute as an EEXIST from a clone — after the
+freeze, the tag, twelve submissions and the draw have all gone by.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 420 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share | pass |
+| Unit tests (`npm test`) — 421 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1561,6 +1606,7 @@ that log for step 14 already; it now attaches its tail to any failure past step 
 | A clock short of the round delays the draw instead of excluding whoever was decrypted first | passes |
 | The server draws on its own timer, with no systemd and no root (`npm run rehearse` step 14) | passes |
 | A sign-in and a submission that land while the draw job holds the write lock both go through, and waited | passes |
+| The rehearsal sandbox commits exactly the files it copied in, and refuses on anything else | passes |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |

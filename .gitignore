@@ -1,5 +1,15 @@
+# A pattern ending in `/` matches only directories, and a symbolic link is not a
+# directory to git — it is a file whose content is a path. So `node_modules/` did not stop
+# `git add -A` from committing a *symlink* named node_modules, which is how
+# tools/rehearse.js links the sandbox to this tree. The rehearsal then tagged a link into
+# the operator's home directory and failed three minutes later, at the step that clones the
+# tag. `git check-ignore` reports such a path as ignored, because it matches the pattern
+# without looking at what is on disk, so the tool you would ask disagrees with what add
+# does. None of the names below is ever a file this repository wants, so none of them
+# carries the slash.
+
 # Must never be committed: Pantheon admin credentials and backend secrets
-secrets/
+secrets
 *.env
 .env*
 
@@ -22,14 +32,14 @@ data/roster.json
 data/runtime.json
 
 # Build and runtime artefacts
-node_modules/
+node_modules
 # docs/seating-design{,.zh}.md, rendered into a module the client imports. Generated on
 # every build from the markdown, which IS committed, so there is one source and it is
 # the one an auditor reads. See tools/build-client.js.
-client/generated/
+client/generated
 # SQLite state and scratch output. Losing var/ loses nothing that matters: every
 # ciphertext is also mirrored into the repository as it arrives.
-var/
+var
 # Written by the draw itself: one event's outcome, not source. Same rule as the two
 # frozen files above — it is published in the OPERATOR's repository, where that event was
 # run, because that is where it proves something. A developer's test draw committed here
@@ -39,7 +49,7 @@ var/
 # and everything under events/ through the GitHub contents API, which never consults this
 # file. Nothing in the repository reads a results.json at the root either — every test
 # writes its own into a temporary directory.
-events/
+events
 results.json
 decrypted.json
 my-results.json

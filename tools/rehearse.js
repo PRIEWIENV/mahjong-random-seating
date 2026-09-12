@@ -114,6 +114,25 @@ function makeSandbox() {
   git('config', 'user.email', 'rehearsal@example.invalid');
   git('config', 'user.name', 'rehearsal');
   git('add', '-A');
+  // What the baseline commits has to be exactly what was copied in, and once it was not.
+  // The junction above is a symbolic link on Linux, .gitignore said `node_modules/`, and a
+  // trailing slash matches only directories — a symlink is a file to git. So the sandbox
+  // committed, froze and tagged a link into the operator's home directory, and the failure
+  // surfaced three minutes later at step 16 as an EEXIST from a clone that already had a
+  // node_modules. Never on Windows, where the same call makes a junction that git does read
+  // as a directory: the rehearsal was green here and broken on the machine it is for.
+  //
+  // So this is checked rather than trusted. Anything the ignore rules let through lands in
+  // the tag, which is the artefact twelve people are told to check out.
+  const copied = new Set(tracked.map((rel) => rel.replace(/\\/g, '/')));
+  const strays = git('ls-files', '-z').split('\0').filter(Boolean).filter((f) => !copied.has(f));
+  if (strays.length) {
+    throw new Error(
+      `the sandbox committed ${strays.length} file(s) that were not copied into it: ` +
+      `${strays.join(', ')}.\n  Whatever .gitignore is meant to be keeping out of the freeze is not ` +
+      `being kept out. A pattern ending in / matches directories only, and a symbolic link ` +
+      `is not one.`);
+  }
   git('commit', '-q', '-m', 'rehearsal baseline: the working tree as it stands');
   return { dir, tracked: tracked.length };
 }
