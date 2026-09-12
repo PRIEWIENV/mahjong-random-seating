@@ -142,6 +142,11 @@ function createServer(opts = {}) {
   const publicDir = opts.publicDir || path.join(cfg.root, 'public');
   const limiter = new RateLimiter(opts.rateLimit ?? cfg.runtime.server.rate_limit_per_minute, opts.rateWindowMs ?? 60_000);
   const nowFn = opts.now || (() => Date.now());
+  // Sessions outlive a round on purpose — §8 changes the round, not who the players are
+  // — so nothing else ever removes an expired one. getSession drops a row when that same
+  // token comes back, which by definition never happens for a browser that does not
+  // return. The method was here with no caller at all; a restart is its moment.
+  store.purgeExpiredSessions(nowFn());
   const secureCookie = opts.secureCookie ?? process.env.NODE_ENV === 'production';
   // The dashboard exists only when a token is configured. Unset means the route is not
   // there at all, rather than there and asking for a password: an organiser who never
@@ -358,6 +363,12 @@ function createServer(opts = {}) {
         healthy: drandHealth.healthy,
         last_seen_utc: drandHealth.last_seen_utc,
       },
+      // Where the ciphertexts, the roll and the result are published (PROTOCOL.md §5).
+      // Public by construction — the whole argument rests on anyone being able to fetch
+      // it — and the one thing the result page needs in order to tell a player how to
+      // check the draw, which it could not say before. Null when mirroring is off, and
+      // then the page names no repository rather than inventing one.
+      mirror_repo: mirror?.enabled ? mirror.repo : null,
       // Tells the sign-in stage which path to use. "stub" means no real Frey is
       // reachable and the dev stand-in is in play; it can never be true in production.
       auth_mode: isStub ? 'stub' : 'pantheon',

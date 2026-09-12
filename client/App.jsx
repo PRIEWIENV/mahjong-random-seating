@@ -37,7 +37,10 @@ function deriveStage({ me, status, justSubmitted, revealSeen }) {
   if (!status) return 'loading';
   if (!me) return 'signin';
   if (status.phase === 'void') return 'void';
-  if (status.phase === 'done') return revealSeen ? 'result' : 'result';
+  // No reveal animation for a phase that is already over. A player who arrives after the
+  // draw is not being kept in suspense about something everyone else has seen; the
+  // animation belongs to the transition, which is the 'revealing' phase below.
+  if (status.phase === 'done') return 'result';
   if (status.phase === 'revealing') return revealSeen ? 'result' : 'revealing';
   if (justSubmitted) return 'submitted';
   if (status.phase === 'open' && !me.submitted) return 'submit';

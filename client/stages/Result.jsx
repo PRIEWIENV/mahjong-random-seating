@@ -28,6 +28,9 @@ const TEXT = {
     syncFailed: '座位表尚未同步到 Pantheon（组织者会手动处理）。这不影响抽签结果——这一页和 results.json 才是权威，且可以被任何人独立复算。',
     verify: '这个结果可以自己验一遍',
     v1: (tag) => ['冻结的四个文件（roster.json、protocol.json、schedule_template.json、generate.js）在提交开放前就已打上 git tag ', tag, '。'],
+    v1NoTag: '冻结的四个文件（roster.json、protocol.json、schedule_template.json、generate.js）在提交开放前就已打上 git tag。',
+    v1get: '取到本地。结果文件是抽签之后才写的，不在 tag 里，要另外从默认分支取一次：',
+    repoUnknown: '<组织者的仓库>',
     v2: (round) => ['每个人的密文在收到时就已公开（', 'events/submissions/', '），drand 第 ', round, ' 轮的签名任何人都能取到：'],
     v3: '每份贡献是 SHA256(域 ‖ "contrib" ‖ local_id ‖ 数字 ‖ nonce ‖ 时间)，全部异或得到 R =',
     v4: '种子 = SHA256(域 ‖ "seed" ‖ R ‖ drand签名 ‖ 参与者编号) =',
@@ -41,6 +44,9 @@ const TEXT = {
     syncFailed: 'The seat plan has not synced to Pantheon yet — the organiser will handle it by hand. It does not affect the outcome: this page and results.json are authoritative, and anyone can recompute them.',
     verify: 'You can check this result yourself',
     v1: (tag) => ['The four frozen files (roster.json, protocol.json, schedule_template.json, generate.js) were git-tagged ', tag, ' before submissions opened.'],
+    v1NoTag: 'The four frozen files (roster.json, protocol.json, schedule_template.json, generate.js) were git-tagged before submissions opened.',
+    v1get: ' Fetch them. The result was written after the freeze, so it is not inside the tag and has to be taken from the default branch as well:',
+    repoUnknown: '<the organiser’s repository>',
     v2: (round) => ['Every ciphertext was published as it arrived (', 'events/submissions/', '), and the signature for drand round ', round, ' is public:'],
     v3: 'Each contribution is SHA256(domain ‖ "contrib" ‖ local_id ‖ number ‖ nonce ‖ time); XOR them all for R =',
     v4: 'seed = SHA256(domain ‖ "seed" ‖ R ‖ drand signature ‖ participant ids) =',
@@ -59,9 +65,31 @@ export default function Result({ status, me, result }) {
 
   const mine = me ? firstRoundFor(result, me.local_id) : null;
   const sync = result.pantheon_sync;
-  const tag = (result.generate_script_ref || '').split('@')[1] || 'frozen-v1';
+  // Read out of the frozen file, never defaulted. It used to fall back to the literal
+  // "frozen-v1", which is a tag name that only ever existed in a document: an organiser
+  // who tagged anything else had this page telling twelve people to check out something
+  // that does not exist. tools/freeze.js --tag now writes the real name into
+  // generate_script_ref, and when it somehow is not there this says less rather than
+  // something untrue.
+  const tag = (result.generate_script_ref || '').split('@')[1] || null;
   const [v1a, v1tag, v1b] = t.v1(tag);
   const [v2a, v2path, v2b, v2round, v2c] = t.v2(result.round_used);
+
+  /**
+   * How to get the files this panel then tells you to check.
+   *
+   * The panel listed five confident steps and two commands and never said where any of
+   * it came from. Worse than an omission: results.json and events/snapshot.json are
+   * written after the freeze, so they are on the default branch and NOT inside the tag,
+   * and a reader who checks the tag out is left holding neither. The third line is what
+   * closes that, and origin/HEAD avoids having to know the branch's name.
+   */
+  const repo = status?.mirror_repo ? `https://github.com/${status.mirror_repo}` : t.repoUnknown;
+  const fetchCmd = [
+    `git clone ${repo} draw && cd draw`,
+    `git checkout ${tag || '<tag>'}`,
+    'git checkout origin/HEAD -- results.json events/',
+  ].join('\n');
 
   return (
     <div className="stage result">
@@ -88,7 +116,11 @@ export default function Result({ status, me, result }) {
         <details className="verify">
           <summary>{t.verify}</summary>
           <ol>
-            <li>{v1a}<code>{v1tag}</code>{v1b}</li>
+            <li>
+              {tag ? <>{v1a}<code>{v1tag}</code>{v1b}</> : t.v1NoTag}
+              {t.v1get}
+              <code className="block">{fetchCmd}</code>
+            </li>
             <li>
               {v2a}<code>{v2path}</code>{v2b}<code>{v2round}</code>{v2c}
               <code className="block">{`curl ${status?.drand?.api ?? '<drand api>'}/${status?.drand?.chain_hash ?? '<chain>'}/public/${result.round_used}`}</code>

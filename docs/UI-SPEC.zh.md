@@ -110,7 +110,7 @@ Stub 模式只替换输入框，别的都不换：同一张卡片、同一套外
 - 他自己第 1 轮的桌号和座位，一句话说清；
 - 开赛时间和地点，如果配置了的话；
 - 一行确认座位表已同步到 Pantheon，让他知道手机端看到的会和这里一致；
-- 一个低调的链接，说明这次抽签怎样被独立复核；
+- 一个低调的链接，说明这次抽签怎样被独立复核。它必须先说清文件从哪里来，并且照着写的顺序能跑通。它此前一个仓库都没提；而它随后让读者去核验的那两个文件是开奖时写的，发生在冻结之后：它们在默认分支上而不在 tag 里，所以 checkout tag 会把它们删掉，验证随后失败在「文件不存在」上，而不是失败在抽签本身。仓库来自状态里的 `mirror_repo`，tag 来自结果里的 `generate_script_ref`，两者都绝不兜底成某个名字——一个凭空写出 tag 的页面，是在让十二个人去 checkout 一个不存在的东西；
 - 封存的密文、它们的指纹和时间戳证明，可下载——和等待期间同一张卡。只在开奖前提供它们，等于在它恰好变得可核验的那一刻把证据撤走了。
 
 下面是座位表浏览器。
@@ -155,6 +155,8 @@ GET /api/status   → phase, submitted_count, quorum, total_slots, submitted_loc
                     cutoff_utc, target_round_utc, reveal_gap_seconds, target_round,
                     roll{digest, submitted_count, anchored, calendars},
                     event_title,      // 来自 Mimir；连不上时为 null
+                    mirror_repo,      // 证据发布在哪里；未开启镜像时为 null，
+                    //   此时结果页不指名任何仓库
                     draw{round_due_utc, seconds_late, grace_seconds, overdue},
                     drand{latest_round, healthy, last_seen_utc},
                     server_time_utc

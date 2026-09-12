@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { snapshotRoster, applyRosterSnapshot, FROZEN } = require('../tools/freeze');
+const { snapshotRoster, applyRosterSnapshot, alignTagRefs, FROZEN } = require('../tools/freeze');
 const { load } = require('../server/config');
 const { createPantheon } = require('../server/pantheon');
 const { makeDataDir, makeRoster, cleanup } = require('./helpers');
@@ -259,6 +259,70 @@ test('without --write nothing is written, however clean the snapshot is', async 
   applyRosterSnapshot({ cfg, snapshot: snap, problems: [], lines, write: false });
   assert.ok(!fs.existsSync(path.join(fx.dataDir, 'roster.json')));
   assert.match(lines.join('\n'), /re-run with --write/);
+  cleanup(fx.dir);
+});
+
+/**
+ * The tag, written into the file that names it.
+ *
+ * schedule_template_ref and generate_script_ref say which tag the other three frozen
+ * artefacts come from. They are the one part of protocol.json that config.js cannot
+ * check at load time, because the tag does not exist until the freeze creates it, and
+ * the only check there was asked whether they contained an "@".
+ *
+ * So they stayed at whatever data/protocol.example.json shipped, which was a tag name
+ * invented in a document. That is not inert metadata: the result stage reads the tag out
+ * of generate_script_ref and prints it to twelve players as the thing to check out, and
+ * generate.js compares the two refs to decide whether a verifier is holding the wrong
+ * protocol.json. An organiser who tagged anything else shipped a result page naming a
+ * tag that has never existed anywhere.
+ */
+test('the tag being created is written into the protocol that names it', () => {
+  const { fx, cfg } = fixture();
+  const lines = [];
+  const problems = [];
+
+  const next = alignTagRefs(cfg, 'spring-2026-r3', lines, problems);
+  assert.deepEqual(problems, []);
+
+  const written = JSON.parse(fs.readFileSync(path.join(fx.dataDir, 'protocol.json'), 'utf8'));
+  assert.equal(written.schedule_template_ref, 'data/schedule_template.json@spring-2026-r3');
+  assert.equal(written.generate_script_ref, 'generate.js@spring-2026-r3');
+  // And handed back re-loaded, so everything downstream checks the file that will be
+  // committed rather than the object this process happened to be holding.
+  assert.equal(next.protocol.generate_script_ref, 'generate.js@spring-2026-r3');
+  assert.match(lines.join('\n'), /tag references set to @spring-2026-r3/);
+  cleanup(fx.dir);
+});
+
+test('what it changed is printed, because it edited a frozen file to do it', () => {
+  const { fx, cfg } = fixture();
+  const lines = [];
+  alignTagRefs(cfg, 'autumn-open', lines, []);
+  const out = lines.join('\n');
+  assert.match(out, /generate_script_ref/);
+  assert.match(out, /generate\.js@test/, 'the value it replaced should be visible');
+  cleanup(fx.dir);
+});
+
+test('a protocol that already names the tag is left alone', () => {
+  const { fx, cfg } = fixture();
+  const file = path.join(fx.dataDir, 'protocol.json');
+  const before = fs.readFileSync(file);
+  const lines = [];
+  alignTagRefs(cfg, 'test', lines, []);
+  assert.ok(fs.readFileSync(file).equals(before), 'a file with nothing to change was rewritten');
+  assert.match(lines.join('\n'), /already names the tag/);
+  cleanup(fx.dir);
+});
+
+test('the rewritten protocol still loads, and still parses as JSON with a trailing newline', () => {
+  const { fx, cfg } = fixture();
+  alignTagRefs(cfg, 'club-night-1', [], []);
+  const raw = fs.readFileSync(path.join(fx.dataDir, 'protocol.json'), 'utf8');
+  assert.ok(raw.endsWith('\n'), 'data/*.json is committed verbatim; it needs its newline');
+  assert.doesNotThrow(() => JSON.parse(raw));
+  assert.doesNotThrow(() => load({ dataDir: fx.dataDir }));
   cleanup(fx.dir);
 });
 

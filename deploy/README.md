@@ -10,6 +10,10 @@ localhost.
 > **Prerequisite: [`docs/RUNBOOK.md`](../docs/RUNBOOK.md) through step 11.** This is the
 > deployment step of that checklist, between B and C. §1 checks out the tag step 11
 > pushes; RUNBOOK E closes the event out afterwards.
+>
+> **Node 24 or newer**, which `node --version` reports. The state lives in `node:sqlite`,
+> which older versions either lack or keep behind a flag, so an out-of-date Node installs
+> cleanly and then fails at the first start. `npm ci` only warns about this.
 
 Nothing here holds a secret that could open a submission early. The only credentials on
 the box are the GitHub PAT used for mirroring and the Pantheon admin account used for

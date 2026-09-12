@@ -708,7 +708,11 @@ async function run(opts = {}) {
       beacon = await drand.round(cfg.protocol.target_round);
       break;
     } catch (err) {
-      if (String(err.message).includes('disagree')) throw err; // mirrors disagreeing is fatal
+      // Mirrors disagreeing is fatal, and it is the only failure here that is. On a
+      // flag rather than on the wording of the message: this is the one branch in the
+      // system that stops a draw outright, and it should not rest on a sentence
+      // somebody may reasonably rewrite (server/drand.js).
+      if (err.disagreement) throw err;
       if (!wait) {
         log.info?.(`[finalise] round ${cfg.protocol.target_round} not published yet; re-run later`);
         // The roll was published a few lines above and its push is still in the queue.

@@ -40,7 +40,7 @@ to commit and tag. Without `--tag` it changes nothing in git and prints the two 
 10. `node tools/freeze.js --event <id> --write` reads that roster back out of Pantheon and writes `data/roster.json` from it. It refuses if the seated count is not `total_slots`, if anybody lacks a usable `local_id`, if one account is registered twice, or if a player has no title — and on any of those it writes nothing at all, because a roster built from a registration list that was just refused is worse than no roster. Each of those otherwise lands after the draw: a missing `local_id` blocks the seat-plan sync, which runs once the seat plan already exists.
     - `--event <id>` is only needed for the first freeze of an event. After that the id is in `roster.json`, and it wins: a flag cannot re-point an existing freeze at a different event.
     - Without `--write` the command reports what it would do and changes nothing.
-11. 🔒 `node tools/freeze.js --write --tag frozen-v1`. Before it writes anything to git it re-derives every proved invariant of the template, rebuilds the browser bundle from source and diffs it against the committed one, and runs the unit tests. It commits `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` — those four and no others — plus the built bundle and its hash, then tags. `runtime.json` is gitignored and is deliberately not in the tag.
+11. 🔒 `node tools/freeze.js --write --tag <name>`. Choose a name that says which draw this is; it is used once, and a second event or a §8 retry needs its own. The command writes it into `protocol.json`'s two reference fields, refuses a name git already has, and prints it in the announcement. Before it writes anything to git it re-derives every proved invariant of the template, rebuilds the browser bundle from source and diffs it against the committed one, and runs the unit tests. It commits `roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` — those four and no others — plus the built bundle and its hash, then tags. `runtime.json` is gitignored and is deliberately not in the tag.
     - The bundle rebuild is the check that has to happen **here**. It needs esbuild, which the VPS does not have (`npm ci --omit=dev`); the VPS runs `--verify-hash`, which only compares the committed bundle to its committed hash and cannot tell you the hash was computed from different source.
 
     Add `--push` once a remote is configured. A tag that exists only on this machine is
@@ -80,10 +80,18 @@ that could trigger or re-time the draw off HTTP entirely.
 16. Point the players at the result. Anyone inclined to check should be able to reproduce the same plan from public information alone:
 
     ```sh
-    git checkout <tag>            # the one you announced in step 11
+    git clone <your repository> draw && cd draw
+    git checkout <tag>                         # the one you announced in step 11
+    git checkout origin/HEAD -- results.json events/    # written after the freeze
     node generate.js --verify results.json     # whole file, plus the roll-call
     python3 tools/verify_template.py data/schedule_template.json
     ```
+
+    The third line is not optional and is easy to leave out. `results.json` and
+    `events/snapshot.json` are written by the draw, which happens after the freeze, so
+    they are on the default branch and not inside the tag. Checking the tag out on its
+    own removes them, and the verification then fails on a missing file rather than on
+    anything about the draw. The result page prints this same sequence, filled in.
 
     The first compares every byte of `results.json` against a fresh recomputation from
     the payloads it reveals, and then checks that `events/snapshot.json` accounts for

@@ -267,6 +267,8 @@ All endpoints are JSON over HTTPS.
              api,                           // operational (§4.2): where it is reached
              latest_round, expected_round_at_cutoff, healthy: bool, last_seen_utc },
     frey_base_url, status_poll_interval_ms, // operational (§4.2)
+    mirror_repo,                            // where §5 publishes the evidence, so
+                                            // the result page can name it; null if off
     server_time_utc }                       // so the countdown never drifts
 
   Every frozen number the app shows a player comes from here, so the page can never

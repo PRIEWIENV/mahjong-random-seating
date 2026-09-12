@@ -53,10 +53,13 @@ async function mod() {
  * swapped or hostile drand.api cannot substitute a chain, only fail loudly.
  *
  * @param {{protocol: object, runtime?: object}} cfg
+ * @param {object} [opts]
+ * @param {object} [opts.tlock] stand in for the tlock-js module, so a test can read
+ *   back the verification parameters without reaching a chain to do it.
  */
-async function chainClient(cfg) {
+async function chainClient(cfg, opts = {}) {
   const { protocol, runtime } = cfg;
-  const m = await mod();
+  const m = opts.tlock || await mod();
   const base = String(runtime?.drand?.api || DEFAULTS.drand.api).replace(/\/+$/, '');
   const params = { chainHash: protocol.chain_hash, publicKey: protocol.chain_public_key };
   const chain = new m.HttpCachingChain(`${base}/${protocol.chain_hash}`, {
@@ -82,17 +85,18 @@ async function encryptPayload(payload, round, cfg) {
 }
 
 /**
- * Decrypt one ciphertext back to {user_input, client_nonce, client_timestamp}.
+ * What a decrypted ciphertext has to be, before anything downstream sees it.
  *
- * Validates shape here rather than trusting it downstream: a hand-crafted POST could
- * seal anything at all, and generate.js must never be handed a payload it will only
- * reject after the round has already been consumed.
+ * Separate from the decryption on purpose. This is the gate between "somebody sealed
+ * some bytes" and "this is a contribution", and it is the only thing standing between a
+ * hand-crafted POST and generate.js — which would otherwise reject the payload after
+ * the round had already been consumed, when the remedy is to exclude a player in public.
+ * Pure, synchronous and exported, so every refusal can be exercised without a chain.
+ *
+ * @param {Buffer|Uint8Array|string} plaintext what tlock handed back
+ * @param {object} protocol the frozen protocol.json
  */
-async function decryptPayload(ciphertext, cfg) {
-  const { protocol } = cfg;
-  const m = await mod();
-  const client = await chainClient(cfg);
-  const plaintext = await m.timelockDecrypt(ciphertext, client);
+function parsePayload(plaintext, protocol) {
   const buf = Buffer.from(plaintext);
   if (buf.length > MAX_PAYLOAD_BYTES) {
     throw new Error(`decrypted payload is ${buf.length} bytes, expected at most ${MAX_PAYLOAD_BYTES}`);
@@ -103,6 +107,12 @@ async function decryptPayload(ciphertext, cfg) {
     obj = JSON.parse(buf.toString('utf8'));
   } catch {
     throw new Error('decrypted payload is not JSON');
+  }
+  // An array parses as JSON and then reads every field as undefined, so the refusals
+  // below would each fire on their own. Saying it once, by name, is the difference
+  // between "user_input must be an integer" and a message someone can act on.
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    throw new Error('decrypted payload is not a JSON object');
   }
   // No fallback: config.js requires user_input_max, so an absent one means this was
   // handed something that never went through validation.
@@ -121,4 +131,15 @@ async function decryptPayload(ciphertext, cfg) {
   };
 }
 
-module.exports = { chainClient, encryptPayload, decryptPayload, mod, MAX_PAYLOAD_BYTES };
+/**
+ * Decrypt one ciphertext back to {user_input, client_nonce, client_timestamp}.
+ *
+ * Validates shape rather than trusting it downstream — see parsePayload.
+ */
+async function decryptPayload(ciphertext, cfg) {
+  const m = await mod();
+  const client = await chainClient(cfg);
+  return parsePayload(await m.timelockDecrypt(ciphertext, client), cfg.protocol);
+}
+
+module.exports = { chainClient, encryptPayload, decryptPayload, parsePayload, mod, MAX_PAYLOAD_BYTES };

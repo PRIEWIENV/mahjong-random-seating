@@ -5,8 +5,8 @@
 **A seating draw for twelve players that nobody can predict, nobody can steer, and anybody can check afterwards — including the person running it.**
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.5-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-363%20passing-brightgreen)](test/)
+[![Node](https://img.shields.io/badge/node-%E2%89%A5%2024-5FA04E?logo=node.js&logoColor=white)](package.json)
+[![Tests](https://img.shields.io/badge/tests-419%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -88,7 +88,7 @@ one of which admits the "opposite once" condition. The design is not chosen; it 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 363 unit tests, offline, ~12 s
+npm test                  # 419 unit tests, offline, ~12 s
 npm run rehearse          # the full draw, end to end, in a sandbox, ~3 min
 ```
 
@@ -151,7 +151,7 @@ Listed in reading order. No single path needs all seven.
 
 ```sh
 npm ci
-npm test                  # 363 unit tests, offline, ~12 s
+npm test                  # 419 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -278,7 +278,7 @@ while any of them is wrong.
 
 ```sh
 node tools/freeze.js                            # RUNBOOK 8-11, checks only
-node tools/freeze.js --write --tag frozen-v1    # ...and commit and tag
+node tools/freeze.js --write --tag <name>       # ...and commit and tag
 ```
 
 ## Project status

@@ -12,10 +12,40 @@
  * Nothing stored here would let anyone open a ciphertext early.
  */
 
-const { DatabaseSync } = require('node:sqlite');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+
+/**
+ * node:sqlite, or a refusal somebody can act on.
+ *
+ * package.json declared `>=22.5.0` and both README badges repeated it, while the CI
+ * workflow pinned Node 24 with a comment saying 22.x cannot run this — and the
+ * deployment document named no version at all, so a new operator installed whatever the
+ * distribution had. The engines field is only a warning to npm, so the first sign of
+ * trouble was `Cannot find module 'node:sqlite'` at the first start, on the box, on the
+ * day.
+ *
+ * Loaded on demand rather than at import, so the message arrives through the same path
+ * as every other deployment refusal: `operator` makes the entry points print it and
+ * exit, instead of burying four useful lines under a stack trace.
+ */
+let _sqlite = null;
+function sqlite() {
+  if (_sqlite) return _sqlite;
+  try {
+    _sqlite = require('node:sqlite');
+  } catch (err) {
+    throw Object.assign(new Error(
+      'node:sqlite is not available, so there is nowhere to keep the submissions.\n'
+      + `  Running:  Node ${process.versions.node}\n`
+      + '  Needs:    Node 24 or newer. Older versions either do not have node:sqlite or '
+      + 'keep it behind --experimental-sqlite.\n'
+      + `  (${err.message})`),
+    { operator: true });
+  }
+  return _sqlite;
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS submissions (
@@ -60,6 +90,7 @@ class Store {
 
   constructor(file, opts = {}) {
     this.sessionTtlMs = opts.sessionTtlMs ?? SESSION_TTL_MS;
+    const { DatabaseSync } = sqlite();
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');

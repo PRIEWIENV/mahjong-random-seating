@@ -31,7 +31,7 @@
 10. `node tools/freeze.js --event <id> --write` 把那份名册从 Pantheon 读回来，据此写出 `data/roster.json`。如果参赛人数不等于 `total_slots`、有人没有可用的 `local_id`、同一个账号登记了两次，或者某位选手没有名字，它就拒绝——而且任何一种情况下它什么都不写，因为基于一份刚被拒绝的报名表建出来的名册，比没有名册更糟。以上每一种问题否则都会落在开奖之后：缺 `local_id` 会卡住座位表同步，而同步是在座位表已经生成之后才跑的。
     - `--event <id>` 只在这场活动第一次冻结时需要。之后 event id 就在 `roster.json` 里，并且以它为准：一个命令行参数不能把已有的冻结重新指向另一场活动。
     - 不加 `--write` 时，命令只报告它打算做什么，不改动任何东西。
-11. 🔒 `node tools/freeze.js --write --tag frozen-v1`。在往 git 里写任何东西之前，它会重新推导模板的每一条已证明不变量、从源码重建浏览器 bundle 并与已提交的那份对比、跑一遍单元测试。它提交 `roster.json`、`protocol.json`、`schedule_template.json` 和 `generate.js`——就这四个，没有别的——外加构建好的 bundle 和它的哈希，然后打 tag。`runtime.json` 被 gitignore，并且刻意不在 tag 里。
+11. 🔒 `node tools/freeze.js --write --tag <name>`。名字自己取，但要能看出是哪一场抽签；一个名字只用一次，第二场活动和 §8 的重试都需要各自的 tag。命令会把它写进 `protocol.json` 的两个引用字段，拒绝 git 里已经存在的名字，并把它打进公告里。在往 git 里写任何东西之前，它会重新推导模板的每一条已证明不变量、从源码重建浏览器 bundle 并与已提交的那份对比、跑一遍单元测试。它提交 `roster.json`、`protocol.json`、`schedule_template.json` 和 `generate.js`——就这四个，没有别的——外加构建好的 bundle 和它的哈希，然后打 tag。`runtime.json` 被 gitignore，并且刻意不在 tag 里。
     - bundle 重建这项检查必须发生在**这里**。它需要 esbuild，而 VPS 上没有（`npm ci --omit=dev`）；VPS 跑的是 `--verify-hash`，那只比对已提交的 bundle 和它已提交的哈希，无法告诉你这个哈希是不是从另一份源码算出来的。
 
     配好远程仓库之后加上 `--push`。一个只存在于这台机器上的 tag 不构成承诺：谁也拉不到它，而且组织者仍然可以在看到结果之后再决定它指向哪个 commit（`PROTOCOL.zh.md` §9）。这条命令同时会用 OpenTimestamps 给 commit id 做锚定，把证明留在 `events/freeze/<tag>.commit.ots`——保管好那个文件。
@@ -62,10 +62,14 @@
 16. 把选手引到结果页。任何愿意核验的人，都应当能仅凭公开信息复现出同一张座位表：
 
     ```sh
-    git checkout <tag>            # 第 11 步公布的那一个
+    git clone <你的仓库> draw && cd draw
+    git checkout <tag>                         # 第 11 步公布的那一个
+    git checkout origin/HEAD -- results.json events/    # 冻结之后才写的
     node generate.js --verify results.json     # 整个文件，外加点名核对
     python3 tools/verify_template.py data/schedule_template.json
     ```
+
+    第三行不是可选的，而且很容易漏。`results.json` 和 `events/snapshot.json` 是开奖时才写的，发生在冻结之后，所以它们在默认分支上，不在 tag 里。单独 checkout tag 会把它们从工作区删掉，验证随后失败在「文件不存在」上，而不是失败在抽签本身。结果页会把这同一串命令填好后打印出来。
 
     第一条把 `results.json` 的每一个字节和一次从它所揭示的载荷重新算出的结果比对，然后检查 `events/snapshot.json` 是否对截止时收到的每一份提交都有交代。第二条从轮次数据重新推导模板已证明的性质，而不是相信文件自己的说法。
 

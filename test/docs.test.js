@@ -144,12 +144,52 @@ test('both READMEs name the same four frozen artefacts', () => {
  * The rule is the narrow one that was actually broken: where a document tells somebody
  * to check something out, the thing checked out is a placeholder.
  */
-test('no deployment document checks out a tag name it invented', () => {
-  for (const rel of ['deploy/README.md', 'deploy/README.zh.md', 'docs/RUNBOOK.md', 'docs/RUNBOOK.zh.md']) {
-    for (const m of read(rel).matchAll(/git checkout +(\S+)/g)) {
+/** Refs that mean the same thing in every clone, so naming one invents nothing. */
+const UNIVERSAL_REFS = new Set(['origin/HEAD']);
+
+// The READMEs are in this list too. The lint was scoped to the deployment document and
+// the runbook, and both READMEs went on printing `--tag frozen-v1` in their own freeze
+// snippet — which is where a reader following the operator path meets it first.
+const OPERATOR_DOCS = [
+  'deploy/README.md', 'deploy/README.zh.md',
+  'docs/RUNBOOK.md', 'docs/RUNBOOK.zh.md',
+  'README.md', 'README.zh.md',
+];
+
+test('no operator document names a tag it invented', () => {
+  for (const rel of OPERATOR_DOCS) {
+    const text = read(rel);
+    for (const m of text.matchAll(/git checkout +([^\s`]+)/g)) {
+      if (UNIVERSAL_REFS.has(m[1])) continue;
       assert.match(m[1], /^<.+>$/,
         `${rel} says "git checkout ${m[1]}" — that name exists only on the machine that froze it`);
     }
+    // The other end of the same mistake, and the end it starts at. The checkout lint was
+    // added after a new operator stopped on `git checkout frozen-v1`, but that name was
+    // born two documents earlier, in the step that CREATES the tag: the runbook said
+    // `--tag frozen-v1`, so everybody who followed it produced one, and the second event
+    // in a checkout could not be frozen at all.
+    for (const m of text.matchAll(/--tag +([^\s`]+)/g)) {
+      assert.match(m[1], /^<.+>$/,
+        `${rel} says "--tag ${m[1]}" — a tag name is the operator's, and is used once`);
+    }
+  }
+});
+
+/**
+ * The example protocol is where an invented tag would be copied from.
+ *
+ * Its two reference fields name the freeze tag, and they shipped naming one that has
+ * never existed. `tools/freeze.js --tag` writes the real name into both now, so what the
+ * example has to carry is a placeholder that is obviously not a name.
+ */
+test('the example protocol does not ship a tag name', () => {
+  const example = JSON.parse(read('data/protocol.example.json'));
+  for (const k of ['schedule_template_ref', 'generate_script_ref']) {
+    const ref = example[k];
+    assert.ok(typeof ref === 'string' && ref.includes('@'), `${k} must be "<path>@<tag>"`);
+    assert.match(ref.split('@')[1], /^<.+>$/,
+      `data/protocol.example.json ${k} names the tag "${ref.split('@')[1]}", which exists nowhere`);
   }
 });
 

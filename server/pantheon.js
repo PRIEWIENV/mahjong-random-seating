@@ -12,13 +12,17 @@
  *
  * Two implementations satisfy it:
  *
- *   TwirpPantheon — the real thing. Written from the method names and message shapes
- *     in PANTHEON-INTEGRATION.md §5, which were read off Common/proto on master.
- *     ** NOT YET VERIFIED against a running instance. ** That document opens by saying
- *     to confirm the field names against the instance you actually run, because they
- *     are the details most likely to drift, and no instance was available here. The
- *     Twirp path template and every field name are therefore configurable rather than
- *     baked in, so drift is a config change and not a code change.
+ *   TwirpPantheon — the real thing. Written from the method names and message shapes in
+ *     PANTHEON-INTEGRATION.md §5, and since run against a live instance (Pantheon
+ *     cdda3fc, Docker under WSL 2): sign-in, the event roster, and writing the prescript
+ *     and reading it back all pass, after six of its assumptions turned out to be wrong.
+ *     IMPLEMENTATION_NOTES.md §6f lists them; none announced itself. `getEventTitle` is
+ *     the one call not in that set, and it is the one that fails soft — the page shows
+ *     its generic title and the draw is unaffected.
+ *
+ *     One instance of one commit is not the same as the instance you will run. That is
+ *     why the Twirp path template and every field name are configuration rather than
+ *     code: drift is a runtime.json change, not a rebuild of a hash-pinned bundle.
  *
  *   StubPantheon — an in-process fake with the same contract, used by the tests and by
  *     `PANTHEON_MODE=stub` for local runs. It is what lets the draw, the API and the UI

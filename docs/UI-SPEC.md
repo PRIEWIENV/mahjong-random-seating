@@ -110,7 +110,7 @@ The result stage opens with what the player needs *next*, before the data they w
 - their own first-round table and seat, stated in one sentence;
 - when and where play starts, if configured;
 - a line confirming the plan has been synced to Pantheon, so they know the mobile assistant will agree with what they see here;
-- a quiet link to how the draw can be re-verified independently;
+- a quiet link to how the draw can be re-verified independently. It has to start by saying where the files come from, and be runnable in the order it is written. It named no repository at all, and the two files it then told the reader to check are written by the draw, which happens after the freeze: they are on the default branch and not inside the tag, so checking the tag out removes them and the verification fails on a missing file rather than on anything about the draw. The repository comes from `mirror_repo` in the status, the tag from `generate_script_ref` in the result, and neither is ever defaulted to a name — a page that invents a tag is telling twelve people to check out something that does not exist;
 - the sealed ciphertexts, their fingerprint and its timestamp proof, downloadable — the same card as during the wait. Offering them only before the draw withdrew the evidence at the exact moment it became checkable.
 
 Below that sits the seat plan explorer.
@@ -155,6 +155,8 @@ GET /api/status   → phase, submitted_count, quorum, total_slots, submitted_loc
                     cutoff_utc, target_round_utc, reveal_gap_seconds, target_round,
                     roll{digest, submitted_count, anchored, calendars},
                     event_title,      // from Mimir; null where it cannot be reached
+                    mirror_repo,      // where the evidence is published; null when
+                    //   mirroring is off, and then the result page names no repository
                     draw{round_due_utc, seconds_late, grace_seconds, overdue},
                     drand{latest_round, healthy, last_seen_utc},
                     server_time_utc

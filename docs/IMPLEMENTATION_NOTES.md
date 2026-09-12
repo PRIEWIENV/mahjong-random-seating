@@ -1415,12 +1415,92 @@ markup on an `.sr-only` label, so the field is still named to a screen reader; t
 labels. Stub mode's `person_id` field takes the same shell and a person glyph, which is
 the point: the two modes now differ by their fields and by nothing else.
 
+## 6u. What reading the whole tree found
+
+Reading everything at once turns up a different class of defect from working on it a file
+at a time. Nothing below was a bug anybody had hit. Every one of them was a promise the
+code or the documents made and could not keep.
+
+**The browser's sealing code had no test.** `client/seal.js` is the file a player's
+plaintext number passes through, its own header says the number never leaves it, and the
+freeze commits the bundle it compiles into for exactly that reason. It was imported by one
+component and referenced by no test and no tool: the most consequential file here, and the
+only one with nothing asserted about it.
+
+The gap that mattered was not the obvious one. `sealSubmission` writes the
+`client_timestamp` that generate.js validates against a deliberately narrow grammar, and
+whether `toISOString` satisfies it was a property nobody had written down. A browser
+emitting anything else would produce ciphertexts that seal, post, store, mirror and
+decrypt perfectly, and are then rejected one at a time after the cutoff with the beacon
+already out, when the only remedy left is to exclude twelve players in public.
+
+`test/seal.test.js` seals for real and offline: a local server answers `/info` with the
+quicknet parameters, and tlock needs nothing else, because the key for the target round
+does not exist when a player submits. What comes out is then fed to `server/ciphertext.js`
+and its admission gate, two files that had never referred to each other and that nothing
+compared. The rejection sampling behind "Roll for me" is pinned by feeding the generator
+the one 32-bit value that has to be discarded, rather than by a distribution check: the
+bias it removes is one part in 1.4 billion, which no sample could detect, so a statistical
+test would pass on a broken implementation.
+
+Loading the file at all took a decision. It is an ES module inside a CommonJS package, so
+Node will not `require` it. Marking `client/` as a module works and changes what esbuild
+emits, and changing the frozen bundle to make a test possible is the wrong way round. So
+it is copied verbatim into `var/` under an `.mjs` name, inside the tree so `tlock-js` still
+resolves, and byte-checked against the original.
+
+**The one branch that stops a draw had never executed.** `server/drand.js` asks every
+configured mirror for the target round and refuses to go on if two of them disagree. The
+only `new Drand` in the suite was in `test/e2e.js`, with one mirror, where agreement is
+true by arithmetic, and e2e needs the network, is not in `npm test`, not in the freeze
+preflight, and deliberately not in CI.
+
+The reason was structural rather than neglect: `Drand` had no injectable fetch, unlike
+`TwirpPantheon` and `Mirror`, so exercising the check meant finding two real mirrors that
+disagree. It takes one now. The draw job's half changed too. It decided whether a failure
+was fatal by looking for the word "disagree" in the message, so the one unrecoverable
+branch in this system rested on a sentence nobody was allowed to rewrite. `DrandError`
+carries a flag instead.
+
+**The tag was a name invented in a document.** RUNBOOK step 11 said `--tag frozen-v1`,
+`data/protocol.example.json` shipped `@frozen-v1` in both reference fields, and the result
+stage fell back to the literal string. `tools/freeze.js` knew the real tag from `--tag` and
+checked only that the refs contained an `@`.
+
+So an organiser who tagged anything else, which the deployment document's placeholder
+encourages and which a second event forces, published a result page telling twelve players
+to check out a tag that has never existed. The freeze writes the name into both fields now,
+refuses one git already has, and the page says less rather than something untrue when the
+field is absent. The lint added after `git checkout frozen-v1` stopped a new operator now
+covers `--tag` as well, which is where that name was born.
+
+**The verification a player is given did not run as written.** The result page listed five
+confident steps and two commands and never said which repository any of it came from.
+Worse, `results.json` and `events/snapshot.json` are written by the draw, which happens
+after the freeze, so they are on the default branch and not inside the tag: checking the
+tag out removes them, and the verification then fails on a missing file rather than on
+anything about the draw. RUNBOOK step 16 had the same three lines and the same hole. Both
+fetch now, and `/api/status` carries `mirror_repo` so the page can name the repository
+rather than gesture at it.
+
+**The declared Node version was one the code cannot run on.** `package.json` said
+`>=22.5.0` and both README badges repeated it, while the CI workflow pinned Node 24 with a
+comment saying 22.x cannot run this, and `deploy/README.md` named no version at all. The
+engines field is a warning to npm and nothing more, so the first sign was
+`Cannot find module 'node:sqlite'` at the first start, on the box, on the day.
+`server/db.js` loads it on demand and refuses in the same voice as every other deployment
+problem.
+
+Three methods had no callers. `Drand.roundAt` and `Drand.isAvailable` are gone.
+`Store.purgeExpiredSessions` was kept and given one: sessions deliberately outlive a round,
+so nothing else ever removed an expired row, and a restart is its moment.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 363 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents | pass |
+| Unit tests (`npm test`) — 419 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1489,6 +1569,15 @@ the point: the two modes now differ by their fields and by nothing else.
 | Sign-in gate live: correct token, wrong token, unknown person | passes, three distinct answers |
 | Prescript written, read back byte-identical, and applied with `MakePrescriptedSeating` | passes, seat order intact |
 | The whole suite on Linux (WSL 2), including e2e A2-A7 | passes |
+| The browser's own sealing code, sealed offline against the real chain parameters, and its ciphertext accepted by the server's admission gate | passes |
+| The timestamp the browser writes is one generate.js accepts, checked through the real contribution hash | passes |
+| "Roll for me" discards the one 32-bit value that would bias the draw, watched failing on a plain modulo | passes |
+| Two drand mirrors disagreeing about a round refuses the draw, and the refusal is flagged rather than worded | passes |
+| One mirror down, a mirror on the wrong chain, and a mirror answering the wrong round are each told apart from a disagreement | passes |
+| Every refusal in the tlock payload gate, including a JSON array and an oversized plaintext | passes |
+| The chain client pins the hash and the public key on both the chain and the client | passes |
+| The freeze writes the tag it is creating into protocol.json, and refuses a tag name git already has | passes |
+| No operator document names a tag it invented, on the `--tag` side as well as the `git checkout` side | passes |
 | **The Pantheon instance actually deployed against** | **outstanding — §5.1 is one commit's behaviour** |
 
 `npm run e2e` needs network access to `api.drand.sh` and takes about ninety seconds,

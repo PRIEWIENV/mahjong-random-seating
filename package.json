@@ -5,7 +5,7 @@
   "description": "Timelock-randomised seating draw for 12 players (see docs/PROTOCOL.md)",
   "license": "MIT",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build": "node tools/build-client.js",

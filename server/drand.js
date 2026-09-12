@@ -15,13 +15,29 @@
 // runtime.json and defaulted there rather than duplicated here.
 const { DEFAULTS } = require('./runtime');
 
-class DrandError extends Error {}
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.disagreement] the mirrors gave different answers for one round
+ *
+ * The flag is here because the caller has to act on that case and on no other. Every
+ * other failure in this file means "ask again in a moment"; mirrors disagreeing means
+ * stop. The draw job used to tell them apart by looking for the word "disagree" in the
+ * message, which made the one unrecoverable branch in this system depend on a sentence
+ * nobody was allowed to rewrite.
+ */
+class DrandError extends Error {
+  constructor(message, opts = {}) {
+    super(message);
+    this.name = 'DrandError';
+    this.disagreement = opts.disagreement === true;
+  }
+}
 
-async function getJson(url, timeoutMs = 10_000) {
+async function getJson(url, { timeoutMs = 10_000, fetchImpl = fetch } = {}) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: ac.signal, headers: { accept: 'application/json' } });
+    const res = await fetchImpl(url, { signal: ac.signal, headers: { accept: 'application/json' } });
     if (!res.ok) throw new DrandError(`${url} -> HTTP ${res.status}`);
     return await res.json();
   } finally {
@@ -33,9 +49,16 @@ class Drand {
   /**
    * @param {string} chainHash 64 hex chars, from the frozen protocol.json
    * @param {string[]} mirrors base URLs, from runtime.json; the configured api goes first
+   * @param {object} [opts]
+   * @param {Function} [opts.fetch] injected, the way the Pantheon client and the mirror
+   *   already take theirs. Without it the cross-check below could only be exercised by
+   *   finding two real mirrors that disagree, so the one branch in this system that
+   *   stops a draw outright had never been executed by anything.
+   * @param {number} [opts.timeoutMs]
    */
-  constructor(chainHash, mirrors = []) {
+  constructor(chainHash, mirrors = [], opts = {}) {
     this.chainHash = chainHash;
+    this.fetchOpts = { fetchImpl: opts.fetch || fetch, timeoutMs: opts.timeoutMs ?? 10_000 };
     const seen = new Set();
     const configured = mirrors.length ? mirrors : DEFAULTS.drand.mirrors;
     this.mirrors = configured.filter((m) => {
@@ -52,7 +75,7 @@ class Drand {
     const errors = [];
     for (const base of this.mirrors) {
       try {
-        const json = await getJson(`${base}/${this.chainHash}${pathname}`);
+        const json = await getJson(`${base}/${this.chainHash}${pathname}`, this.fetchOpts);
         answers.push({ mirror: base, json });
       } catch (err) {
         errors.push(`${base}: ${err.message}`);
@@ -70,7 +93,10 @@ class Drand {
   async info() {
     if (this._info) return this._info;
     const { value, agreed } = await this.#fromMirrors('/info', (j) => j.public_key);
-    if (!agreed) throw new DrandError('drand mirrors disagree about the chain public key — stop and investigate');
+    if (!agreed) {
+      throw new DrandError('drand mirrors disagree about the chain public key — stop and investigate',
+        { disagreement: true });
+    }
     if (value.hash && value.hash !== this.chainHash) {
       throw new DrandError(`drand returned chain hash ${value.hash}, protocol.json says ${this.chainHash}`);
     }
@@ -84,14 +110,6 @@ class Drand {
     return (genesis_time + (round - 1) * period) * 1000;
   }
 
-  /** Round emitted at or before `ms`. */
-  async roundAt(ms) {
-    const { genesis_time, period } = await this.info();
-    const elapsed = Math.floor(ms / 1000) - genesis_time;
-    if (elapsed < 0) return 0;
-    return Math.floor(elapsed / period) + 1;
-  }
-
   /**
    * The signature for a round, cross-checked across mirrors.
    * Throws if the round has not been emitted yet (every mirror 404s).
@@ -100,7 +118,8 @@ class Drand {
     const { value, agreed, answers } = await this.#fromMirrors(`/public/${round}`, (j) => j.signature);
     if (!agreed) {
       const seen = answers.map((a) => `${a.mirror} -> ${a.json.signature}`).join('\n  ');
-      throw new DrandError(`drand mirrors disagree about round ${round} — DO NOT DRAW.\n  ${seen}`);
+      throw new DrandError(`drand mirrors disagree about round ${round} — DO NOT DRAW.\n  ${seen}`,
+        { disagreement: true });
     }
     if (value.round !== round) {
       throw new DrandError(`asked for round ${round}, mirror answered with round ${value.round}`);
@@ -116,16 +135,6 @@ class Drand {
   async latest() {
     const { value } = await this.#fromMirrors('/public/latest', (j) => j.round);
     return value;
-  }
-
-  /** True once the target round has been emitted (and is fetchable). */
-  async isAvailable(round) {
-    try {
-      await this.round(round);
-      return true;
-    } catch {
-      return false;
-    }
   }
 }
 

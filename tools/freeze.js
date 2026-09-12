@@ -18,10 +18,14 @@
  *   node tools/freeze.js --event 42          first freeze: no roster.json exists yet
  *   node tools/freeze.js                     snapshot + check, write nothing
  *   node tools/freeze.js --write             write data/roster.json too
- *   node tools/freeze.js --write --tag frozen-v1     ...and commit and tag
- *   node tools/freeze.js --write --tag frozen-v1 --push   ...and push it, which is
- *                                                   what makes it a public commitment
+ *   node tools/freeze.js --write --tag <name>       ...and commit and tag
+ *   node tools/freeze.js --write --tag <name> --push  ...and push it, which is what
+ *                                                   makes it a public commitment
  *   --no-anchor                                     skip the OpenTimestamps stamp
+ *
+ * The tag name is yours and is used once. It is written into protocol.json's two
+ * reference fields, so the file names the tag it is frozen as, and the result page
+ * later reads it back out of there to tell players what to check out.
  *
  * Tagging without pushing leaves the freeze on one machine, where the organiser could
  * still choose which commit it names after seeing the outcome (PROTOCOL.md section 9).
@@ -183,6 +187,58 @@ function applyRosterSnapshot({ cfg, snapshot, problems, lines, write }) {
   return cfg;
 }
 
+/**
+ * Write the tag being created into the two fields that name it.
+ *
+ * `schedule_template_ref` and `generate_script_ref` say which tag the other frozen
+ * artefacts come from, so the four files commit to each other. They are the one part of
+ * protocol.json that config.js cannot check at load time, because the tag does not exist
+ * until a few lines below — and the check that was here only asked whether they contained
+ * an `@`.
+ *
+ * So they stayed at whatever `data/protocol.example.json` shipped, which was a tag name
+ * invented in a document. Every consequence of that is downstream of a file nobody reads
+ * twice: generate.js compares these refs to decide whether a verifier is holding the
+ * wrong protocol.json, and the result stage reads the tag out of `generate_script_ref`
+ * and prints it to twelve players as the thing to check out. An operator who tagged
+ * anything else shipped a result page naming a tag that does not exist.
+ *
+ * This command is the only thing that knows both the file and the tag, so it writes them
+ * rather than asking the operator to hand-edit a frozen file — which is the habit every
+ * other line in this project exists to discourage.
+ */
+function alignTagRefs(cfg, tag, lines, problems) {
+  const want = {
+    schedule_template_ref: `data/schedule_template.json@${tag}`,
+    generate_script_ref: `generate.js@${tag}`,
+  };
+  const file = path.join(cfg.dataDir, 'protocol.json');
+  let raw;
+  try {
+    raw = readJson(file);
+  } catch (err) {
+    problems.push(`data/protocol.json could not be read to set its tag references: ${err.message}`);
+    return cfg;
+  }
+  const stale = Object.keys(want).filter((k) => raw[k] !== want[k]).map((k) => [k, raw[k]]);
+  if (!stale.length) {
+    lines.push(ok(`protocol.json already names the tag it is being frozen as (${tag})`));
+    return cfg;
+  }
+  for (const [k, v] of Object.entries(want)) raw[k] = v;
+  fs.writeFileSync(file, JSON.stringify(raw, null, 2) + LF);
+  lines.push(ok(`protocol.json's tag references set to @${tag}`));
+  for (const [k, was] of stale) {
+    lines.push(`        ${k}: ${was === undefined ? '—' : JSON.stringify(was)} -> ${JSON.stringify(want[k])}`);
+  }
+  try {
+    return load({ dataDir: cfg.dataDir, rosterOptional: true });
+  } catch (err) {
+    problems.push(`data/protocol.json no longer loads after setting its tag references: ${err.message}`);
+    return cfg;
+  }
+}
+
 /** Step 11's checks, plus the ones RUNBOOK A leaves to memory. */
 function preflight(cfg, lines, problems) {
   const now = Date.now();
@@ -297,6 +353,9 @@ async function main(argv) {
   if (!cfg.roster) problems.push('no data/roster.json — see above. Nothing was frozen.');
 
   // ---- step 11 ------------------------------------------------------------
+  // Before the checks, so everything below runs against the file that will actually be
+  // committed rather than against the one that was on disk a moment ago.
+  if (typeof args.tag === 'string') cfg = alignTagRefs(cfg, args.tag, lines, problems);
   preflight(cfg, lines, problems);
 
   for (const l of lines) process.stdout.write(l + '\n');
@@ -335,6 +394,20 @@ async function main(argv) {
       throw new Error(`${label}:\n        ${String(err.stderr || err.stdout || err.message).trim()}`);
     }
   };
+
+  // A tag name is used once, ever. The second event run in a checkout, and every §8
+  // retry, needs its own: the tag is what a player is given, and two draws answering to
+  // one name is the ambiguity the whole freeze exists to remove. git refuses this on its
+  // own, but it refuses with four words and at the worst moment — mid-retry, with a
+  // window already announced — so it is said here, with what to do about it.
+  if (git(['tag', '--list', args.tag], 'git tag --list').trim()) {
+    throw new Error(
+      `the tag ${args.tag} already exists in this repository.\n` +
+      '        It names an earlier freeze, and reusing it would point two draws at one name.\n' +
+      '        Choose a name that says which draw this is — the event and the round, say —\n' +
+      `        and run this again: node tools/freeze.js --write --tag <name>\n` +
+      '        "git tag -l" lists what is taken.');
+  }
 
   // -f because data/roster.json and data/protocol.json are gitignored in the source
   // repository: they are one event's data, and the developer's tree is not where any
@@ -436,4 +509,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { snapshotRoster, applyRosterSnapshot, preflight, FROZEN };
+module.exports = { snapshotRoster, applyRosterSnapshot, alignTagRefs, preflight, FROZEN };

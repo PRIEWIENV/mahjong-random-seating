@@ -245,6 +245,8 @@ submissions/<local_id>.json
              api,                           // 运营的（§4.2）：从哪里访问它
              latest_round, expected_round_at_cutoff, healthy: bool, last_seen_utc },
     frey_base_url, status_poll_interval_ms, // 运营的（§4.2）
+    mirror_repo,                            // §5 把证据发布到哪里，好让结果页
+                                            // 指名它；未开启镜像时为 null
     server_time_utc }                       // 让倒计时永不漂移
 
   应用展示给选手的每一个冻结数字都来自这里，所以页面永远不可能说出
