@@ -177,6 +177,24 @@ same way. It is gitignored on purpose: nothing in it can change the outcome, and
 it out of the tree makes it obvious that it was never covered by the freeze. If a drand
 mirror dies during the submission window, this is the file you edit — not a tagged one.
 
+**Pantheon on the same box.** Pantheon answers on names, not addresses: each container's
+nginx matches on `server_name` and answers 404 to anything else, so
+`http://127.0.0.1:4001` fails even while Mimir is healthy. The base URLs this ships with
+are `mimir.pantheon.local` and `frey.pantheon.local`, and on a server nothing resolves
+those names until you add them:
+
+```sh
+echo '127.0.0.1  mimir.pantheon.local frey.pantheon.local' | sudo tee -a /etc/hosts
+getent hosts mimir.pantheon.local        # must print 127.0.0.1
+```
+
+Without this, the first thing to fail is `tools/freeze.js` at RUNBOOK step 10, which says
+the name does not resolve and names the URL it tried. Check with `getent`, which goes
+through the same system resolver Node uses. Do not check with `curl`: on one server
+`getent` found nothing and `curl` still got a 404 back from somewhere. That entry fixes
+the relay only. Browsers call Frey themselves, so `frey_public_url` still has to be an
+address a phone can reach (§6).
+
 Narrow the GitHub PAT to this repository and to contents:write only. Per §10, write
 access to `main` should be restricted to that token, so the ciphertext history is
 append-only in practice as well as in principle.

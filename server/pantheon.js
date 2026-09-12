@@ -74,12 +74,79 @@ class PantheonError extends Error {
     this.name = 'PantheonError';
     this.status = opts.status;
     this.retryable = opts.retryable ?? false;
+    if (opts.cause) this.cause = opts.cause;
   }
 }
 
 // ---------------------------------------------------------------------------
 // real client
 // ---------------------------------------------------------------------------
+/**
+ * What actually went wrong, out of a `fetch failed`.
+ *
+ * Node reports every transport failure as those same two words and puts the reason in
+ * `err.cause` — sometimes nested a second time. Passing `err.message` on therefore gave
+ * an operator `GetAllRegisteredPlayers: fetch failed`, which does not say which host was
+ * tried, or whether the name failed to resolve, the port refused the connection, or a
+ * firewall swallowed it. Those have nothing to do with each other and nothing in common
+ * but that sentence, and it is read on the day, at RUNBOOK step 10, by someone who
+ * cannot fix what they cannot name.
+ *
+ * The URL is always included, because "which address did it even try" is the first
+ * question and the answer is assembled from four settings across two files.
+ */
+function transportReason(err, url, timeoutMs) {
+  const chain = [];
+  for (let e = err; e && chain.length < 6; e = e.cause) chain.push(e);
+  const code = chain.map((e) => e.code).find(Boolean);
+  const detail = chain.map((e) => e.message).filter(Boolean).pop() || String(err);
+  const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+
+  const say = (line, ...hints) => [`${url}\n    ${line}`, ...hints.map((h) => `    ${h}`)].join('\n');
+
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+    return say(`no answer within ${timeoutMs}ms (${detail}).`,
+      'Something accepted the connection and then did not reply in time. Check the',
+      'service is healthy rather than merely listening.');
+  }
+  switch (code) {
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return say(`the name ${host.split(':')[0]} does not resolve (${detail}).`,
+        'Pantheon answers on names, not addresses: both container nginx configs match on',
+        'server_name and both have a catch-all that 404s, so an IP will not do. Give the',
+        'box running this an /etc/hosts entry (or a DNS record) pointing that name at the',
+        'machine Pantheon runs on, or set pantheon.mimir_base_url and pantheon.frey_base_url',
+        'in data/runtime.json to names it can already resolve.');
+    case 'ECONNREFUSED':
+      return say(`nothing is listening on ${host} (${detail}).`,
+        'The name resolved, so this is the service and not the DNS. Pantheon\u2019s compose',
+        'publishes Mimir on 4001 and Frey on 4004; check the containers are up and that the',
+        'port is published on the interface this address reaches, not only on loopback',
+        'inside the container network.');
+    case 'ETIMEDOUT':
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH':
+      return say(`${host} is not reachable from here (${detail}).`,
+        'The connection was not refused, it went unanswered \u2014 which is what a firewall or a',
+        'missing route looks like, rather than a service that is down.');
+    case 'ECONNRESET':
+    case 'EPIPE':
+      return say(`${host} closed the connection (${detail}).`,
+        'Something is listening but did not speak HTTP. A TLS port addressed as http://, or',
+        'a proxy in front of Pantheon, both look like this.');
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'CERT_HAS_EXPIRED':
+      return say(`the TLS certificate for ${host} was rejected (${detail}).`,
+        'Trust the issuing CA on this box. Do not disable verification: this call carries the',
+        'admin token that writes the seat plan.');
+    default:
+      return say(`${detail}${code ? ` (${code})` : ''}.`);
+  }
+}
+
 class TwirpPantheon {
   /**
    * @param {object} cfg protocol.json's `pantheon` block
@@ -125,16 +192,17 @@ class TwirpPantheon {
 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.timeoutMs);
+    const url = this.#url(base, service, method);
     let res;
     try {
-      res = await this.fetch(this.#url(base, service, method), {
+      res = await this.fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body ?? {}),
         signal: ac.signal,
       });
     } catch (err) {
-      throw new PantheonError(`${method}: ${err.message}`, { retryable: true });
+      throw new PantheonError(`${method}: ${transportReason(err, url, this.timeoutMs)}`, { retryable: true, cause: err });
     } finally {
       clearTimeout(timer);
     }
@@ -330,5 +398,5 @@ function createPantheon(cfg, env = process.env, opts = {}) {
 }
 
 module.exports = {
-  TwirpPantheon, StubPantheon, PantheonError, createPantheon, DEFAULT_TWIRP_PATH, field,
+  TwirpPantheon, StubPantheon, PantheonError, createPantheon, DEFAULT_TWIRP_PATH, field, transportReason,
 };

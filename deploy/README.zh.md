@@ -109,6 +109,21 @@ chmod 600 .env
 
 `data/runtime.json` 是那些覆盖项的文件版本，同样是可选的。它被刻意 gitignore：里面没有任何东西能改变结果，而把它排除在树之外，能让「它从来不在冻结范围内」这件事一目了然。如果某个 drand 镜像在提交窗口期间挂了，你要编辑的就是这个文件——不是某个已打 tag 的文件。
 
+**Pantheon 和 relay 在同一台机器上。** Pantheon 认名字，不认地址：每个容器的 nginx 都按
+`server_name` 匹配，其余一律回 404，所以即使 Mimir 健康，`http://127.0.0.1:4001` 也会失败。
+出厂的基础 URL 是 `mimir.pantheon.local` 和 `frey.pantheon.local`，而在服务器上，你不加条目，
+就没有任何东西会解析这两个名字：
+
+```sh
+echo '127.0.0.1  mimir.pantheon.local frey.pantheon.local' | sudo tee -a /etc/hosts
+getent hosts mimir.pantheon.local        # 必须打印出 127.0.0.1
+```
+
+少了这一步，最先失败的是 RUNBOOK 第 10 步的 `tools/freeze.js`，它会报出名字无法解析，并给出
+它尝试的 URL。用 `getent` 检查，它和 Node 走的是同一个系统解析器。不要用 `curl` 检查：在一台
+服务器上，`getent` 什么都没查到，`curl` 却从某处拿回了一个 404。这条记录只解决 relay 这一侧。
+浏览器是自己去连 Frey 的，所以 `frey_public_url` 仍然必须是手机能到达的地址（§6）。
+
 把 GitHub PAT 收窄到这一个仓库，且只给 contents:write。按 §10，对 `main` 的写权限应当限制给那个 token，这样密文历史在实践上也和在原则上一样是只追加的。
 
 ## 3. 如何运行

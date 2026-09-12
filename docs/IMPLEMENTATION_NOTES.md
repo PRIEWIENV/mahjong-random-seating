@@ -1584,12 +1584,54 @@ anything extra, naming it. The same fault now stops the rehearsal in its third s
 with the file named, instead of in its third minute as an EEXIST from a clone — after the
 freeze, the tag, twelve submissions and the draw have all gone by.
 
+## 6x. Two words for every way of not reaching Pantheon
+
+The first real freeze on a server stopped at step 10 with:
+
+```
+FAIL  Pantheon did not answer for event 2: GetAllRegisteredPlayers: fetch failed
+```
+
+The event id was right. So was Mimir: it was up on `127.0.0.1:4001`, and a request with
+the name pinned to that address got JSON back. What was missing was a line in
+`/etc/hosts`. The base URL is `http://mimir.pantheon.local:4001`, nothing on the server
+resolved that name, and the request never left the machine.
+
+It took a round of questions to find, because the message had nothing in it to go on.
+Node's `fetch` reports every transport failure as the same two words and puts the reason
+in `err.cause`. The client passed on `err.message` and dropped the cause. A name that does
+not resolve, a port nobody listens on, a firewall that swallows the connection and a
+service that accepts and never answers all printed identically. They need four different
+fixes, and the message did not even say which address it had tried. That address is
+assembled from a base URL, a path template and a service name, with a default under each,
+so "which host did it try" is not something an operator can answer by looking.
+
+`transportReason` in `server/pantheon.js` walks the cause chain now. It prints the full
+URL, the underlying error, and one sentence on what that class of failure usually means:
+the resolver, the listener, the route, or TLS. For the resolver case it repeats the one
+fact about Pantheon an operator most needs, which is that it answers on names and an IP
+address gets a 404. `PantheonError` also keeps the original error as `cause`.
+`test/freeze.test.js` sends both of the likely failures through the real client and the
+real snapshot. It checks that the URL and the reason come out and that `fetch failed`
+does not. Put back the old catch and it fails on both.
+
+The hosts entry was already documented, in `docs/PANTHEON-INTEGRATION.md` §6. That
+section is about a local Pantheon for development, in WSL, on the developer's machine. The
+deployment guide an operator follows on a server never mentioned it, so a same-box
+deployment had one required step that appeared only in the notes on how the code was
+tested. `deploy/README.md` §2 has it now, with a `getent` check.
+
+One observation is not explained. On that server `getent hosts mimir.pantheon.local` found
+nothing, and a plain `curl` to the same URL still got a 404 from somewhere. No proxy
+variable was set. Whatever answered, it was not reached the way Node resolves names, which
+is why the guide says to check with `getent` and not with `curl`.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 421 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules | pass |
+| Unit tests (`npm test`) — 422 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1607,6 +1649,7 @@ freeze, the tag, twelve submissions and the draw have all gone by.
 | The server draws on its own timer, with no systemd and no root (`npm run rehearse` step 14) | passes |
 | A sign-in and a submission that land while the draw job holds the write lock both go through, and waited | passes |
 | The rehearsal sandbox commits exactly the files it copied in, and refuses on anything else | passes |
+| A Pantheon that cannot be reached is reported with the URL tried and the underlying reason, never as `fetch failed` | passes |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |

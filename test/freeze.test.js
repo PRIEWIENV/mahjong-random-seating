@@ -112,6 +112,39 @@ test('Pantheon being unreachable is reported, not swallowed', async () => {
   cleanup(fx.dir);
 });
 
+test('an unreachable Pantheon is named down to the address and the reason', async () => {
+  // What an operator got at step 10 on a server with no /etc/hosts entry for
+  // mimir.pantheon.local was "GetAllRegisteredPlayers: fetch failed" and nothing else.
+  // Node's fetch puts the reason in err.cause, and the client passed on only the message,
+  // so a name that does not resolve and a port nobody listens on read identically. Run
+  // through the real client, so what is tested is the unwrapping, not a fake that already
+  // says the right thing.
+  const { TwirpPantheon } = require('../server/pantheon');
+  const url = 'http://mimir.pantheon.local:4001/v2/common.Mimir/GetAllRegisteredPlayers';
+  const failing = (code, message) => async () => {
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error(message), { code }) });
+  };
+  const cases = [
+    ['ENOTFOUND', 'getaddrinfo ENOTFOUND mimir.pantheon.local',
+      ['the name mimir.pantheon.local does not resolve', '/etc/hosts']],
+    ['ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:4001',
+      ['nothing is listening on mimir.pantheon.local:4001', 'The name resolved']],
+  ];
+  for (const [code, message, expected] of cases) {
+    const { fx, cfg } = fixture();
+    const problems = [];
+    const pantheon = new TwirpPantheon(
+      { mimir_base_url: 'http://mimir.pantheon.local:4001' }, {}, { fetch: failing(code, message) });
+    const snap = await snapshotRoster(cfg, problems, pantheon);
+    const said = problems.join('\n');
+    assert.equal(snap, null);
+    assert.ok(said.includes(url), `${code}: the URL that was tried must be named:\n${said}`);
+    for (const phrase of expected) assert.ok(said.includes(phrase), `${code}: expected "${phrase}" in:\n${said}`);
+    assert.ok(!said.includes('fetch failed'), `${code}: the wrapper's two words are not a reason:\n${said}`);
+    cleanup(fx.dir);
+  }
+});
+
 test('the snapshot is ordered by local_id, so two freezes of one roster agree', async () => {
   const { fx, cfg } = fixture();
   const shuffled = [...registered(cfg)].reverse();
