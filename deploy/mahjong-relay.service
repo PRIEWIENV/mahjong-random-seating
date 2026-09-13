@@ -26,7 +26,7 @@ RestartSec=3
 TimeoutStopSec=180
 
 # Optional. Only for a box you have root on; the app needs none of this to run, and
-# deploy/README.md §3 has the ways that need no privileges at all.
+# deploy/README.md §8 has the ways that need no privileges at all.
 #
 # The relay holds nothing that would let anyone decrypt early, but it does hold the
 # mirroring PAT, so give it as little of the machine as it can work with.

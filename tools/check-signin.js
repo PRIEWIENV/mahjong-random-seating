@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * One account's sign-in, walked without the relay, step by step (deploy/README.md §6).
+ * One account's sign-in, walked without the relay, step by step (deploy/README.md §9, §15).
  *
  *   1. the call the BROWSER makes: Frey Authorize with email + password
  *   2. the re-check the RELAY makes: Frey QuickAuthorize with the token from step 1

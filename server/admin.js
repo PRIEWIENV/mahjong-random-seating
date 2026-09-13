@@ -194,7 +194,7 @@ function collect(ctx) {
   } else {
     check('fail', 'Session cookies are marked Secure, but this request came over plain http',
       'No browser will keep the cookie, so nobody can sign in — the server refuses sign-in ' +
-      'over http rather than issue one. Put TLS in front (deploy/README.md §4); if it is ' +
+      'over http rather than issue one. Put TLS in front (deploy/README.md §7); if it is ' +
       'there already, it is not sending X-Forwarded-Proto.');
   }
 

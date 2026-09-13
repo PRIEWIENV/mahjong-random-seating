@@ -1,490 +1,428 @@
-# Deployment (PROTOCOL.md §10)
+# Deployment guide
 
 > English · [简体中文](README.zh.md)
 
-One Node process behind a reverse proxy, with SQLite for state. It serves the page and
-runs the draw on a timer of its own, so there is nothing else to install and no root
-needed. The app and Pantheon share a host, so backend-to-Pantheon calls go over
-localhost.
+Everything an organiser does, in order, from a bare server to a finished draw. Two
+machines are involved: **your computer**, where the event is frozen (that needs a build
+toolchain), and **the server**, where it runs. Budget an afternoon the first time and
+half an hour after that. [`../docs/RUNBOOK.md`](../docs/RUNBOOK.md) is this sequence as
+a one-page checklist, for the second time.
 
-> **Prerequisite: [`docs/RUNBOOK.md`](../docs/RUNBOOK.md) through step 11.** This is the
-> deployment step of that checklist, between B and C. §1 checks out the tag step 11
-> pushes; RUNBOOK E closes the event out afterwards.
->
-> **Node 24 or newer**, which `node --version` reports. The state lives in `node:sqlite`,
-> which older versions either lack or keep behind a flag, so an out-of-date Node installs
-> cleanly and then fails at the first start. `npm ci` only warns about this.
+Commands are given in full. Where a line needs a value of yours it is in `<angle
+brackets>`. The reasons behind the steps are not here; the last section says where they
+are.
 
-Nothing here holds a secret that could open a submission early. The only credentials on
-the box are the GitHub PAT used for mirroring and the Pantheon admin account used for
-the seat-plan sync — and the worst either can do is write somewhere.
+> [!IMPORTANT]
+> **What you need before starting**
+> - **Node 24 or newer** on both machines (`node --version`). Older versions install
+>   cleanly and fail at the first start.
+> - A **Pantheon** instance the players have accounts on, and an admin account on it
+>   that is an admin of the event.
+> - A **git repository you can push to** — your own fork of this one. The freeze commits
+>   your event into it, and players are given the tag.
+> - A **domain name** pointing at the server, for TLS. Sign-in does not work over plain
+>   http.
+> - On the server: `sudo` for nginx and certbot only. The application itself needs no
+>   root, no new user and no port below 1024.
+> - The network: both machines reach `api.drand.sh`, the server reaches Pantheon, and
+>   players' phones reach Frey (Pantheon's sign-in service) directly.
 
-## 1. Install
+## Part 1 — Before the event, on your computer
 
-**A pushed freeze tag is required.** `data/protocol.json` and `data/roster.json` are
-gitignored, and RUNBOOK step 11 is the only thing that commits them, so a clone of the
-default branch contains no event and the server refuses to start. Do not write those
-files here instead: a protocol that is not the one inside the tag is not frozen, and the
-tag is what players are given (PROTOCOL.md §9).
+### 1. The event in Pantheon
 
-No root, and no new user. Everything lives in one directory that you already own:
+In Pantheon's admin interface:
+
+1. Create the event, or open it, and mark it **prescripted** (a tournament, not a club
+   event — only tournaments can be prescripted).
+2. Register **exactly twelve** players. Anyone attending without playing gets
+   `ignore_seating`.
+3. Give every one of the twelve a **local id**, 1 to 12.
+4. Make sure the admin account you will use for the seat-plan sync is an admin **of this
+   event**.
+
+Note the event's id; the freeze needs it once.
+
+### 2. Your repository
 
 ```sh
-git clone <repo> ~/mahjong && cd ~/mahjong
-git tag -l                                 # the freeze tags this clone can see
-git checkout <tag>                         # the one RUNBOOK step 11 announced
+git clone <your fork> mahjong-random-seating && cd mahjong-random-seating
+npm ci
+cp data/runtime.example.json data/runtime.json
+```
+
+Edit `data/runtime.json` → `pantheon`: set `frey_base_url` and `mimir_base_url` to your
+Pantheon's Frey and Mimir addresses. The freeze reads the roster from Mimir, so they
+must be reachable from this computer.
+
+> [!NOTE]
+> `runtime.json` is gitignored and never enters the tag, so it is written on each
+> machine separately. You will write it again on the server in §6.
+
+### 3. Choose the target round
+
+```sh
+cp data/protocol.example.json data/protocol.json      # the first event only
+node tools/pick-round.js --in 72h --write
+```
+
+`--in 72h` puts the draw 72 hours from now and the submission cutoff ten minutes before
+it. It writes `target_round`, `submission_cutoff_utc`, `chain_hash` and
+`chain_public_key` together, from the live drand chain.
+
+### 4. Freeze and tag
+
+```sh
+node tools/freeze.js --event <id> --write             # data/roster.json, read out of Pantheon
+node tools/freeze.js --write --tag <name> --push      # commit, tag, push; prints the announcement
+git ls-remote --tags <your fork> <name>               # from any other machine: the tag is public
+```
+
+The first command refuses — and writes nothing — if the seated count is not twelve, if
+anyone lacks a local id or a title, or if an account is registered twice. Fix it in
+Pantheon and run it again.
+
+The second takes about a minute: it re-derives the seating template's invariants,
+rebuilds the browser bundle from source and diffs it against the committed one, runs
+the unit tests, then commits `data/protocol.json`, `data/roster.json`,
+`data/schedule_template.json`, `generate.js` and the built bundle, tags, pushes, and
+timestamps the commit id. It also prints the **announcement** for step 10 — copy it now.
+
+> [!WARNING]
+> - `<name>` is used once. A second event, or a retry after a void, needs a new one.
+> - Keep `events/freeze/<name>.commit.ots`. It is the proof that the commit existed
+>   before anyone submitted.
+> - Nothing frozen may change from here on. A changed byte voids the event.
+
+## Part 2 — The server
+
+### 5. Install at the tag
+
+```sh
+git clone <your fork> ~/mahjong && cd ~/mahjong
+git fetch --tags && git checkout <tag>                # the name from step 4
 npm ci --omit=dev
-node tools/build-client.js --verify-hash   # committed bundle matches its committed hash
-node tools/verify-template.js              # template invariants; needs Python 3, skippable here
+node tools/build-client.js --verify-hash              # the committed bundle matches its hash
 ```
 
-`<tag>` is a placeholder. This document cannot know your tag name and there is no
-default; an empty `git tag -l` means it was never pushed, which
-`git ls-remote --tags <repo>` confirms.
+> [!NOTE]
+> - `--omit=dev` is deliberate: the server needs `tlock-js` and nothing else.
+> - If `--verify-hash` fails on a fresh clone, run `git check-attr text eol -- public/app.js`.
+>   It must say `-text`; if it does not, git rewrote line endings and the checkout, not the
+>   bundle, is wrong.
 
-`verify-template.js` is a check rather than an install step, and the only command here
-that needs anything but Node. A machine without Python 3 can skip the line and run it
-elsewhere on the same tag. `.env` and the `chmod` that protects it are both in §2, since
-neither can happen before the file exists.
+### 6. Configure
 
-Nothing on that list needs a privilege, and that is a property of the design rather than
-a convenience. The process listens on a high port, because something else terminates TLS
-in front of it (§4). It writes only inside its own checkout. It opens no device, joins no
-group and registers nothing with the system. The two credentials it holds are a GitHub
-PAT and a Pantheon account, and both are secrets belonging to **you** rather than to the
-machine — which is why a dedicated system account buys less here than it usually does:
-the thing worth protecting is in `.env` either way, and file mode does that.
-
-So an organiser who has been given an ordinary account on a club's box can run the whole
-event from `$HOME`, including the part that survives a reboot (§3).
-
-<details>
-<summary><b>A dedicated system account, if you have root and want one anyway</b></summary>
-
-<br>
-
-It is a reasonable thing to want: a separate account means a compromise of the relay
-reaches nothing else of yours, and it lets the systemd hardening in
-[`mahjong-relay.service`](mahjong-relay.service) apply, which a user unit cannot use.
-
-```sh
-sudo adduser --system --group --home /opt/mahjong mahjong
-sudo -u mahjong git clone <repo> /opt/mahjong/app
-cd /opt/mahjong/app && sudo -u mahjong git checkout <tag>
-sudo -u mahjong npm ci --omit=dev
-sudo -u mahjong node tools/build-client.js --verify-hash
-sudo chown -R mahjong:mahjong /opt/mahjong
-```
-
-Paths in the rest of this document assume the rootless layout; substitute
-`/opt/mahjong/app` throughout if you took this path.
-
-</details>
-
-`<repo>` is **your** repository, not the one the code was developed in. The freeze is a
-commitment to an event you are running: `data/protocol.json` and `data/roster.json` hold
-your target round and your twelve players, they are gitignored upstream for that reason,
-and `tools/freeze.js` force-adds them into the tree you tag and push. Fork it or clone it
-somewhere you can push to, and freeze there. Players are given that tag and that commit
-id; a tag nobody but you can fetch is not a commitment (PROTOCOL.md §9).
-
-`npm ci --omit=dev` is deliberate: the server needs `tlock-js`, and nothing else.
-
-If `--verify-hash` fails on a **fresh clone**, suspect the checkout before suspecting
-the bundle. Git rewrites line endings on checkout when `core.autocrlf` is on, which is
-the Windows default: the blob is 347717 bytes with no CR and the working copy comes out
-347738 bytes with 21 CRs, and the digest is not the same digest. `.gitattributes` in this
-repository switches that off for every byte-pinned artefact, so a checkout that still
-shows it is one made before that file existed, or one where a local setting overrides it.
-Check with `git check-attr text eol -- public/app.js`.
-
-Note which bundle check runs where. `--verify-hash` compares the committed
-`app.js` + `app.css` against their committed digest and needs no dependencies, which is
-why it is the one that runs here — `--omit=dev` means esbuild is not installed on this
-machine. The strong check, `node tools/build-client.js --check`, rebuilds from source
-and diffs the result; run that on a dev machine or in CI **before** the freeze commit.
-
-## 2. Environment
-
-`.env` at the root of the checkout — mode 600, covered by `.gitignore`, and **read by the
-process itself** whatever starts it:
+**`.env`**, at the root of the checkout. The process reads it itself, whatever starts
+it:
 
 ```sh
 PORT=8080
 HOST=127.0.0.1
 NODE_ENV=production
+PANTHEON_MODE=twirp
 
-# Optional overrides for operational settings (PROTOCOL.md §4.2). The same values can
-# go in data/runtime.json; neither is frozen, and changing either needs no re-tag.
-# DRAND_API=https://api2.drand.sh
-# PANTHEON_FREY_URL=http://frey.pantheon.local:4004
-# PANTHEON_MIMIR_URL=http://mimir.pantheon.local:4001
-PANTHEON_MODE=twirp                  # the default; "stub" is for local runs only
-
-# Mirroring: ciphertexts become public, timestamped by a third party, as they arrive.
-MIRROR_REPO=youruser/mahjong-random-seating
+# Mirroring: every ciphertext is published to the repository as it arrives.
+# The token is a fine-grained PAT with contents:write on this one repository.
+MIRROR_REPO=<owner>/<repo>
 MIRROR_BRANCH=main
-MIRROR_TOKEN=github_pat_...          # contents:write, narrowed to this one repository
+MIRROR_TOKEN=github_pat_...
 
-# Pantheon admin, for the seat-plan sync ONLY (PANTHEON-INTEGRATION.md §3).
-# Never used on the player sign-in path.
+# The Pantheon admin account, for the seat-plan sync after the draw only.
+# The pair Frey returns when that account signs in (personId, authToken).
 PANTHEON_ADMIN_PERSON_ID=...
 PANTHEON_ADMIN_TOKEN=...
-```
 
-```sh
-# The organiser's dashboard. Without this the /admin route does not exist.
-ADMIN_TOKEN=...                      # openssl rand -hex 16
+# The organiser's dashboard at /admin?token=...  (openssl rand -hex 16)
+ADMIN_TOKEN=...
 ```
-
-Once the file exists, take the mode down — it holds a GitHub token and a Pantheon
-account, and it is the only thing on the box worth protecting:
 
 ```sh
 chmod 600 .env
 ```
 
-**Who reads this file.** The process does, at startup, and it says which file it read in
-its first few log lines. That used to be the systemd unit's job alone, through
-`EnvironmentFile=`, which meant every other way of starting the relay in §3 — tmux,
-`nohup`, a crontab, a terminal — produced a server that had never seen any of the above.
-Nothing about that looked wrong: it served the page, it signed people in, it took their
-ciphertexts, and it mirrored **none** of them, quietly removing the one property (§5)
-that stops an organiser dropping an inconvenient submission after seeing the outcome.
-A variable already set in the environment still wins over the file, so
-`PORT=9000 node server/server.js` keeps meaning what it says.
+**`data/runtime.json`**:
 
-`PORT` and `HOST` can also be given on the command line, and the flag wins:
-`node server/server.js --port 9000 --host 127.0.0.1`. Useful when 8080 is already taken,
-which on a box that also runs Pantheon it often is. Whichever you use, the reverse proxy
-in §4 has to point at the same number; a port already in use is reported as that, with
-the flag to use instead.
+```sh
+cp data/runtime.example.json data/runtime.json
+```
 
-`NODE_ENV=production` matters for more than logging: it marks the session cookie
-`Secure` and makes `/api/dev-authorize` return 404. That endpoint is the development
-stand-in for Frey; it must not exist here.
+Set, under `pantheon`: `frey_base_url` and `mimir_base_url` as the server reaches them,
+and `frey_public_url` as a **player's phone** reaches Frey — an `https://` address. Under
+`server`: `"trust_proxy": true`.
 
-`ADMIN_TOKEN` gates `/admin`, which shows submission progress, who is still missing, the
-pre-flight checks and the sync outcome. Unset, the route 404s like any other path, so an
-organiser who never configured one has not accidentally published a roster and a
-submission timeline. The page is read-only by design: the draw, the reset and the sync are
-commands run on this box, because §9 keeps anything that could trigger or re-time the draw
-off HTTP. Treat the token like the PAT — it reveals who has submitted and when, which is
-public information anyway, but there is no reason to hand it out.
+> [!WARNING]
+> `frey_public_url` is the address players' browsers call to sign in. A name that only
+> resolves on the server (`*.local`, `localhost`, a LAN address) fails on every phone.
+> The server warns at boot when it sees one, and `/admin` carries a red row for it.
 
-`data/runtime.json` is the file counterpart of those overrides and is optional in the
-same way. It is gitignored on purpose: nothing in it can change the outcome, and keeping
-it out of the tree makes it obvious that it was never covered by the freeze. If a drand
-mirror dies during the submission window, this is the file you edit — not a tagged one.
-
-**Pantheon on the same box.** Pantheon answers on names, not addresses: each container's
-nginx matches on `server_name` and answers 404 to anything else, so
-`http://127.0.0.1:4001` fails even while Mimir is healthy. The base URLs this ships with
-are `mimir.pantheon.local` and `frey.pantheon.local`, and on a server nothing resolves
-those names until you add them:
+**If Pantheon runs on this same box** in Docker, its services answer only to their
+hostnames, and nothing on a server resolves those until you add them:
 
 ```sh
 echo '127.0.0.1  mimir.pantheon.local frey.pantheon.local' | sudo tee -a /etc/hosts
 getent hosts mimir.pantheon.local        # must print 127.0.0.1
 ```
 
-Without this, the first thing to fail is `tools/freeze.js` at RUNBOOK step 10, which says
-the name does not resolve and names the URL it tried. Check with `getent`, which goes
-through the same system resolver Node uses. Do not check with `curl`: on one server
-`getent` found nothing and `curl` still got a 404 back from somewhere. That entry fixes
-the relay only. Browsers call Frey themselves, so `frey_public_url` still has to be an
-address a phone can reach (§6).
+Check with `getent`, not `curl`. Even then `frey_public_url` still has to be a public
+address: the phone is not on this box.
 
-Narrow the GitHub PAT to this repository and to contents:write only. Per §10, write
-access to `main` should be restricted to that token, so the ciphertext history is
-append-only in practice as well as in principle.
+### 7. TLS and the reverse proxy
 
-## 3. Running it
-
-One process:
+nginx will not load a configuration whose certificate file does not exist, and certbot
+cannot issue one until nginx answers for the domain on port 80. So: the port-80 half
+first, then the certificate, then the full configuration.
 
 ```sh
-node server/server.js
+sudo cp deploy/nginx-bootstrap.conf /etc/nginx/sites-available/mahjong   # edit server_name
+sudo ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
+sudo mkdir -p /var/www/html && sudo nginx -t && sudo systemctl reload nginx
+sudo certbot certonly --webroot -w /var/www/html -d <your domain>
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/mahjong             # edit: see below
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot renew --dry-run --deploy-hook 'systemctl reload nginx'
 ```
 
-That is the whole deployment. The server serves the page **and** runs the draw, spawning
-`server/finalise.js --no-wait` every `server.finalise_interval_seconds` (§4.2, default
-60). The draw stays a separate program — §9 keeps it off HTTP, so nothing a player can
-poke may trigger or re-time it — but nothing outside this repository has to be set up
-for it to happen.
+Edit in `deploy/nginx.conf` before the second `cp`:
 
-Earlier versions asked for two systemd units. That was wrong twice over: registering
-units needs root on a machine the organiser may not own, and it does not exist at all on
-Windows, where this is developed and rehearsed. The realistic outcome was a deployment
-that served the page perfectly and never drew.
+- every `example.com` → your domain (three places: `server_name` twice, the certificate
+  paths);
+- in the `Content-Security-Policy` line, add your `frey_public_url` origin to
+  `connect-src`, for example `connect-src 'self' https://userapi.example.org
+  https://api.drand.sh ...`. Without it the browser blocks sign-in before any request
+  leaves the phone, and no log anywhere shows it.
 
-**Keeping the one process alive** is whatever your box offers, and none of it is
-special:
+> [!NOTE]
+> The file already sets `X-Forwarded-For` and `X-Forwarded-Proto`. Both are required:
+> the first gives each player their own rate-limit allowance, the second is how the
+> server knows the request came over TLS. A custom nginx configuration must set both.
 
-| | | survives a reboot |
+<details>
+<summary><b>Caddy instead of nginx</b> — only on a box where nothing else holds ports 80 and 443</summary>
+
+<br>
+
+```sh
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile     # edit the domain and connect-src
+sudo systemctl reload caddy
+```
+
+Caddy obtains and renews the certificate itself and sets both forwarded headers.
+
+</details>
+
+### 8. Start it
+
+One process. It serves the page and runs the draw on its own timer; nothing else needs
+scheduling.
+
+Pick one:
+
+| | Command | Survives a reboot |
 |---|---|---|
-| Linux, no root | `tmux new -d -s mahjong 'node server/server.js'`, or `nohup node server/server.js >> var/server.log 2>&1 &` | no |
-| Linux, no root | a **user** unit — see below | yes |
-| Linux, with root | `sudo cp deploy/mahjong-relay.service /etc/systemd/system/ && sudo systemctl enable --now mahjong-relay` | yes |
-| Windows | run it in a terminal, or Task Scheduler with a trigger at log on | with the trigger |
+| Try it out | `node server/server.js` in a terminal | no |
+| Linux, no root | `tmux new -d -s mahjong 'node server/server.js'` | no |
+| **Linux, no root (recommended)** | the user unit below | yes |
+| Linux, with root | `sudo cp deploy/mahjong-relay.service /etc/systemd/system/ && sudo systemctl enable --now mahjong-relay` — edit its paths first | yes |
 
-**The rootless unit.** systemd runs a whole instance per user, and registering a service
-with your own instance needs nothing from an administrator:
+The user unit:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service \
-  > ~/.config/systemd/user/mahjong-relay.service
+sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service > ~/.config/systemd/user/mahjong-relay.service
 systemctl --user daemon-reload
 systemctl --user enable --now mahjong-relay
-systemctl --user status mahjong-relay
-loginctl enable-linger          # keep it running when you are not logged in
+loginctl enable-linger                                # keep it running after you log out
+loginctl show-user "$USER" -p Linger                  # must say Linger=yes
+journalctl --user -u mahjong-relay -f                 # the log
 ```
 
-Everything there except the last line was verified on systemd 255 as an ordinary user.
-`enable-linger` is the one piece that depends on the machine: it is governed by the
-polkit action `org.freedesktop.login1.set-self-linger`, which ships allowed for any user
-on Ubuntu and Debian, so enabling it **for yourself** normally needs no sudo. Check with
-`loginctl show-user "$USER" -p Linger` — if it says `Linger=no` after you ran it, that
-box has a stricter policy and an administrator has to run
-`loginctl enable-linger "$USER"` once. Without linger the relay stops when you log out,
-which for an event running over days is the same as not running.
-
-The user unit cannot use the sandboxing in the system unit (`ProtectSystem`,
-`ReadWritePaths` and the rest need root to enforce), and it drops `User=`/`Group=`
-because it already is your user. What it keeps is the part that matters: restart on
-failure, and a stop that lets a draw in flight finish.
-
-The draw job restarting with the server is fine and is the point of it running on a
-clock. Every run is a no-op until the cutoff, and after it the cadence is also the
-recovery path, for three different failures:
-
-- **drand unreachable at the target time** (§8 — a delay, not a failure). The job leaves
-  the phase at `awaiting_round` and the next tick tries again. The snapshot was frozen at
-  the cutoff, so the delay cannot change the outcome.
-- **The process died between publishing the result and syncing to Pantheon.** If no sync
-  outcome was ever recorded, the next tick completes it. `results.json` is written once
-  and is not touched by this.
-- **`var/` was lost after a completed draw.** The job reads `results.json`, reconciles the
-  database and stops. It will not re-draw, and it will not declare a published round void.
-
-Once a sync *failure* has been recorded, the job stops retrying: that path has a manual
-remedy (RUNBOOK step 15) and a timer hammering Pantheon every minute would only bury it.
-
-### If something else should run the draw
-
-Set `server.run_finalise` to `false` in `data/runtime.json` and schedule it yourself. A
-user crontab needs no root either:
+Whichever you chose, the first lines of the log must include these three, and not the
+word STUB:
 
 ```
-* * * * * cd $HOME/mahjong && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
+[server] listening on http://127.0.0.1:8080
+[server] pantheon: TwirpPantheon
+[server] running server/finalise.js every 60s (server.run_finalise)
 ```
 
-Do not run both. Two draws in flight would agree with each other — the job is
-deterministic, which is the whole point of the protocol — but they would stamp the roll
-twice and write to Pantheon twice, and external side effects are worth not doing twice.
+> [!NOTE]
+> - If `Linger=no` after `enable-linger`, this box needs an administrator to run
+>   `loginctl enable-linger <you>` once; without it the service stops when you log out.
+> - Port 8080 taken (common on a box that also runs Pantheon)? Set `PORT` in `.env` and
+>   `proxy_pass` in the nginx file to the same number.
+> - Stopping: `systemctl --user stop mahjong-relay`, or Ctrl+C. A draw in flight is left
+>   to finish.
 
-The job now also refuses to start while another holds `var/finalise.lock`, so a
-misconfiguration here costs you a log line rather than a duplicate write. That is a
-backstop, not permission: a lock whose holder has died or that is older than any real run
-is taken over, because a lock nobody holds must never be able to stop an event drawing
-at all.
+### 9. Check before you announce
 
-### How you find out if nothing is drawing
-
-This was a real failure and it was silent: players sign in, seal their numbers, watch the
-countdown reach zero, and then nothing happens. Three things say so now.
-
-- The server logs `[schedule]` lines for every run of the job, and a warning at boot if
-  `run_finalise` is off and the job has never run against this database.
-- `/admin` carries a row, **The draw job has run**, with when it last did. It is a
-  warning while the beacon is still pending and a failure once the draw is late, which
-  is the row that distinguishes a late beacon — wait — from a dead schedule — go and
-  start something.
-- The players' page stops saying "Drawing" after two intervals and says the draw has not
-  run, together with the fact that the outcome was fixed at the cutoff regardless.
-
-## 4. The reverse proxy
-
-Pick one. Both configurations do the same three jobs — terminate TLS, forward to
-127.0.0.1:8080, and set the security headers — and they cannot run side by side, because
-only one process can hold :80 and :443.
-
-**nginx** (`deploy/nginx.conf`) if the host already runs it, which it will if Pantheon
-shares the box: every Pantheon container ships its own nginx. Adding Caddy alongside is
-not redundancy, it is a port conflict.
-
-nginx will not load that file until the certificate it names exists, and certbot cannot
-issue one until nginx answers for the domain on :80. `deploy/nginx-bootstrap.conf` is the
-:80 half on its own, for the minutes in between. The domain has to resolve to this box
-before any of it starts.
+From anywhere:
 
 ```sh
-cp deploy/nginx-bootstrap.conf /etc/nginx/sites-available/mahjong   # edit the domain
-ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
-mkdir -p /var/www/html && nginx -t && systemctl reload nginx
-certbot certonly --webroot -w /var/www/html -d example.com
-cp deploy/nginx.conf /etc/nginx/sites-available/mahjong             # edit the domain, and connect-src
-nginx -t && systemctl reload nginx
+curl -s https://<your domain>/api/status | head -c 300      # "phase":"open", 12 slots, submitted_count 0
+curl -s https://<your domain>/protocol.json | head -c 300   # the frozen parameters, as tagged
+curl -s -X POST https://<your domain>/api/dev-authorize      # must be 404
+curl -s -o /dev/null -w '%{http_code}\n' https://<your domain>/admin   # must be 404
 ```
 
-certbot installs a timer that renews the certificate, and nginx has to be told about the
-new file: run `certbot renew --dry-run` once, with `--deploy-hook 'systemctl reload nginx'`
-so the renewal reloads it. Caddy, below, needs none of this.
+Then open `https://<your domain>/admin?token=<ADMIN_TOKEN>`. Every row of the pre-flight
+panel must be green. The two that make a deployment unfit for a real draw are
+**Mirroring to the repository: DISABLED** and **Pantheon adapter is the STUB**.
 
-**Caddy** (`deploy/Caddyfile`) on a host with nothing else on those ports. It obtains
-and renews certificates by itself, which is the whole reason it is still offered here.
+Then sign in on the page yourself, with your own Pantheon account. If that fails, on any
+machine with Node:
 
 ```sh
-cp deploy/Caddyfile /etc/caddy/Caddyfile   # edit the domain first
-systemctl reload caddy
+node tools/check-signin.js --email <your email> --event <id>   # asks for the password, prints nothing secret
+node tools/check-signin.js --admin --event <id>                # the sync's credentials, as far as a read can check
 ```
 
-Two things are load-bearing in whichever you choose:
+The first walks the three steps a sign-in takes and says which one failed and what the
+page would have shown. The second confirms the admin token is valid and the event
+answers; write rights are only proven by the sync itself.
 
-- **The stream must not be buffered.** Caddy needs `flush_interval -1`; nginx honours
-  the `X-Accel-Buffering: no` the app already sends (server/events.js) and gets
-  `proxy_buffering off` as well. Without it the waiting stage stops updating and
-  silently degrades to polling.
-- **The `connect-src` list.** The **browser** authenticates against Frey directly
-  (PANTHEON-INTEGRATION.md §2), so the Frey origin has to be added there or sign-in is
-  blocked by the CSP — and blocked in a way no server log records, because the request
-  never reaches a server.
-- **`server.trust_proxy` in `data/runtime.json`.** Behind a proxy every request arrives
-  from 127.0.0.1, so the per-source rate limit becomes one allowance shared by all
-  twelve — enough that a few people signing in at the same moment can spend it between
-  them. Set it to `true` once the proxy sets `X-Forwarded-For`; both configurations in
-  this directory do. It is off by default because believing that header with nothing in
-  front would let any caller invent an address and collect an allowance for each one.
-  The app reads the **rightmost** entry, which is the address the proxy itself observed,
-  so a forged prefix is stepped over rather than believed. The server prints a note at
-  boot when it is listening on loopback with the setting off.
+## Part 3 — The event
 
-### TLS is not optional here
+### 10. Announce
 
-Serve this over plain HTTP and sign-in breaks, in a way that does not look like a TLS
-problem. `NODE_ENV=production` marks the session cookie `Secure` (server/server.js), and
-a browser will not store a `Secure` cookie that arrived over `http://`. The player signs
-in, the page moves on, and every request after it is unauthenticated. Their submission
-fails with a 401 they did nothing to cause.
+Send the players the announcement the freeze printed (step 4): the address, one number
+between 0 and 255, once; that they can close the page as soon as it says sealed; when
+the draw happens; the tag and the commit id. One link for everyone — no personal links,
+no tokens. They sign in with the Pantheon accounts they already have.
 
-There is a second reason. The browser posts the player's Pantheon password to Frey
-itself. Over HTTP that password crosses the network in the clear, and it is not a
-password this event owns — it is their Pantheon account.
+### 11. During the window
 
-If a certificate is genuinely not available yet, run the whole thing on HTTP with
-`NODE_ENV=development` for testing only, and understand that the deployment is not fit
-to run a real draw in that state: `/api/dev-authorize` exists there, and it accepts a
-person id with no password at all.
+Nothing to run. `/admin` lists who has not submitted yet, by name, and the player-facing
+page shows the same count. Chase the missing as the cutoff approaches.
 
-### Do not log request bodies
+> [!WARNING]
+> - At least 8 of 12 must submit, or the attempt is void and everyone submits again
+>   (§15). The number is frozen; do not negotiate it on the day.
+> - A player who is not in the twelve cannot be added mid-window. The honest fix is to
+>   void and re-freeze with the right twelve.
+> - Keep an eye on the pre-flight panel. A row turning red during the window is worth
+>   acting on now, not after the draw.
 
-The browser posts the player's Pantheon email and password to Frey, and the token it
-gets back to `POST /api/session`. Both cross this proxy. nginx does not log bodies by
-default and neither does Caddy — but a `log_format` with `$request_body` in it, added
-one afternoon to debug a sign-in problem, writes every player's Pantheon password to a
-file on disk, in a form that outlives the event and gets copied around with the logs.
+### 12. The draw
 
-The token is no better. Frey derives it as `sha384(password + salt)` and keeps accepting
-it until the password changes, so it is password-equivalent (PANTHEON-INTEGRATION.md
-§2). The app verifies it once, never stores it and never logs it; a proxy log is the one
-place it could still be captured.
+At the cutoff the server fixes and publishes the list of submissions. When the beacon's
+target round lands — ten minutes later with the defaults — the draw runs by itself,
+within a minute. Then:
 
-If you need to debug sign-in, the failure now names itself on the page and in the table
-above. That is what it is for.
+1. `/admin` shows the result: `round_used`, R, the seed, the permutation, and the digest
+   of `results.json`. The players' page shows the seat plan on its own.
+2. `results.json` and `events/` are in the repository (mirroring).
+3. The sync panel says the seat plan was written to Pantheon and read back — and
+   Pantheon's admin interface shows it.
 
-## 5. Before you tell anyone the URL
+**If the sync failed**: the draw is still final and `results.json` is authoritative.
+Open `results.json`, copy the `pantheon_prescript` field, paste it into the event's
+prescript in Pantheon, and apply it with `WIND_SHUFFLE_MODE_PRESCRIPTED`. Any other
+wind mode discards most of what the seating template guarantees. **Never re-run the
+draw.**
+
+### 13. What a player can check
+
+The result page prints this, filled in. Anyone can do it, from a machine that has never
+seen the server:
 
 ```sh
-curl -s https://your.domain/api/status | jq     # 12 slots, submitted_count 0, phase "open"
-curl -s https://your.domain/protocol.json | jq  # the frozen parameters, as tagged
-curl -s https://your.domain/api/dev-authorize -X POST -d '{}'   # must be 404
-curl -s -o /dev/null -w '%{http_code}\n' https://your.domain/admin   # must be 404
+git clone <your fork> draw && cd draw
+git checkout <tag>                                   # the tag from the announcement
+git checkout origin/HEAD -- results.json events/     # written after the freeze, so not inside the tag
+node generate.js --verify results.json               # every byte, plus the roll-call against the cutoff snapshot
+python3 tools/verify_template.py data/schedule_template.json
 ```
 
-Then open `/admin?token=…` and read the pre-flight panel. Every row should be green.
-`Mirroring to the repository: DISABLED` and `Pantheon adapter is the STUB` are the two
-that make the deployment unfit to run a real draw.
+> [!NOTE]
+> The third line fetches what the draw published through mirroring (§6). With mirroring
+> off, `results.json` and `events/` exist only on the server, and nobody can check
+> anything — which is why `/admin` refuses to call such a deployment ready.
 
-In that status payload, `drand.chain_hash` and `drand.chain_public_key` must match the
-tagged `protocol.json` exactly — they are what the browser pins the chain with, and the
-draw is only bound to the beacon everyone was promised if both are right. `drand.api`
-need not match anything: it is where that chain is currently reached (§4.2).
+### 14. Close the event
 
-Then sign in yourself with a real Pantheon account that is registered to the event, and
-with one that is not. Both answers must be right, and they must read differently
-(UI-SPEC §3). RUNBOOK step A3 is that check; it is much cheaper now than on the day.
+**Before** the next freeze, not after:
 
-## 6. When sign-in fails
+```sh
+node tools/end-event.js --dry-run     # what it would archive and clear
+node tools/end-event.js
+```
 
-Sign-in is the one request that does not pass through this server. The browser posts the
-email and password to Frey itself (PANTHEON-INTEGRATION.md §2), so a failure leaves no
-trace in any log here, and for a long time the page reported every one of them as "wrong
-email or password" — which sent more than one deployment looking at accounts when the
-fault was a URL. The page now names them apart. What it shows, and where to look:
+It archives the attempt — ciphertexts, the cutoff roll, the result, the sync outcome, the
+frozen files it ran under — into `events/rounds/<target_round>/`, verifies every digest,
+and only then clears `var/` and the live files under `events/`. If the archive does not
+verify, nothing is cleared. Stop the server first (`systemctl --user stop mahjong-relay`).
 
-| What the player sees | What actually happened | Where to look |
+> [!WARNING]
+> Freeze the next event first and this event's `protocol.json` is overwritten before it
+> is archived. The tool notices and says so, but the evidence is then incomplete. And
+> until this is done, the server refuses to start for the next event rather than serve
+> last event's seat plan.
+
+## Part 4 — Reference
+
+### 15. When something goes wrong
+
+**Sign-in.** The page names the failure; this is what each one means and where to look.
+
+| What the player sees | What happened | Where to look |
 |---|---|---|
 | Pantheon did not recognise that email and password | Frey answered `400 invalid_argument` | It really is the password |
 | Pantheon has no account with that email | Frey answered `404 not_found` | The address they signed up with |
-| This draw is pointed at the wrong Pantheon address | `bad_route`, or a non-Twirp 404 | `runtime.json` → `pantheon.frey_base_url` and `twirp_path_template` |
-| Pantheon could not be reached | The request got no answer at all | CSP `connect-src`, mixed content, DNS, firewall |
-| Pantheon returned an error | A 5xx from Frey | Frey's own logs; Hugin being down does this |
+| This draw is pointed at the wrong Pantheon address | `bad_route`, or a non-Twirp 404 | `runtime.json` → `pantheon.frey_public_url`, `twirp_path_template` |
+| Pantheon could not be reached | The browser got no answer from Frey | CSP `connect-src` (§7), mixed content, DNS, firewall |
+| Pantheon returned an error | A 5xx from Frey | Pantheon's own logs |
 | That account isn't registered for this event | Frey said yes, this server said no | The account is not in the twelve |
-| The draw server could not be reached — this one, not Pantheon | nginx answered 502/504 for a relay that was down, or nothing answered at all | Is the relay running? Its log (§3), then nginx's error log |
-| Too many sign-in attempts from this address | This server answered 429 | `server.trust_proxy` (§4): behind a proxy the limit is one allowance shared by everybody |
-| This page was opened over http, so the sign-in cannot be kept | This server refused: production, and the proxy did not report https | TLS (§4); `X-Forwarded-Proto` in the proxy config |
-| Pantheon accepted the sign-in, but this browser did not keep the session | `GET /api/me` answered 401 right after sign-in | The browser: cookies blocked, or a private window |
+| The draw server could not be reached — this one, not Pantheon | nginx answered 502/504, or nothing answered | Is the server running? Its log (§8), then nginx's error log |
+| Too many sign-in attempts from this address | This server answered 429 | `trust_proxy` is not `true` (§6): everyone shares one allowance |
+| This page was opened over http | Production, and the proxy did not report https | TLS (§7); `X-Forwarded-Proto` in the proxy config |
+| Pantheon accepted the sign-in, but this browser did not keep the session | `GET /api/me` answered 401 right after sign-in | The browser: cookies blocked, a private window |
 | The draw server returned an error | A 500 from this server | This server's log, which carries the stack |
 
-**The one that catches most deployments** is the third row, and it has a specific cause.
-`pantheon.frey_base_url` is what the *backend* uses, and §1 of this file is right to
-point it at localhost when Pantheon shares the host. But the *browser* is handed that
-same URL and calls Frey itself, and on a player's phone localhost is the phone. Set
-`pantheon.frey_public_url` to the address players resolve:
+Every row but the first two and the not-registered one prints the technical line
+underneath, so a player can forward it. `tools/check-signin.js --email` (§9) reproduces
+the Pantheon half from any machine.
 
-```json
-{
-  "pantheon": {
-    "frey_base_url": "http://localhost:4004",
-    "frey_public_url": "https://pantheon.example.com"
-  }
-}
-```
+**Fewer than 8 submissions.** The job declares the attempt void, publishes
+`events/void.json` and archives everything under `events/rounds/<target_round>/`.
+Nothing is deleted. Then, in order:
 
-The server warns at boot when the browser-facing URL is a loopback or private address,
-and `/admin` carries a row for it. That origin also has to be in the proxy's CSP
-`connect-src`, or the request is blocked before it leaves the browser.
+1. `node tools/new-round.js --dry-run` — confirms the archive is complete.
+2. On your computer: `node tools/pick-round.js --in 72h --write`, then
+   `node tools/freeze.js --write --tag <new-name> --push` (§3–§4). Same twelve players.
+3. On the server: `git fetch --tags && git checkout <new-name>`, then
+   `node tools/new-round.js`. It re-verifies the archive, clears the live submissions and
+   opens the new round. It refuses if step 2 has not happened.
+4. Tell the players: the new tag, that **all twelve** submit again (old ciphertexts are
+   bound to the lapsed round), and where the voided attempt is published.
 
-Every row but the first two and the not-registered one also prints the technical line
-underneath — the HTTP status and, where there is one, the Twirp code — so a player can
-forward it verbatim. The rule behind the table: nothing reads as a wrong password unless
-Frey, or this server's re-check of Frey's token, refused the credentials. The first
-production sign-in failed against a server that was down, and the page said "wrong
-password"; the table's lower half is what it says now.
+**drand unreachable at draw time.** Wait. The job retries every minute; the outcome was
+fixed at the cutoff and cannot change.
 
-`tools/check-signin.js` walks the Pantheon half of one sign-in from any machine with
-Node — the browser's call, the relay's re-check, the registration — and says which step
-failed and what the page would have shown. With `--admin` it also checks the credentials
-the seat-plan sync will use, as far as a read can. The password is asked for on a hidden
-prompt and nothing secret is printed, so the output can be pasted to whoever is helping:
+**A drand mirror is down, or Pantheon moved.** Edit `data/runtime.json`, restart the
+server. Nothing frozen changes, so no re-tag and no announcement.
 
-```sh
-node tools/check-signin.js --email someone@example.com --event 2
-node tools/check-signin.js --admin --event 2
-```
+**The server died, or `var/` was lost.** Start it again. If the draw was published, it
+reconciles from `results.json` and never re-draws or declares the round void. If the
+sync was not recorded, the next tick finishes it.
 
-Reproduce any of them against a live Pantheon before the day:
+**Nothing is drawing.** The `/admin` row **The draw job has run** says when the timer
+last fired. Never: check the log for `[schedule]` lines, and that `server.run_finalise`
+is not `false` in `runtime.json`. If you scheduled it yourself instead, the crontab line
+is `* * * * * cd ~/mahjong && node server/finalise.js --no-wait >> var/finalise.log 2>&1`.
+Do not run both.
 
-```sh
-FREY=http://frey.pantheon.local:4004/v2/common.Frey/Authorize
-curl -s -X POST $FREY -H 'content-type: application/json'   -d '{"email":"someone@example.com","password":"wrong"}'
-# {"code":"invalid_argument","msg":"Password check failed"}
-```
+### 16. The next event
 
-A wrong service name answers `{"code":"bad_route",...}` and a wrong version prefix misses
-the Twirp router altogether and gets nginx's HTML 404. Both mean the same thing: the base
-URL or the path template is wrong, and no account change will fix it.
+Close this one (§14), then start again at §1 with a new event id and, in step 4, a new
+tag name. On the server, §5's `git fetch --tags && git checkout <tag>` picks up the new
+freeze; §6–§8 stay as they are.
 
-`tools/pantheon-fixture.js --accounts` builds twelve accounts with known passwords on a
-development instance so this whole path can be walked before it matters.
+### 17. Why it is like this
+
+The reasons are in [`../docs/IMPLEMENTATION_NOTES.md`](../docs/IMPLEMENTATION_NOTES.md):
+no root and the user unit (§6n), the install order and why the tag comes first (§6r, §6s),
+who runs the draw (§6j), what a stop is allowed to interrupt (§6l, §6m), the finish
+procedure (§6o), the hosts entry and the ENOTFOUND message (§6x), the runtime file (§6y),
+TLS and what the sign-in page says (§6z). What is frozen and why is
+[`../docs/PROTOCOL.md`](../docs/PROTOCOL.md) §4; the trust argument is §9 and §10 there.

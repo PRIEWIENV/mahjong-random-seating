@@ -18,7 +18,8 @@
     "new-round": "node tools/new-round.js",
     "end-event": "node tools/end-event.js",
     "freeze": "node tools/freeze.js",
-    "rehearse": "node tools/rehearse.js"
+    "rehearse": "node tools/rehearse.js",
+    "demo": "node tools/demo.js"
   },
   "dependencies": {
     "tlock-js": "0.9.0"

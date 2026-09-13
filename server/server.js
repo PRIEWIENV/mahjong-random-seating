@@ -942,7 +942,7 @@ function shutdown(o) {
 module.exports.shutdown = shutdown;
 
 if (require.main === module) {
-  // Before anything reads the environment, `listenOn` included. deploy/README.md §2 has
+  // Before anything reads the environment, `listenOn` included. deploy/README.md §6 has
   // the operator put the deployment's whole configuration in .env, and until now only
   // the systemd unit was reading it.
   const envFile = loadEnvFile();

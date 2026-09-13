@@ -1619,7 +1619,7 @@ The hosts entry was already documented, in `docs/PANTHEON-INTEGRATION.md` §6. T
 section is about a local Pantheon for development, in WSL, on the developer's machine. The
 deployment guide an operator follows on a server never mentioned it, so a same-box
 deployment had one required step that appeared only in the notes on how the code was
-tested. `deploy/README.md` §2 has it now, with a `getent` check.
+tested. `deploy/README.md` §6 has it now, with a `getent` check.
 
 One observation is not explained. On that server `getent hosts mimir.pantheon.local` found
 nothing, and a plain `curl` to the same URL still got a 404 from somewhere. No proxy
@@ -1711,12 +1711,54 @@ else to check the spelling. And `getEventTitle`, the one Pantheon call §6f had 
 answer on a live instance, answered on a second one: `GetEventsById` on a public
 deployment returned `events[0].title`.
 
+## 6aa. Three documents and a demo
+
+The first real deployment came back with a review of the documents rather than of the
+code: getting the thing running meant holding the README, the deployment guide and the
+runbook open at once and moving between them, and the README's "quick start" was
+`npm test` followed by `npm run rehearse` — which a reader ran, watched go green, and
+was left with nothing on screen. Both complaints were right, and §6s had already noticed
+the first one and fixed it by adding cross-references, which is what made the jumping
+possible in the first place.
+
+The reorganisation is by reader. The README is for somebody deciding whether to look
+further: what it is, a quick start, a map of the documents, how to develop. The
+deployment guide is for an organiser and is one linear sequence, seventeen numbered
+sections from the event in Pantheon to closing it out, commands first, notes boxed, and
+no instruction to go and read something else in the middle. The runbook is the same
+sequence as a one-page checklist, with the guide's section number on every line; its
+step numbers are unchanged, because the tools print them. The explanations that used to
+sit between the commands are in this file already — most of the deployment guide's prose
+was a shorter retelling of §6j–§6r — so the guide now ends with a section that says
+where they are and otherwise leaves them out.
+
+The quick start is three commands and the third is `npm run demo`. It is
+`tools/rehearse.js` with a browser pointed at it: the same throwaway copy of the tree,
+the same stub event and the same simulated players, but the server is left running on
+a port, one of the twelve is the reader, and the eleven others submit while they watch.
+The timelock, the beacon and the draw are real, so it takes about four minutes and needs
+the network. The roster is written directly rather than through `tools/freeze.js`: the
+freeze's pre-flight rebuilds the bundle and runs the suite, which is right for a freeze
+and forty seconds of nothing to look at for a demo — and it was the suite running inside
+the copy that first failed the demo, on a documentation test against a README that had
+just been rewritten. `test/docs.test.js` now holds the quick start to three lines with
+the demo last.
+
+The guide was then followed from the top on a clean machine, with a bare repository
+standing in for the fork and the stub for Pantheon. It found one false sentence — the
+server does not refuse to start on a local `frey_public_url`, it warns — and one
+placeholder with a space in it that the tag lint caught. Everything else ran as written,
+including `npm ci --omit=dev` from the network, the freeze with `--push`, the four
+checks, sign-in refused over plain http and accepted with the proxy's header, the draw
+on the server's own timer, and the close. What it could not exercise is in the guide's
+own words: TLS, nginx and a real Pantheon.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 432 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example, the sign-in classifier, sign-in over http, the admin TLS row | pass |
+| Unit tests (`npm test`) — 433 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example, the sign-in classifier, sign-in over http, the admin TLS row, the quick start | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1739,6 +1781,8 @@ deployment returned `events[0].title`.
 | The sign-in page names a relay that is down, rate limited or erroring, a network failure and a dropped cookie apart, and none of them reads as a wrong password | passes |
 | In production, a sign-in that did not arrive over TLS is refused before Pantheon is asked, a Secure cookie is issued only over https, and the admin panel reports how the request arrived | passes |
 | `tools/check-signin.js` against a fake Pantheon in thirteen configurations: the right step fails, the exit code says so, and nothing secret is printed | passes |
+| `npm run demo` reaches a seat plan on this machine, and the quick start is held to three commands with the demo last | passes |
+| `deploy/README.md` followed top to bottom on a clean machine, with a bare repository for the fork and the stub for Pantheon: the freeze with `--push`, the server clone at the tag, `npm ci --omit=dev`, the checks, the draw on the timer, the verification block, the close | passes *(TLS, nginx and a real Pantheon excepted)* |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |

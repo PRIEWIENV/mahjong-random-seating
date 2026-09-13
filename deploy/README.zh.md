@@ -1,307 +1,327 @@
-# 部署（PROTOCOL.zh.md §10）
+# 部署指南
 
 > [English](README.md) · 简体中文
 
-一个 Node 进程跑在反向代理后面，状态存在 SQLite 里。它既服务页面，也用自己的定时器负责开奖，所以没有别的东西要装，也不需要 root。应用和 Pantheon 共用一台主机，所以后端到 Pantheon 的调用走 localhost。
+组织者要做的一切，按顺序，从一台空服务器到一场办完的抽签。涉及两台机器：**你的电脑**，在这里冻结活动（需要构建工具链）；**服务器**，活动在这里运行。第一次预留一个下午，之后半小时。[`../docs/RUNBOOK.zh.md`](../docs/RUNBOOK.zh.md) 是同一套流程压成的一页清单，第二次用。
 
-> **前置条件：[`docs/RUNBOOK.zh.md`](../docs/RUNBOOK.zh.md) 做到第 11 步。** 这是那份清单里的部署步骤，位置在 B 和 C 之间。§1 检出的正是第 11 步推出的那个 tag；抽签结束后由 RUNBOOK E 收尾。
->
-> **Node 24 或更新**，用 `node --version` 确认。状态存在 `node:sqlite` 里，更老的版本要么没有它，要么把它藏在实验开关后面，于是装得很顺利，第一次启动才失败。`npm ci` 对此只会给一句警告。
+命令都完整给出。需要填你自己的值的地方用 `<尖括号>`。各步骤背后的理由不在这里；最后一节说明它们在哪。
 
-这里没有任何一份秘密能提前打开一份提交。机器上仅有的两份凭证是用于镜像的 GitHub PAT 和用于座位表同步的 Pantheon 管理员账号——这两者最坏也只能往某处写东西。
+> [!IMPORTANT]
+> **开始之前你需要**
+> - 两台机器上都有 **Node 24 或更新**（`node --version`）。更老的版本能装上，第一次启动就失败。
+> - 一个选手们在上面有账号的 **Pantheon** 实例，以及上面一个是该活动管理员的管理员账号。
+> - 一个**你能推送的 git 仓库**——你自己 fork 的这个仓库。冻结会把你的活动提交进去，选手拿到的是那个 tag。
+> - 一个指向服务器的**域名**，用于 TLS。明文 http 上登录不了。
+> - 服务器上：只有 nginx 和 certbot 需要 `sudo`。应用本身不需要 root，不需要新用户，不占 1024 以下的端口。
+> - 网络：两台机器都能到 `api.drand.sh`，服务器能到 Pantheon，选手的手机能直接到 Frey（Pantheon 的登录服务）。
 
-## 1. 安装
+## 第一部分——活动之前，在你的电脑上
 
-**必须先有一个已推送的冻结 tag。** `data/protocol.json` 和 `data/roster.json` 被 gitignore，只有 RUNBOOK 第 11 步会把它们提交进去，所以克隆默认分支得到的树里没有活动，服务器会拒绝启动。不要改为在这里手写这两个文件：不在 tag 里的那份 protocol 就不是冻结的，而选手拿到的正是那个 tag（`PROTOCOL.zh.md` §9）。
+### 1. Pantheon 里的活动
 
-不需要 root，也不需要新建用户。所有东西都在一个你本来就拥有的目录里：
+在 Pantheon 的管理界面里：
+
+1. 创建或打开活动，标为 **prescripted**（必须是 tournament，不能是 club 活动——只有 tournament 能 prescripted）。
+2. 报名**恰好十二名**选手。到场但不打的人标 `ignore_seating`。
+3. 给十二个人每人一个 **local id**，1 到 12。
+4. 确认之后座位表同步要用的管理员账号是**这场活动的**管理员。
+
+记下活动 id；冻结时要用一次。
+
+### 2. 你的仓库
 
 ```sh
-git clone <repo> ~/mahjong && cd ~/mahjong
-git tag -l                                 # 这个克隆能看到的冻结 tag
-git checkout <tag>                         # RUNBOOK 第 11 步公布的那一个
+git clone <你的 fork> mahjong-random-seating && cd mahjong-random-seating
+npm ci
+cp data/runtime.example.json data/runtime.json
+```
+
+编辑 `data/runtime.json` → `pantheon`：把 `frey_base_url` 和 `mimir_base_url` 设成你的 Pantheon 的 Frey 和 Mimir 地址。冻结要从 Mimir 读名册，所以这台电脑必须能访问它们。
+
+> [!NOTE]
+> `runtime.json` 被 gitignore，永远不进 tag，所以每台机器上要各写一份。§6 在服务器上还会再写一次。
+
+### 3. 选定目标轮次
+
+```sh
+cp data/protocol.example.json data/protocol.json      # 只有第一场活动需要
+node tools/pick-round.js --in 72h --write
+```
+
+`--in 72h` 把开奖放在 72 小时之后，提交截止在开奖前十分钟。它从运行中的 drand 链上取值，把 `target_round`、`submission_cutoff_utc`、`chain_hash` 和 `chain_public_key` 一起写好。
+
+### 4. 冻结并打 tag
+
+```sh
+node tools/freeze.js --event <id> --write             # data/roster.json，从 Pantheon 读出
+node tools/freeze.js --write --tag <name> --push      # 提交、打 tag、推送；打印通告
+git ls-remote --tags <你的 fork> <name>               # 在任何别的机器上：tag 是公开的
+```
+
+第一条命令在下面任一情况下拒绝——并且什么都不写：入座人数不是十二，有人没有 local id 或没有名字，有账号重复报名。去 Pantheon 里改好再跑一次。
+
+第二条大约要一分钟：它重新推导座位模板的不变量，从源码重新构建浏览器 bundle 并与已提交的比对，跑单元测试，然后提交 `data/protocol.json`、`data/roster.json`、`data/schedule_template.json`、`generate.js` 和构建出的 bundle，打 tag，推送，并给 commit id 盖时间戳。它还会打印第 10 步要用的**通告**——现在就复制下来。
+
+> [!WARNING]
+> - `<name>` 只用一次。第二场活动，或者作废后的重试，都要新名字。
+> - 保存 `events/freeze/<name>.commit.ots`。它证明这个 commit 在任何人提交之前就存在。
+> - 从这里起，冻结的东西一个都不能改。改一个字节，活动作废。
+
+## 第二部分——服务器
+
+### 5. 在 tag 上安装
+
+```sh
+git clone <你的 fork> ~/mahjong && cd ~/mahjong
+git fetch --tags && git checkout <tag>                # 第 4 步的那个名字
 npm ci --omit=dev
-node tools/build-client.js --verify-hash   # 已提交的 bundle 与其已提交的哈希一致
-node tools/verify-template.js              # 模板不变量；需要 Python 3，在这台机器上可跳过
+node tools/build-client.js --verify-hash              # 已提交的 bundle 和它的哈希一致
 ```
 
-`<tag>` 是占位符。这份文档不可能知道你的 tag 名，也没有默认值；`git tag -l` 为空说明它从未被推上去，可以用 `git ls-remote --tags <repo>` 确认。
+> [!NOTE]
+> - `--omit=dev` 是有意的：服务器只需要 `tlock-js`，别的都不需要。
+> - 全新克隆上 `--verify-hash` 失败的话，跑 `git check-attr text eol -- public/app.js`。它必须说 `-text`；不是的话，是 git 改写了行尾，错的是检出，不是 bundle。
 
-`verify-template.js` 是检查而不是安装步骤，也是这里唯一一条 Node 之外还需要别的东西的命令。没有 Python 3 的机器可以跳过这一行，在别处对着同一个 tag 跑。`.env` 和保护它的 `chmod` 都在 §2，因为文件不存在时两者都做不了。
+### 6. 配置
 
-这份清单里没有一步需要特权，而这是设计的性质，不是图省事。进程监听一个高位端口，因为 TLS 由前面的东西终结（§4）。它只在自己的 checkout 里写文件。它不打开任何设备、不加入任何用户组、不向系统注册任何东西。它持有的两份凭证是一个 GitHub PAT 和一个 Pantheon 账号，而两者都是**你的**秘密，不是这台机器的秘密——这也正是为什么一个专用系统账号在这里买到的东西比通常少：要保护的东西无论如何都在 `.env` 里，而文件权限位就能做到。
-
-所以一个只在俱乐部机器上拿到普通账号的组织者，可以完全在 `$HOME` 里跑完整场活动，包括熬过重启的那部分（§3）。
-
-<details>
-<summary><b>如果你有 root 并且仍然想要一个专用系统账号</b></summary>
-
-<br>
-
-这是个合理的诉求：独立账号意味着 relay 被攻破时波及不到你别的东西，而且它能让 [`mahjong-relay.service`](mahjong-relay.service) 里那套 systemd 加固生效，而用户单元用不了那些。
-
-```sh
-sudo adduser --system --group --home /opt/mahjong mahjong
-sudo -u mahjong git clone <repo> /opt/mahjong/app
-cd /opt/mahjong/app && sudo -u mahjong git checkout <tag>
-sudo -u mahjong npm ci --omit=dev
-sudo -u mahjong node tools/build-client.js --verify-hash
-sudo chown -R mahjong:mahjong /opt/mahjong
-```
-
-本文其余部分的路径按无 root 的布局来写；如果你走了这条路，通篇把路径换成 `/opt/mahjong/app`。
-
-</details>
-
-`<repo>` 是**你的**仓库，不是这份代码被开发出来的那个。冻结是对你正在运行的一场活动做出的承诺：`data/protocol.json` 和 `data/roster.json` 装着你的目标轮次和你的十二位选手，它们在上游被 gitignore 正是为此，而 `tools/freeze.js` 会把它们强制加进你打 tag 并推送的那棵树里。fork 它，或者把它克隆到一个你能推送的地方，然后在那里冻结。选手拿到的是那个 tag 和那个 commit id；一个除你之外谁也拉不到的 tag 不构成承诺（`PROTOCOL.zh.md` §9）。
-
-`npm ci --omit=dev` 是刻意的：服务器需要 `tlock-js`，其他什么都不需要。
-
-如果在一份**全新克隆**上 `--verify-hash` 失败了，先怀疑检出，再怀疑 bundle。`core.autocrlf` 打开时 git 会在检出时改写行尾，而那是 Windows 的默认设置：blob 是 347717 字节、没有 CR，工作副本出来是 347738 字节、带 21 个 CR，摘要就不是同一个摘要了。本仓库的 `.gitattributes` 对每一份按字节钉死的产物关掉了这个行为，所以一份仍然出现这个问题的检出，要么是在那个文件存在之前做的，要么是本地设置盖过了它。用 `git check-attr text eol -- public/app.js` 检查。
-
-注意两种 bundle 检查各自跑在哪里。`--verify-hash` 把已提交的 `app.js` + `app.css` 和它们已提交的摘要比对，不需要任何依赖，这正是它在这里运行的原因——`--omit=dev` 意味着这台机器上没装 esbuild。强的那种检查是 `node tools/build-client.js --check`，它从源码重建并比对结果；那一项要在冻结提交**之前**在开发机或 CI 上跑。
-
-## 2. 环境变量
-
-checkout 根目录下的 `.env` —— 权限 600，已被 `.gitignore` 覆盖，而且**由进程自己读取**，无论是谁启动它：
+**`.env`**，放在 checkout 根目录。进程自己读它，不管是谁启动的：
 
 ```sh
 PORT=8080
 HOST=127.0.0.1
 NODE_ENV=production
+PANTHEON_MODE=twirp
 
-# 运营配置的可选覆盖（PROTOCOL.zh.md §4.2）。同样的值也可以写进
-# data/runtime.json；两者都不冻结，改哪一个都不需要重新打 tag。
-# DRAND_API=https://api2.drand.sh
-# PANTHEON_FREY_URL=http://frey.pantheon.local:4004
-# PANTHEON_MIMIR_URL=http://mimir.pantheon.local:4001
-PANTHEON_MODE=twirp                  # 默认值；"stub" 只用于本地运行
-
-# 镜像：密文一到达就变成公开的，并由第三方打上时间戳。
-MIRROR_REPO=youruser/mahjong-random-seating
+# 镜像：每一份密文一到达就发布到仓库里。
+# token 是一个 fine-grained PAT，只对这一个仓库有 contents:write。
+MIRROR_REPO=<owner>/<repo>
 MIRROR_BRANCH=main
-MIRROR_TOKEN=github_pat_...          # contents:write，收窄到这一个仓库
+MIRROR_TOKEN=github_pat_...
 
-# Pantheon 管理员，仅用于座位表同步（PANTHEON-INTEGRATION.zh.md §3）。
-# 绝不用在选手登录路径上。
+# Pantheon 管理员账号，只用于开奖后的座位表同步。
+# 就是那个账号登录时 Frey 返回的一对值（personId、authToken）。
 PANTHEON_ADMIN_PERSON_ID=...
 PANTHEON_ADMIN_TOKEN=...
-```
 
-```sh
-# 组织者面板。没有这个，/admin 路由根本不存在。
-ADMIN_TOKEN=...                      # openssl rand -hex 16
+# 组织者面板，在 /admin?token=...  （openssl rand -hex 16）
+ADMIN_TOKEN=...
 ```
-
-文件存在之后，把权限收紧——它装着一个 GitHub token 和一个 Pantheon 账号，是这台机器上唯一值得保护的东西：
 
 ```sh
 chmod 600 .env
 ```
 
-**是谁在读这个文件。** 是进程自己，在启动时读，并且在最初几行日志里报出它读了哪个文件。这件事以前只有 systemd 单元通过 `EnvironmentFile=` 在做，也就是说 §3 里其他每一种启动方式——tmux、`nohup`、crontab、直接开个终端——跑出来的服务器从来没见过上面任何一项。而这看上去哪里都不像出了问题：它照常供页面、照常让人登录、照常收下密文，然后**一份也不镜像**，于是那条阻止组织者在看到结果之后丢掉一份碍事提交的性质（§5）就这么悄悄没了。环境里已经设好的变量仍然优先于文件，所以 `PORT=9000 node server/server.js` 还是它字面的意思。
+**`data/runtime.json`**：
 
-`PORT` 和 `HOST` 也可以在命令行给出，且命令行优先：`node server/server.js --port 9000 --host 127.0.0.1`。8080 已被占用时很有用，而在同时跑着 Pantheon 的机器上它经常被占。无论用哪种，§4 里的反向代理都必须指向同一个端口号；端口已被占用会被如实报出，并告诉你改用哪个参数。
+```sh
+cp data/runtime.example.json data/runtime.json
+```
 
-`NODE_ENV=production` 的意义不止于日志：它给会话 cookie 标上 `Secure`，并让 `/api/dev-authorize` 返回 404。那个端点是 Frey 的开发替身；它绝不能存在于这里。
+在 `pantheon` 下设置：`frey_base_url` 和 `mimir_base_url`，按服务器访问它们的地址；`frey_public_url`，按**选手的手机**访问 Frey 的地址——一个 `https://` 地址。在 `server` 下：`"trust_proxy": true`。
 
-`ADMIN_TOKEN` 为 `/admin` 把门，那里显示提交进度、还差谁、起飞前检查和同步结果。不设置时这条路由像任何其他路径一样 404，所以一个从未配置过它的组织者也就没有不小心公开一份名册和一条提交时间线。这个页面按设计是只读的：开奖、重置和同步都是在这台机器上执行的命令，因为 §9 要求任何可能触发或改变开奖时机的东西不经过 HTTP。像对待 PAT 一样对待这个 token——它会透露谁提交了、什么时候提交的，这些信息本来就是公开的，但没有理由到处发。
+> [!WARNING]
+> `frey_public_url` 是选手浏览器登录时要连的地址。只在服务器上能解析的名字（`*.local`、`localhost`、局域网地址）在每一部手机上都会失败。服务器启动时看到这样的值会警告，`/admin` 上也有对应的红行。
 
-`data/runtime.json` 是那些覆盖项的文件版本，同样是可选的。它被刻意 gitignore：里面没有任何东西能改变结果，而把它排除在树之外，能让「它从来不在冻结范围内」这件事一目了然。如果某个 drand 镜像在提交窗口期间挂了，你要编辑的就是这个文件——不是某个已打 tag 的文件。
-
-**Pantheon 和 relay 在同一台机器上。** Pantheon 认名字，不认地址：每个容器的 nginx 都按
-`server_name` 匹配，其余一律回 404，所以即使 Mimir 健康，`http://127.0.0.1:4001` 也会失败。
-出厂的基础 URL 是 `mimir.pantheon.local` 和 `frey.pantheon.local`，而在服务器上，你不加条目，
-就没有任何东西会解析这两个名字：
+**如果 Pantheon 用 Docker 跑在同一台机器上**，它的服务只认自己的主机名，而服务器上没有任何东西会解析那些名字，除非你加上：
 
 ```sh
 echo '127.0.0.1  mimir.pantheon.local frey.pantheon.local' | sudo tee -a /etc/hosts
 getent hosts mimir.pantheon.local        # 必须打印出 127.0.0.1
 ```
 
-少了这一步，最先失败的是 RUNBOOK 第 10 步的 `tools/freeze.js`，它会报出名字无法解析，并给出
-它尝试的 URL。用 `getent` 检查，它和 Node 走的是同一个系统解析器。不要用 `curl` 检查：在一台
-服务器上，`getent` 什么都没查到，`curl` 却从某处拿回了一个 404。这条记录只解决 relay 这一侧。
-浏览器是自己去连 Frey 的，所以 `frey_public_url` 仍然必须是手机能到达的地址（§6）。
+用 `getent` 检查，不要用 `curl`。即便如此，`frey_public_url` 仍然必须是公网地址：手机不在这台机器上。
 
-把 GitHub PAT 收窄到这一个仓库，且只给 contents:write。按 §10，对 `main` 的写权限应当限制给那个 token，这样密文历史在实践上也和在原则上一样是只追加的。
+### 7. TLS 和反向代理
 
-## 3. 如何运行
-
-一个进程：
+证书文件不存在时 nginx 不会加载配置，而 nginx 在 80 端口为这个域名应答之前 certbot 又发不出证书。所以：先 80 端口那一半，再证书，再完整配置。
 
 ```sh
-node server/server.js
+sudo cp deploy/nginx-bootstrap.conf /etc/nginx/sites-available/mahjong   # 改 server_name
+sudo ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
+sudo mkdir -p /var/www/html && sudo nginx -t && sudo systemctl reload nginx
+sudo certbot certonly --webroot -w /var/www/html -d <你的域名>
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/mahjong             # 要改的地方见下
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot renew --dry-run --deploy-hook 'systemctl reload nginx'
 ```
 
-这就是整个部署。服务器既服务页面**也**负责开奖，每隔 `server.finalise_interval_seconds`（§4.2，默认 60 秒）派生一次 `server/finalise.js --no-wait`。开奖仍然是一个独立的程序——§9 要求它不走 HTTP，这样任何选手能戳到的东西都不能触发或改变它的时机——但为了让它发生，仓库之外不需要配置任何东西。
+第二次 `cp` 之前，在 `deploy/nginx.conf` 里改：
 
-早期版本要求两个 systemd 单元。那在两个层面上都是错的：注册单元需要 root，而组织者未必拥有那台机器；而且它在 Windows 上根本不存在，而开发和排练正是在 Windows 上做的。现实的结果是一个页面服务得很好、却永远不开奖的部署。
+- 每一处 `example.com` → 你的域名（三处：两个 `server_name`，证书路径）；
+- `Content-Security-Policy` 那一行的 `connect-src` 里加上你的 `frey_public_url` 的源，例如 `connect-src 'self' https://userapi.example.org https://api.drand.sh ...`。不加的话，浏览器在请求离开手机之前就把登录拦下，任何日志里都看不到。
 
-**让这一个进程活着**用你机器上有的任何办法，没有一种是特别的：
+> [!NOTE]
+> 文件里已经设了 `X-Forwarded-For` 和 `X-Forwarded-Proto`。两个都必需：前者让每位选手有自己的限流额度，后者是服务器得知请求经过 TLS 的方式。自己写的 nginx 配置必须两个都设。
 
-| | | 熬得过重启吗 |
+<details>
+<summary><b>用 Caddy 代替 nginx</b>——只在没有别的东西占着 80 和 443 端口的机器上</summary>
+
+<br>
+
+```sh
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile     # 改域名和 connect-src
+sudo systemctl reload caddy
+```
+
+Caddy 自己申请和续期证书，两个转发头也都会设。
+
+</details>
+
+### 8. 启动
+
+一个进程。它提供页面，也用自己的定时器开奖；不需要另外调度任何东西。
+
+选一种：
+
+| | 命令 | 重启后还在 |
 |---|---|---|
-| Linux，无 root | `tmux new -d -s mahjong 'node server/server.js'`，或 `nohup node server/server.js >> var/server.log 2>&1 &` | 否 |
-| Linux，无 root | 一个**用户**单元 —— 见下 | 是 |
-| Linux，有 root | `sudo cp deploy/mahjong-relay.service /etc/systemd/system/ && sudo systemctl enable --now mahjong-relay` | 是 |
-| Windows | 在终端里跑，或者用任务计划程序配一个登录时触发 | 配了触发器就行 |
+| 先试试 | 在终端里 `node server/server.js` | 否 |
+| Linux，无 root | `tmux new -d -s mahjong 'node server/server.js'` | 否 |
+| **Linux，无 root（推荐）** | 下面的用户单元 | 是 |
+| Linux，有 root | `sudo cp deploy/mahjong-relay.service /etc/systemd/system/ && sudo systemctl enable --now mahjong-relay`——先改里面的路径 | 是 |
 
-**无 root 的单元。** systemd 为每个用户各跑一个实例，而向你自己那个实例注册一个服务，不需要管理员给任何东西：
+用户单元：
 
 ```sh
 mkdir -p ~/.config/systemd/user
-sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service \
-  > ~/.config/systemd/user/mahjong-relay.service
+sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service > ~/.config/systemd/user/mahjong-relay.service
 systemctl --user daemon-reload
 systemctl --user enable --now mahjong-relay
-systemctl --user status mahjong-relay
-loginctl enable-linger          # 你没登录的时候也让它继续跑
+loginctl enable-linger                                # 注销之后也继续跑
+loginctl show-user "$USER" -p Linger                  # 必须是 Linger=yes
+journalctl --user -u mahjong-relay -f                 # 日志
 ```
 
-除最后一行外，以上都在 systemd 255 上以普通用户身份实测通过。`enable-linger` 是唯一一处取决于机器的：它由 polkit 动作 `org.freedesktop.login1.set-self-linger` 管辖，而该动作在 Ubuntu 和 Debian 的出厂策略里对任何用户都是允许的，所以**给你自己**开启通常不需要 sudo。用 `loginctl show-user "$USER" -p Linger` 确认——如果跑完之后它仍然说 `Linger=no`，说明那台机器的策略更严，需要管理员执行一次 `loginctl enable-linger "$USER"`。没有 linger，你一登出 relay 就停，而对一场要跨天运行的活动来说，那和没跑是一回事。
-
-用户单元用不了系统单元里那套沙箱（`ProtectSystem`、`ReadWritePaths` 之类都需要 root 才能强制执行），也去掉了 `User=`/`Group=`，因为它本来就是你这个用户。它保留的是要紧的那部分：失败重启，以及一次不会打断正在进行的开奖的停止。
-
-开奖任务随服务器重启是没问题的，而这正是让它按时钟运行的意义。截止之前每一次运行都是空操作，截止之后这个节奏同时也是恢复路径，对付三种不同的失败：
-
-- **到点时 drand 连不上**（§8 —— 延迟，不是失败）。任务把 phase 留在 `awaiting_round`，下一个 tick 再试。快照在截止时就已冻结，所以延迟不可能改变结果。
-- **进程在发布结果和同步到 Pantheon 之间死了。** 如果从来没有记录过同步结果，下一个 tick 会把它做完。`results.json` 只写一次，这一过程不碰它。
-- **完成开奖之后 `var/` 丢了。** 任务读 `results.json`，把数据库对齐，然后停下。它不会重新开奖，也不会把一个已发布的轮次判作废。
-
-一旦记录了一次同步**失败**，任务就停止重试：那条路径有人工补救手段（RUNBOOK 第 15 步），而一个每分钟砸一次 Pantheon 的定时器只会把它埋掉。
-
-### 如果你想让别的东西来开奖
-
-在 `data/runtime.json` 里把 `server.run_finalise` 设为 `false`，然后自己调度。用户级 crontab 同样不需要 root：
+不管选了哪种，日志开头几行必须有这三行，并且不能出现 STUB 这个词：
 
 ```
-* * * * * cd $HOME/mahjong && /usr/bin/node server/finalise.js --no-wait >> var/finalise.log 2>&1
+[server] listening on http://127.0.0.1:8080
+[server] pantheon: TwirpPantheon
+[server] running server/finalise.js every 60s (server.run_finalise)
 ```
 
-不要两个都开。两场同时进行的开奖会得出一致的结果——任务是确定性的，这正是协议的全部要点——但它们会把提交名单盖两次戳，往 Pantheon 写两次，而外部副作用值得不做两遍。
+> [!NOTE]
+> - `enable-linger` 之后仍是 `Linger=no`，说明这台机器需要管理员跑一次 `loginctl enable-linger <你>`；不然你一注销服务就停。
+> - 8080 被占了（同时跑着 Pantheon 的机器上很常见）？把 `.env` 里的 `PORT` 和 nginx 文件里的 `proxy_pass` 改成同一个数。
+> - 停止：`systemctl --user stop mahjong-relay`，或 Ctrl+C。正在进行的开奖会被留到做完。
 
-现在开奖任务在另一个进程持有 `var/finalise.lock` 时也会直接退出，所以这里配错的代价是一行日志，而不是一次重复写入。这是兜底，不是许可：持有者已经死掉的锁、或者比任何真实运行都更久的锁，会被接管——因为一把没人持有的锁绝不能导致一场活动彻底开不了奖。
+### 9. 公布之前先检查
 
-### 万一没人在开奖，你怎么发现
-
-这是一次真实发生过的失败，而且它是静默的：选手登录、封存数字、看着倒计时归零，然后什么都没发生。现在有三样东西会说话。
-
-- 服务器为任务的每一次运行打印 `[schedule]` 日志行；如果 `run_finalise` 是关的、而且任务从未对着这个数据库跑过，启动时会有一条警告。
-- `/admin` 里有一行 **The draw job has run**，附带上次运行时间。信标还没到时它是警告，开奖已经晚了时它是失败，而正是这一行区分开了「信标迟到」——等着——和「调度死了」——去把它启起来。
-- 选手页面在两个间隔之后不再说「开奖中」，而是说开奖没有运行，并同时说明结果无论如何在截止时就已固定。
-
-## 4. 反向代理
-
-挑一个。两份配置做的是同样的三件事——终结 TLS、转发到 127.0.0.1:8080、设置安全响应头——而且它们不能并存，因为 :80 和 :443 只能被一个进程占住。
-
-主机上已经跑着 nginx 的话用 **nginx**（`deploy/nginx.conf`），而 Pantheon 共用这台机器时必然如此：每个 Pantheon 容器都自带一个 nginx。在旁边再加一个 Caddy 不是冗余，是端口冲突。
-
-在它指名的证书文件存在之前，nginx 不会加载这个文件；而在 nginx 于 :80 上为这个域名应答之前，certbot 又发不出证书。`deploy/nginx-bootstrap.conf` 就是单独拿出来的 :80 那一半，专门用于中间这几分钟。开始之前，域名必须已经解析到这台机器。
+在任何地方：
 
 ```sh
-cp deploy/nginx-bootstrap.conf /etc/nginx/sites-available/mahjong   # 先改域名
-ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
-mkdir -p /var/www/html && nginx -t && systemctl reload nginx
-certbot certonly --webroot -w /var/www/html -d example.com
-cp deploy/nginx.conf /etc/nginx/sites-available/mahjong             # 改域名，以及 connect-src
-nginx -t && systemctl reload nginx
+curl -s https://<你的域名>/api/status | head -c 300      # "phase":"open"，12 个席位，submitted_count 0
+curl -s https://<你的域名>/protocol.json | head -c 300   # 冻结参数，和 tag 里的一样
+curl -s -X POST https://<你的域名>/api/dev-authorize      # 必须是 404
+curl -s -o /dev/null -w '%{http_code}\n' https://<你的域名>/admin   # 必须是 404
 ```
 
-certbot 会装一个定时器自动续期，而续期后必须让 nginx 知道新文件：先跑一次 `certbot renew --dry-run`，并加上 `--deploy-hook 'systemctl reload nginx'`，让续期自动重载。下面的 Caddy 不需要这些。
+然后打开 `https://<你的域名>/admin?token=<ADMIN_TOKEN>`。起飞前检查面板每一行都必须是绿的。让部署不适合办真实抽签的两行是 **Mirroring to the repository: DISABLED** 和 **Pantheon adapter is the STUB**。
 
-那两个端口上没有别的东西的主机用 **Caddy**（`deploy/Caddyfile`）。它会自己申请和续期证书，这正是它仍然被保留在这里的全部理由。
+然后用你自己的 Pantheon 账号在页面上登录一次。失败的话，在任何装了 Node 的机器上：
 
 ```sh
-cp deploy/Caddyfile /etc/caddy/Caddyfile   # 先改域名
-systemctl reload caddy
+node tools/check-signin.js --email <你的邮箱> --event <id>   # 会问密码，不打印任何机密
+node tools/check-signin.js --admin --event <id>              # 同步用的凭据，在只读能检查的范围内
 ```
 
-无论选哪个，有几件事是承重的：
+第一条把登录要经过的三步走一遍，说出哪一步失败、页面本来会显示什么。第二条确认管理员 token 有效、活动能应答；写权限只有同步本身才能证明。
 
-- **这个流不能被缓冲。** Caddy 需要 `flush_interval -1`；nginx 会尊重应用已经发出的 `X-Accel-Buffering: no`（`server/events.js`），同时也配上 `proxy_buffering off`。没有它，等待阶段就停止更新，并静默退化为轮询。
-- **`connect-src` 名单。** **浏览器**直接向 Frey 认证（`PANTHEON-INTEGRATION.zh.md` §2），所以必须把 Frey 的源加进去，否则登录会被 CSP 拦掉——而且拦掉的方式是任何服务器日志都记不下的，因为那个请求根本没到达任何服务器。
-- **`data/runtime.json` 里的 `server.trust_proxy`。** 在代理后面，每个请求都来自 127.0.0.1，于是按来源的限流变成十二个人共享的一份限额——足以让几个人同时登录就把它用光。等代理设置了 `X-Forwarded-For` 之后把它设为 `true`；本目录里两份配置都设了。它默认关闭，是因为前面什么都没有时相信那个头，会让任何调用方编造一个地址就领走一份限额。应用读的是**最右边**那一项，也就是代理自己观察到的地址，所以伪造的前缀会被跨过去而不是被相信。当服务器监听在回环地址而这个设置是关的时，它在启动时会打印一条提示。
+## 第三部分——活动
 
-### 这里的 TLS 不是可选项
+### 10. 公布
 
-用明文 HTTP 提供服务，登录就会坏，而且坏的方式看起来不像是 TLS 问题。`NODE_ENV=production` 给会话 cookie 标上 `Secure`（`server/server.js`），而浏览器不会存储一个经由 `http://` 到达的 `Secure` cookie。选手登录了，页面往下走了，之后每一个请求都是未认证的。他的提交会以一个和他毫无关系的 401 失败。
+把冻结时打印的通告（第 4 步）发给选手：地址；一个 0 到 255 之间的数字，只提交一次；页面说已封存就可以关掉；开奖什么时候；tag 和 commit id。所有人同一个链接——没有个人链接，没有 token。他们用已有的 Pantheon 账号登录。
 
-还有第二个理由。浏览器把选手的 Pantheon 密码发给 Frey 自己。在 HTTP 上那个密码明文穿过网络，而它不是这场活动有权拿去冒险的东西——它是选手的 Pantheon 账号。
+### 11. 窗口期间
 
-如果证书确实还拿不到，就用 `NODE_ENV=development` 在 HTTP 上把整套东西跑起来，**仅供测试**，并且要明白这个部署在这种状态下不适合跑一场真实抽签：`/api/dev-authorize` 在那里是存在的，而且它接受一个不带任何密码的 person id。
+没有要运行的东西。`/admin` 按名字列出还没提交的人，选手端页面显示同样的计数。临近截止时催一催。
 
-### 不要记录请求体
+> [!WARNING]
+> - 12 人里至少 8 人提交，否则这次尝试作废，所有人重新提交（§15）。这个数是冻结的；当天不商量。
+> - 不在十二人里的人不能在窗口期间加进来。诚实的做法是作废，用正确的十二人重新冻结。
+> - 盯着起飞前检查面板。窗口期间有一行变红，现在就处理，别等开奖之后。
 
-浏览器把选手的 Pantheon 邮箱和密码发给 Frey，并把拿回来的 token 发给 `POST /api/session`。两者都经过这个代理。nginx 默认不记录请求体，Caddy 也不——但一条带 `$request_body` 的 `log_format`，某个下午为了调一个登录问题加上去的，会把每位选手的 Pantheon 密码写进磁盘上的一个文件，以一种比这场活动活得更久、并且会随日志被到处复制的形式。
+### 12. 开奖
 
-那个 token 也好不到哪里去。Frey 把它导出为 `sha384(password + salt)`，并且在密码改变之前一直接受它，所以它等价于密码（`PANTHEON-INTEGRATION.zh.md` §2）。应用只校验它一次，从不存储也从不记录；代理日志是它唯一还可能被捕获的地方。
+截止时服务器固定并公布提交名单。信标的目标轮次到达时——默认设置下是十分钟后——开奖在一分钟内自动进行。然后：
 
-如果你需要调试登录，现在失败会在页面上和上面那张表里自报家门。那就是它存在的意义。
+1. `/admin` 显示结果：`round_used`、R、种子、排列，以及 `results.json` 的摘要。选手的页面自己显示座位表。
+2. `results.json` 和 `events/` 已在仓库里（镜像）。
+3. 同步面板说座位表已写入 Pantheon 并读回——Pantheon 的管理界面里也能看到。
 
-## 5. 在把 URL 告诉任何人之前
+**如果同步失败**：开奖仍然是最终的，`results.json` 说了算。打开 `results.json`，复制 `pantheon_prescript` 字段，贴进 Pantheon 里这场活动的 prescript，用 `WIND_SHUFFLE_MODE_PRESCRIPTED` 应用。别的风位模式会把座位模板保证的大部分东西扔掉。**绝不重新开奖。**
+
+### 13. 选手可以自己核验什么
+
+结果页会把这一段填好打印出来。任何人都能做，在一台从没见过服务器的机器上：
 
 ```sh
-curl -s https://your.domain/api/status | jq     # 12 个席位，submitted_count 为 0，phase 为 "open"
-curl -s https://your.domain/protocol.json | jq  # 冻结参数，和打 tag 时一致
-curl -s https://your.domain/api/dev-authorize -X POST -d '{}'   # 必须是 404
-curl -s -o /dev/null -w '%{http_code}\n' https://your.domain/admin   # 必须是 404
+git clone <你的 fork> draw && cd draw
+git checkout <tag>                                   # 通告里的 tag
+git checkout origin/HEAD -- results.json events/     # 冻结之后才写的，所以不在 tag 里
+node generate.js --verify results.json               # 每一个字节，外加对着截止快照的点名核对
+python3 tools/verify_template.py data/schedule_template.json
 ```
 
-然后打开 `/admin?token=…` 读起飞前面板。每一行都应当是绿的。`Mirroring to the repository: DISABLED` 和 `Pantheon adapter is the STUB` 这两条会让这个部署不适合跑真实抽签。
+> [!NOTE]
+> 第三行取的是开奖通过镜像（§6）发布出去的文件。镜像关着的话，`results.json` 和 `events/` 只存在于服务器上，谁也核验不了——这正是 `/admin` 拒绝把这样的部署称为「就绪」的原因。
 
-在那份 status 载荷里，`drand.chain_hash` 和 `drand.chain_public_key` 必须和打了 tag 的 `protocol.json` 完全一致——它们是浏览器用来钉死链的东西，只有两者都对，这场抽签才真的绑定在向所有人承诺过的那个信标上。`drand.api` 不需要和任何东西一致：它只是当前从哪里访问那条链（§4.2）。
+### 14. 收尾
 
-然后自己登录试一次：用一个真实的、已报名这场活动的 Pantheon 账号，再用一个没报名的。两个答案都必须正确，而且读起来必须不一样（`UI-SPEC.zh.md` §3）。RUNBOOK 第 A3 步就是这项检查；现在做比到了正日子再做便宜得多。
+在下一次冻结**之前**，不是之后：
 
-## 6. 登录失败的时候
+```sh
+node tools/end-event.js --dry-run     # 它会归档和清理什么
+node tools/end-event.js
+```
 
-登录是唯一一个不经过这台服务器的请求。浏览器把邮箱和密码发给 Frey 自己（`PANTHEON-INTEGRATION.zh.md` §2），所以一次失败在这里的任何日志里都不留痕迹；而且很长一段时间里，页面把每一种失败都报成「邮箱或密码错误」——这让不止一个部署跑去查账号，而故障其实在一个 URL 上。现在页面把它们区分开了。它显示什么，以及该去哪里看：
+它把这次尝试——密文、截止时的名单、结果、同步结果、它运行时的冻结文件——归档到 `events/rounds/<target_round>/`，验证每一个摘要，然后才清理 `var/` 和 `events/` 下的现场文件。归档验证不过，什么都不清理。先把服务器停掉（`systemctl --user stop mahjong-relay`）。
 
-| 选手看到的 | 实际发生了什么 | 去哪里看 |
+> [!WARNING]
+> 先冻结下一场，这一场的 `protocol.json` 就会在归档之前被覆盖。工具会发现并说出来，但证据就不完整了。而且在收尾之前，服务器会拒绝为下一场启动，而不是把上一场的座位表端出来。
+
+## 第四部分——参考
+
+### 15. 出问题的时候
+
+**登录。** 页面会说出失败的是什么；下面是每一种的含义和该看哪里。
+
+| 选手看到的 | 发生了什么 | 去哪里看 |
 |---|---|---|
 | Pantheon 不认识这个邮箱和密码 | Frey 回答 `400 invalid_argument` | 确实是密码的问题 |
 | Pantheon 里没有这个邮箱的账号 | Frey 回答 `404 not_found` | 他注册时用的那个地址 |
-| 这次抽签的 Pantheon 地址配置有误 | `bad_route`，或者一个非 Twirp 的 404 | `runtime.json` → `pantheon.frey_base_url` 和 `twirp_path_template` |
-| 连不上 Pantheon | 请求根本没得到任何回答 | CSP `connect-src`、混合内容、DNS、防火墙 |
-| Pantheon 出错了 | Frey 返回 5xx | Frey 自己的日志；Hugin 挂掉会造成这个 |
+| 这次抽签的 Pantheon 地址配置有误 | `bad_route`，或者非 Twirp 的 404 | `runtime.json` → `pantheon.frey_public_url`、`twirp_path_template` |
+| 连不上 Pantheon | 浏览器没从 Frey 得到任何回答 | CSP `connect-src`（§7）、混合内容、DNS、防火墙 |
+| Pantheon 出错了 | Frey 返回 5xx | Pantheon 自己的日志 |
 | 这个账号没有报名本次活动 | Frey 说是，这台服务器说否 | 这个账号不在那十二人里 |
-| 连不上抽签服务器（不是 Pantheon） | relay 没在跑，nginx 回了 502/504，或者根本没有任何应答 | relay 在运行吗？先看它的日志（§3），再看 nginx 的 error log |
-| 登录尝试太频繁 | 这台服务器回答 429 | `server.trust_proxy`（§4）：在代理后面，限额是所有人共用的一份 |
-| 这个页面是用 http 打开的，登录状态保存不下来 | 这台服务器拒绝了：生产模式，而代理没有报告 https | TLS（§4）；代理配置里的 `X-Forwarded-Proto` |
-| 登录成功，但浏览器没有保存会话 | 登录之后紧接着的 `GET /api/me` 回答 401 | 浏览器：cookie 被禁用，或者是隐私窗口 |
+| 连不上抽签服务器（不是 Pantheon） | nginx 回了 502/504，或者根本没有应答 | 服务器在跑吗？它的日志（§8），然后是 nginx 的 error log |
+| 登录尝试太频繁 | 这台服务器回答 429 | `trust_proxy` 不是 `true`（§6）：所有人共用一份额度 |
+| 这个页面是用 http 打开的 | 生产模式，而代理没有报告 https | TLS（§7）；代理配置里的 `X-Forwarded-Proto` |
+| 登录成功，但浏览器没有保存会话 | 登录后紧接着的 `GET /api/me` 回答 401 | 浏览器：cookie 被禁用，隐私窗口 |
 | 抽签服务器出错了 | 这台服务器返回 500 | 这台服务器的日志，里面有完整的栈 |
 
-**绊倒大多数部署的**是第三行，而且它有一个具体的成因。`pantheon.frey_base_url` 是**后端**用的，本文件 §1 在 Pantheon 共用主机时把它指向 localhost 是对的。但**浏览器**拿到的也是同一个 URL，而且它要自己去调 Frey，在选手的手机上 localhost 就是那台手机。把 `pantheon.frey_public_url` 设成选手能解析的地址：
+除了前两行和「没有报名」那一行，其余每一种都会在下面打印技术行，选手可以原样转发。`tools/check-signin.js --email`（§9）能在任何机器上把 Pantheon 那一半复现一遍。
 
-```json
-{
-  "pantheon": {
-    "frey_base_url": "http://localhost:4004",
-    "frey_public_url": "https://pantheon.example.com"
-  }
-}
-```
+**提交不足 8 人。** 任务把这次尝试判为作废，公布 `events/void.json`，把一切归档到 `events/rounds/<target_round>/`。什么都不删。然后按顺序：
 
-当面向浏览器的那个 URL 是回环或私有地址时，服务器在启动时会警告，`/admin` 里也有对应的一行。那个源同样必须出现在代理的 CSP `connect-src` 里，否则请求在离开浏览器之前就被拦住了。
+1. `node tools/new-round.js --dry-run`——确认归档完整。
+2. 在你的电脑上：`node tools/pick-round.js --in 72h --write`，然后 `node tools/freeze.js --write --tag <新名字> --push`（§3–§4）。还是这十二个人。
+3. 在服务器上：`git fetch --tags && git checkout <新名字>`，然后 `node tools/new-round.js`。它重新验证归档，清掉现场的提交，开启新一轮。第 2 步没做它会拒绝。
+4. 通知选手：新的 tag，**全部十二人**重新提交（旧密文绑定在过期的那一轮上），以及作废的那次公布在哪里。
 
-除了前两行和「没有报名」那一行，其余每一种都会在下面打印技术行——HTTP 状态码，以及有的话 Twirp code——好让选手原样转发。这张表背后的规则：除非 Frey 或者这台服务器对 Frey token 的复查拒绝了凭证，否则任何失败都不会显示成「密码错误」。第一次生产环境的登录失败，对面是一台没在运行的服务器，页面却说「密码错误」；表的下半部分就是它现在会说的话。
+**开奖时连不上 drand。** 等。任务每分钟重试；结果在截止时就已经定了，不会变。
 
-`tools/check-signin.js` 可以在任何装了 Node 的机器上，把一次登录的 Pantheon 那一半逐步走一遍——浏览器的调用、relay 的复查、活动报名——然后说出是哪一步失败、页面本来会显示什么。加 `--admin` 还会检查座位表同步要用的凭据，在只读能检查的范围内。密码在隐藏提示符里输入，任何机密都不会被打印，所以输出可以直接贴给帮忙的人：
+**某个 drand 镜像挂了，或者 Pantheon 搬家了。** 改 `data/runtime.json`，重启服务器。冻结的东西一点没动，所以不用重新打 tag，也不用通告。
 
-```sh
-node tools/check-signin.js --email someone@example.com --event 2
-node tools/check-signin.js --admin --event 2
-```
+**服务器死了，或者 `var/` 没了。** 再启动一次。开奖已经公布的话，它从 `results.json` 恢复状态，绝不重新开奖，也不会把这一轮判作废。同步没记录的话，下一个 tick 把它做完。
 
-在正日子之前，对着一个真实的 Pantheon 把它们各复现一遍：
+**没有人在开奖。** `/admin` 上 **The draw job has run** 那一行说明定时器上一次什么时候跳的。从来没跳过：看日志里的 `[schedule]` 行，并确认 `runtime.json` 里 `server.run_finalise` 不是 `false`。如果你是自己调度的，crontab 那一行是 `* * * * * cd ~/mahjong && node server/finalise.js --no-wait >> var/finalise.log 2>&1`。别两个一起跑。
 
-```sh
-FREY=http://frey.pantheon.local:4004/v2/common.Frey/Authorize
-curl -s -X POST $FREY -H 'content-type: application/json'   -d '{"email":"someone@example.com","password":"wrong"}'
-# {"code":"invalid_argument","msg":"Password check failed"}
-```
+### 16. 下一场活动
 
-错误的服务名回答 `{"code":"bad_route",...}`，错误的版本前缀则完全错过 Twirp 路由器，拿到 nginx 的 HTML 404。两者含义相同：基础 URL 或者路径模板错了，改任何账号都修不好。
+先收尾这一场（§14），然后从 §1 重新开始，用新的活动 id，第 4 步用新的 tag 名字。服务器上，§5 的 `git fetch --tags && git checkout <tag>` 会拿到新的冻结；§6–§8 照旧。
 
-`tools/pantheon-fixture.js --accounts` 会在开发实例上建出十二个已知密码的账号，这样整条路径可以在它变得要紧之前先走一遍。
+### 17. 为什么是这样
+
+理由都在 [`../docs/IMPLEMENTATION_NOTES.zh.md`](../docs/IMPLEMENTATION_NOTES.zh.md) 里：不用 root 和用户单元（§6n），安装顺序和为什么 tag 在前（§6r、§6s），谁来开奖（§6j），停止时允许打断什么（§6l、§6m），收尾流程（§6o），hosts 记录和 ENOTFOUND 那条消息（§6x），runtime 文件（§6y），TLS 和登录页说的话（§6z）。什么是冻结的、为什么，在 [`../docs/PROTOCOL.zh.md`](../docs/PROTOCOL.zh.md) §4；信任论证在那里的 §9 和 §10。

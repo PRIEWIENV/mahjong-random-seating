@@ -157,7 +157,7 @@ The file is optional and so is every key in it; anything absent falls back to th
 
 `pantheon.event_title` is what the page calls this draw. Left null it is read from Mimir at boot and re-read until Mimir answers; set, it wins, which is what a deployment whose server cannot reach Mimir needs. It is on this side of the boundary because it is a label: no value it can take reaches the seed, the roster or the round, and a draw whose title is wrong is a draw with a typo, not a draw that has been steered.
 
-Pantheon admin credentials for the sync are **not** in this file and never in the repository. They are environment variables (`deploy/README.md` §2).
+Pantheon admin credentials for the sync are **not** in this file and never in the repository. They are environment variables (`deploy/README.md` §6).
 
 To keep the two kinds of setting from drifting back together, the loader **rejects `protocol.json` outright** if it contains any operational key, and names the one it found.
 

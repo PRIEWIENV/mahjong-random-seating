@@ -312,7 +312,7 @@ function loadFrozen(opts) {
 /**
  * Read `.env` from the checkout root, the way the systemd unit's `EnvironmentFile=` does.
  *
- * `deploy/README.md` §2 has the operator write that file, and it holds everything that
+ * `deploy/README.md` §6 has the operator write that file, and it holds everything that
  * makes a deployment a real one rather than a demo: the Pantheon base URLs and admin
  * credentials, the mirror repository and its token, `ADMIN_TOKEN`, `NODE_ENV`. Only
  * systemd was reading it. Every other way of starting the process that the same document

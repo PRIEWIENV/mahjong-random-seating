@@ -1,4 +1,4 @@
-# The rootless half of deploy/README.md §3. Install it into your own systemd instance:
+# The rootless half of deploy/README.md §8. Install it into your own systemd instance:
 #
 #   mkdir -p ~/.config/systemd/user
 #   sed "s|@CHECKOUT@|$PWD|g" deploy/mahjong-relay.user.service \

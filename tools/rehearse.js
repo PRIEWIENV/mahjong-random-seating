@@ -511,9 +511,15 @@ async function main(argv) {
   }
 }
 
-main(process.argv.slice(2))
-  .then((c) => process.exit(c || 0))
-  .catch((err) => {
-    console.error(`\n  \x1b[31mREHEARSAL FAILED\x1b[0m  ${err.message}`);
-    process.exit(1);
-  });
+if (require.main === module) {
+  main(process.argv.slice(2))
+    .then((c) => process.exit(c || 0))
+    .catch((err) => {
+      console.error(`\n  \x1b[31mREHEARSAL FAILED\x1b[0m  ${err.message}`);
+      process.exit(1);
+    });
+}
+
+// tools/demo.js is the same sandbox, the same stub event and the same simulated
+// players, with a browser pointed at it instead of assertions.
+module.exports = { makeSandbox, makeRunner, signIn, submit, strip, EVENT, EVENT_ID, TITLES };

@@ -74,7 +74,7 @@ test('each document links to its counterpart', () => {
 });
 
 test('the implementation notes keep the same section numbering in both languages', () => {
-  const numbers = (text) => (text.match(/^## [0-9]+[a-z]?\./gm) || []);
+  const numbers = (text) => (text.match(/^## [0-9]+[a-z]{0,2}\./gm) || []);
   const en = numbers(read('docs/IMPLEMENTATION_NOTES.md'));
   const zh = numbers(read('docs/IMPLEMENTATION_NOTES.zh.md'));
   assert.ok(en.length > 10, 'the English notes lost their numbered sections');
@@ -114,6 +114,29 @@ test('the licence file exists and agrees with package.json', () => {
   assert.match(licence, /^MIT License/, 'LICENSE does not open as MIT');
   assert.match(licence, /Copyright \(c\) \d{4}/, 'LICENSE carries no copyright line');
   assert.equal(require('../package.json').license, 'MIT', 'package.json disagrees with LICENSE');
+});
+
+/**
+ * The quick start is three commands and the third shows the application.
+ *
+ * It used to be four, and the last two were `npm test` and `npm run rehearse`: a reader
+ * who ran them saw 432 green lines and a headless transcript, and no page. A quick start
+ * that ends without the thing running is a test suite with a friendlier name.
+ */
+test('the quick start is three commands and the third is the demo', () => {
+  const scripts = require('../package.json').scripts;
+  assert.equal(scripts.demo, 'node tools/demo.js', 'npm run demo must exist');
+  for (const [rel, heading] of [['README.md', '## Quick start'], ['README.zh.md', '## 快速开始']]) {
+    const text = read(rel);
+    const at = text.indexOf(heading);
+    assert.ok(at > 0, `${rel} has no "${heading}"`);
+    const block = text.slice(at).match(/```sh\n([\s\S]*?)```/);
+    assert.ok(block, `${rel}: no sh block under the quick start`);
+    const lines = block[1].split('\n').map((l) => l.trim()).filter(Boolean);
+    assert.equal(lines.length, 3, `${rel}: the quick start is three commands, not ${lines.length}:\n${lines.join('\n')}`);
+    assert.match(lines[2], /^npm run demo$/, `${rel}: the third command shows the app running`);
+    assert.ok(!lines.some((l) => /npm test|rehearse/.test(l)), `${rel}: tests are not a quick start`);
+  }
 });
 
 /**
@@ -239,7 +262,7 @@ test('every relative link between documents resolves', () => {
  * The one piece of ordering an operator cannot derive from either document alone.
  *
  * Deployment is a step inside the runbook, between B and C, because RUNBOOK step 11
- * creates the tag that deploy/README §1 checks out. Neither document said so, and a new
+ * creates the tag that deploy/README §5 checks out. Neither document said so, and a new
  * operator who opened the deployment document first got as far as its second line.
  * Both directions, so whichever one they land on carries the other.
  */

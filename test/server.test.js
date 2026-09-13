@@ -805,7 +805,7 @@ test('and an unreachable repository still cannot hold the process open', async (
 });
 
 // ---------------------------------------------------------------------------
-// sign-in over plain http, in production (deploy/README.md §4)
+// sign-in over plain http, in production (deploy/README.md §7)
 // ---------------------------------------------------------------------------
 
 // NODE_ENV=production marks the session cookie Secure, and a browser will not keep a
