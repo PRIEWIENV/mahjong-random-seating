@@ -314,11 +314,23 @@ only one process can hold :80 and :443.
 shares the box: every Pantheon container ships its own nginx. Adding Caddy alongside is
 not redundancy, it is a port conflict.
 
+nginx will not load that file until the certificate it names exists, and certbot cannot
+issue one until nginx answers for the domain on :80. `deploy/nginx-bootstrap.conf` is the
+:80 half on its own, for the minutes in between. The domain has to resolve to this box
+before any of it starts.
+
 ```sh
-cp deploy/nginx.conf /etc/nginx/sites-available/mahjong   # edit the domain first
+cp deploy/nginx-bootstrap.conf /etc/nginx/sites-available/mahjong   # edit the domain
 ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
+mkdir -p /var/www/html && nginx -t && systemctl reload nginx
+certbot certonly --webroot -w /var/www/html -d example.com
+cp deploy/nginx.conf /etc/nginx/sites-available/mahjong             # edit the domain, and connect-src
 nginx -t && systemctl reload nginx
 ```
+
+certbot installs a timer that renews the certificate, and nginx has to be told about the
+new file: run `certbot renew --dry-run` once, with `--deploy-hook 'systemctl reload nginx'`
+so the renewal reloads it. Caddy, below, needs none of this.
 
 **Caddy** (`deploy/Caddyfile`) on a host with nothing else on those ports. It obtains
 and renews certificates by itself, which is the whole reason it is still offered here.
@@ -419,6 +431,11 @@ fault was a URL. The page now names them apart. What it shows, and where to look
 | Pantheon could not be reached | The request got no answer at all | CSP `connect-src`, mixed content, DNS, firewall |
 | Pantheon returned an error | A 5xx from Frey | Frey's own logs; Hugin being down does this |
 | That account isn't registered for this event | Frey said yes, this server said no | The account is not in the twelve |
+| The draw server could not be reached — this one, not Pantheon | nginx answered 502/504 for a relay that was down, or nothing answered at all | Is the relay running? Its log (§3), then nginx's error log |
+| Too many sign-in attempts from this address | This server answered 429 | `server.trust_proxy` (§4): behind a proxy the limit is one allowance shared by everybody |
+| This page was opened over http, so the sign-in cannot be kept | This server refused: production, and the proxy did not report https | TLS (§4); `X-Forwarded-Proto` in the proxy config |
+| Pantheon accepted the sign-in, but this browser did not keep the session | `GET /api/me` answered 401 right after sign-in | The browser: cookies blocked, or a private window |
+| The draw server returned an error | A 500 from this server | This server's log, which carries the stack |
 
 **The one that catches most deployments** is the third row, and it has a specific cause.
 `pantheon.frey_base_url` is what the *backend* uses, and §1 of this file is right to
@@ -439,8 +456,23 @@ The server warns at boot when the browser-facing URL is a loopback or private ad
 and `/admin` carries a row for it. That origin also has to be in the proxy's CSP
 `connect-src`, or the request is blocked before it leaves the browser.
 
-Each of the middle four also prints the technical line underneath — the HTTP status and
-the Twirp code — so a player can forward it verbatim.
+Every row but the first two and the not-registered one also prints the technical line
+underneath — the HTTP status and, where there is one, the Twirp code — so a player can
+forward it verbatim. The rule behind the table: nothing reads as a wrong password unless
+Frey, or this server's re-check of Frey's token, refused the credentials. The first
+production sign-in failed against a server that was down, and the page said "wrong
+password"; the table's lower half is what it says now.
+
+`tools/check-signin.js` walks the Pantheon half of one sign-in from any machine with
+Node — the browser's call, the relay's re-check, the registration — and says which step
+failed and what the page would have shown. With `--admin` it also checks the credentials
+the seat-plan sync will use, as far as a read can. The password is asked for on a hidden
+prompt and nothing secret is printed, so the output can be pasted to whoever is helping:
+
+```sh
+node tools/check-signin.js --email someone@example.com --event 2
+node tools/check-signin.js --admin --event 2
+```
 
 Reproduce any of them against a live Pantheon before the day:
 

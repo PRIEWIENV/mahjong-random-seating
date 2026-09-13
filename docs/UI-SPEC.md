@@ -54,6 +54,8 @@ The browser authenticates against Pantheon directly and posts only the returned 
 
 The second is a normal outcome, not an error state — style it as information, not alarm.
 
+Everything else a sign-in can fail with has its own sentence and carries the technical line underneath (the HTTP status, and the Twirp code where there is one): Frey unreachable from the browser, a wrong Pantheon address, a Pantheon error, this server unreachable, this server's rate limit, a refusal over plain http, a session the browser did not keep, and an answer the page does not recognise. The rule: nothing reads as a wrong password unless Frey, or this server's re-check of Frey's token, refused the credentials. After sign-in the page reads the session back before it moves on, so a cookie the browser dropped is reported here and not at the submission.
+
 ## 4. Submitting a number
 
 The focal element of the whole app. A single large numeric field, the number typeset big enough to feel consequential (48–64 px), with:

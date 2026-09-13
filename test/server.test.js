@@ -31,6 +31,7 @@ async function boot(opts = {}) {
     cfg, store, mirror, pantheon,
     publicDir: path.join(ROOT, 'public'),
     now: opts.now, rateLimit: opts.rateLimit, trustProxy: opts.trustProxy,
+    secureCookie: opts.secureCookie,
     drand: { latest: async () => ({ round: 123 }) },
     drandPollMs: 0,
     eventTitlePollMs: opts.eventTitlePollMs,
@@ -800,5 +801,60 @@ test('and an unreachable repository still cannot hold the process open', async (
     });
   });
   assert.deepEqual(codes, [0]);
+  await s.close();
+});
+
+// ---------------------------------------------------------------------------
+// sign-in over plain http, in production (deploy/README.md §4)
+// ---------------------------------------------------------------------------
+
+// NODE_ENV=production marks the session cookie Secure, and a browser will not keep a
+// Secure cookie that arrived over http. The server used to issue it anyway: sign-in
+// answered 200, the page moved on, and the submission failed with a 401 after the player
+// had sealed a number. The first production deployment, on a domain with no certificate
+// yet, hit exactly that. The proxy says how a request arrived in X-Forwarded-Proto.
+
+const signInAs = (s, personId, headers = {}) => fetch(s.base + '/api/session', {
+  method: 'POST', headers: { 'content-type': 'application/json', ...headers },
+  body: JSON.stringify({ person_id: personId, auth_token: `token-${personId}` }),
+});
+
+test('in production, sign-in over plain http is refused before Pantheon is asked', async () => {
+  const s = await boot({ secureCookie: true });
+  const res = await signInAs(s, 1001);
+  const body = await res.json();
+  assert.equal(res.status, 400);
+  assert.equal(body.error, 'plain_http');
+  assert.match(body.message, /https:\/\//, 'the fix is in the message');
+  assert.match(body.message, /X-Forwarded-Proto/, 'and so is the other cause: a proxy that does not say');
+  assert.equal(res.headers.getSetCookie().length, 0, 'no cookie is issued that the browser would drop');
+  // The stub records every call; the event-title fetch at boot is one of them, so the
+  // assertion is about the two calls a sign-in makes, not about silence.
+  const asked = s.pantheon.calls.map(([m]) => m).filter((m) => m === 'verifyToken' || m === 'getEventRoster');
+  assert.deepEqual(asked, [], 'Pantheon was not asked anything about this player');
+  await s.close();
+});
+
+test('in production, a request the proxy reports as https signs in, with a Secure cookie', async () => {
+  const s = await boot({ secureCookie: true });
+  const res = await signInAs(s, 1001, { 'x-forwarded-proto': 'https' });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.getSetCookie()[0], /; Secure/);
+  await s.close();
+});
+
+test('a proxy that reports http is refused the same way', async () => {
+  const s = await boot({ secureCookie: true });
+  const res = await signInAs(s, 1001, { 'x-forwarded-proto': 'http' });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, 'plain_http');
+  await s.close();
+});
+
+test('outside production plain http signs in as it always did, and the cookie is not Secure', async () => {
+  const s = await boot();
+  const res = await signInAs(s, 1001);
+  assert.equal(res.status, 200);
+  assert.doesNotMatch(res.headers.getSetCookie()[0], /Secure/);
   await s.close();
 });

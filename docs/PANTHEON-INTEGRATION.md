@@ -157,6 +157,7 @@ Methods named here, verified against `Common/proto/*.proto` **and called against
 | Write the seat plan | Mimir | `UpdatePrescriptedEventConfig` |
 | Apply a session's seating | Mimir | `MakePrescriptedSeating` |
 | Preview next session's seating | Mimir | `GetNextPrescriptedSeating` |
+| The event's name, for the page title | Mimir | `GetEventsById` |
 
 ### 5.1 What the wire actually looks like
 

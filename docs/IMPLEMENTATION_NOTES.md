@@ -1655,12 +1655,68 @@ unchanged: the escape is the underscore, not any unknown name. `test/config.test
 the example exactly as shipped, so the next note added to it is tested by the same run
 that tests the loader.
 
+## 6z. What the page said when the server was down
+
+The first sign-in on a production server failed with "Pantheon did not recognise that
+email and password." The password was right. `tools/check-signin.js`, written that
+evening, later walked the same account through Frey's `Authorize`, the relay's
+`QuickAuthorize` re-check and the Mimir registration, and all three passed. Whatever
+the page had seen, it was not Frey refusing the credentials, and the page had said it was.
+
+The stage switched on `err.code` and let everything it did not name fall through to
+that sentence. Four things fell through. nginx answering 502 for a relay that was not
+running — an HTML body, so `req()` in `client/api.js` found no JSON and no code, and the
+stage found nothing to match. The relay's own 429, which twelve players behind one proxy
+reach between them while `trust_proxy` is off. A 500. And `fetch()` rejecting outright,
+which arrives with no status at all. Each is a different fault with a different fix, and
+a player told that any of them is a wrong password retypes the password, and then
+retypes it again. The stage had been fixed once before for this shape of error (§6f: an
+unreachable Frey and a wrong base URL both read as a wrong password). That fix named the
+Frey-side failures apart and left the relay-side ones in the default branch.
+
+The mapping is a function now, `signInProblem` in `client/api.js`, with one rule the
+test states directly: nothing reads as bad credentials unless Frey, or the relay's
+re-check of Frey's token, refused them. Everything else has its own sentence in both
+languages and the technical line underneath, and `req()` codes a network failure on the
+way to the relay instead of letting a bare `TypeError` through.
+
+The second failure that day was quieter. The organiser signed in, the page moved on, and
+the submission was refused with "sign in first". The page had been opened over `http://`
+— no certificate yet — and `NODE_ENV=production` marks the session cookie `Secure`,
+which a browser will not keep over http. The deployment guide says so (§4, "TLS is not
+optional here") and names this exact symptom. What it did not say is that nothing in the
+server checked. The relay issued a cookie it could see would be dropped:
+`deploy/nginx.conf` sets `X-Forwarded-Proto` on every request and the server read it
+nowhere. The admin panel's TLS row was `!production`, so on that server it reported
+"session cookies are marked Secure" in green while nobody could sign in.
+
+Three changes, at the three places that could have said something. The server reads
+`X-Forwarded-Proto` and, in production, refuses a sign-in that did not arrive over TLS —
+before Pantheon is asked anything, with the fix in the message: `https://`, or a proxy
+that is not sending the header. The panel's row is three-state on how the request
+actually arrived. And the page reads the session back with `GET /api/me` before it moves
+on, so a cookie the browser dropped for any other reason — a private window, cookies
+blocked — is reported at sign-in and not after the player has sealed a number.
+
+The certificate itself was the last gap. The guide said TLS was not optional and never
+said how to get one. `deploy/nginx.conf` names certificate files that do not exist until
+certbot has run, nginx refuses to load the file until they do, and certbot cannot issue
+them until nginx answers on :80. `deploy/nginx-bootstrap.conf` is the :80 half on its
+own, and §4 has the six commands in order.
+
+Two smaller things from the same session. The `ENOTFOUND` hint from §6x told an
+operator who had typed a stray `~` onto the end of a real domain to edit `/etc/hosts`; it
+gives that advice only for `.local` names and names with no dot now, and tells everyone
+else to check the spelling. And `getEventTitle`, the one Pantheon call §6f had not seen
+answer on a live instance, answered on a second one: `GetEventsById` on a public
+deployment returned `events[0].title`.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 424 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example | pass |
+| Unit tests (`npm test`) — 432 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example, the sign-in classifier, sign-in over http, the admin TLS row | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1680,6 +1736,9 @@ that tests the loader.
 | The rehearsal sandbox commits exactly the files it copied in, and refuses on anything else | passes |
 | A Pantheon that cannot be reached is reported with the URL tried and the underlying reason, never as `fetch failed` | passes |
 | `data/runtime.example.json` loads exactly as shipped, and a note inside a section never becomes a setting | passes |
+| The sign-in page names a relay that is down, rate limited or erroring, a network failure and a dropped cookie apart, and none of them reads as a wrong password | passes |
+| In production, a sign-in that did not arrive over TLS is refused before Pantheon is asked, a Secure cookie is issued only over https, and the admin panel reports how the request arrived | passes |
+| `tools/check-signin.js` against a fake Pantheon in thirteen configurations: the right step fails, the exit code says so, and nothing secret is printed | passes |
 | A dead calendar records the failure and does not stop the draw | passes |
 | The offline suite reaches no network, and a disabled mirror does not stall the draw | passes |
 | `X-Forwarded-For` as nginx 1.28 actually builds it, against a live nginx | matches |

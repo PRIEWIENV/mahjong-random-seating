@@ -16,9 +16,10 @@
  *     PANTHEON-INTEGRATION.md §5, and since run against a live instance (Pantheon
  *     cdda3fc, Docker under WSL 2): sign-in, the event roster, and writing the prescript
  *     and reading it back all pass, after six of its assumptions turned out to be wrong.
- *     IMPLEMENTATION_NOTES.md §6f lists them; none announced itself. `getEventTitle` is
- *     the one call not in that set, and it is the one that fails soft — the page shows
- *     its generic title and the draw is unaffected.
+ *     IMPLEMENTATION_NOTES.md §6f lists them; none announced itself. `getEventTitle`
+ *     was the one call not in that set; it has since answered on a second, public
+ *     instance (2026-09-13: `GetEventsById` returned `events[0].title`). It is also the
+ *     one that fails soft — the page shows its generic title and the draw is unaffected.
  *
  *     One instance of one commit is not the same as the instance you will run. That is
  *     why the Twirp path template and every field name are configuration rather than
@@ -33,6 +34,7 @@
  */
 
 const fs = require('node:fs');
+const { LOCAL_NAME } = require('./runtime');
 
 const DEFAULT_TWIRP_PATH = '/v2/{service}/{method}';
 
@@ -111,13 +113,25 @@ function transportReason(err, url, timeoutMs) {
   }
   switch (code) {
     case 'ENOTFOUND':
-    case 'EAI_AGAIN':
-      return say(`the name ${host.split(':')[0]} does not resolve (${detail}).`,
-        'Pantheon answers on names, not addresses: both container nginx configs match on',
-        'server_name and both have a catch-all that 404s, so an IP will not do. Give the',
-        'box running this an /etc/hosts entry (or a DNS record) pointing that name at the',
-        'machine Pantheon runs on, or set pantheon.mimir_base_url and pantheon.frey_base_url',
-        'in data/runtime.json to names it can already resolve.');
+    case 'EAI_AGAIN': {
+      const name = host.split(':')[0];
+      // The /etc/hosts advice is for the shipped defaults and their kind: a .local name,
+      // or one with no dot, resolves on the box running the containers and nowhere else.
+      // A public-looking name that does not resolve is a different problem — the first
+      // time this fired for one, the operator had typed a stray character onto the end
+      // of a real domain and was told to edit /etc/hosts.
+      if (LOCAL_NAME.test(name)) {
+        return say(`the name ${name} does not resolve (${detail}).`,
+          'Pantheon answers on names, not addresses: both container nginx configs match on',
+          'server_name and both have a catch-all that 404s, so an IP will not do. Give the',
+          'box running this an /etc/hosts entry (or a DNS record) pointing that name at the',
+          'machine Pantheon runs on, or set pantheon.mimir_base_url and pantheon.frey_base_url',
+          'in data/runtime.json to names it can already resolve.');
+      }
+      return say(`the name ${name} does not resolve (${detail}).`,
+        'That looks like a public domain, so check its spelling in data/runtime.json (or',
+        `the environment) first, then that this box resolves it: getent hosts ${name}`);
+    }
     case 'ECONNREFUSED':
       return say(`nothing is listening on ${host} (${detail}).`,
         'The name resolved, so this is the service and not the DNS. Pantheon\u2019s compose',

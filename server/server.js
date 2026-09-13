@@ -148,6 +148,19 @@ function createServer(opts = {}) {
   // return. The method was here with no caller at all; a restart is its moment.
   store.purgeExpiredSessions(nowFn());
   const secureCookie = opts.secureCookie ?? process.env.NODE_ENV === 'production';
+  /**
+   * Whether a request came over TLS. This process never terminates TLS itself; whatever
+   * is in front does, and both configurations in deploy/ say so in X-Forwarded-Proto.
+   *
+   * Read whether or not trust_proxy is set, because the only party a forged value can
+   * hurt is the one forging it: claim https over http and the browser drops the cookie
+   * you were issued; claim http over https and you are refused. Nothing here is decided
+   * for anyone else by it.
+   */
+  function overTls(req) {
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+    return proto === 'https';
+  }
   // The dashboard exists only when a token is configured. Unset means the route is not
   // there at all, rather than there and asking for a password: an organiser who never
   // set one has not accidentally published a roster and a submission timeline.
@@ -430,6 +443,22 @@ function createServer(opts = {}) {
   async function session(req, res, ip) {
     if (!limiter.allow(ip)) return sendJson(res, 429, { error: 'rate_limited', message: 'Too many attempts; wait a minute.' });
 
+    // In production the cookie below is marked Secure, and a browser will not keep a
+    // Secure cookie that arrived over http. The old behaviour was to issue it anyway:
+    // sign-in answered 200, the page moved on, and the first thing to fail was the
+    // submission, after the player had sealed a number, with a 401 they did nothing to
+    // cause. That is what the first production deployment hit, on a domain with no
+    // certificate yet. Refused here, before Pantheon is asked anything, with the fix in
+    // the message.
+    if (secureCookie && !overTls(req)) {
+      return sendJson(res, 400, {
+        error: 'plain_http',
+        message: 'This page reached the draw server over plain http. In production the sign-in ' +
+          'cookie is marked Secure and no browser will keep it, so sign in at https:// instead. ' +
+          'If TLS is already in front of this server, the proxy is not sending X-Forwarded-Proto: https.',
+      });
+    }
+
     let body;
     try { body = JSON.parse(await readBody(req)); }
     catch (err) { return sendJson(res, err.status || 400, { error: 'bad_request', message: 'Body must be JSON.' }); }
@@ -603,7 +632,8 @@ function createServer(opts = {}) {
     const model = collect({
       cfg, store, status: status(), syncOutcome: syncOutcome(),
       isStub, mirror, publicDir, now: nowFn(),
-      production: process.env.NODE_ENV === 'production',
+      production: secureCookie,
+      overTls: overTls(req),
     });
     if (url.pathname === '/admin/data.json') return sendJson(res, 200, model);
 

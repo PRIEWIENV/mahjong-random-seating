@@ -197,11 +197,18 @@ loginctl enable-linger          # 你没登录的时候也让它继续跑
 
 主机上已经跑着 nginx 的话用 **nginx**（`deploy/nginx.conf`），而 Pantheon 共用这台机器时必然如此：每个 Pantheon 容器都自带一个 nginx。在旁边再加一个 Caddy 不是冗余，是端口冲突。
 
+在它指名的证书文件存在之前，nginx 不会加载这个文件；而在 nginx 于 :80 上为这个域名应答之前，certbot 又发不出证书。`deploy/nginx-bootstrap.conf` 就是单独拿出来的 :80 那一半，专门用于中间这几分钟。开始之前，域名必须已经解析到这台机器。
+
 ```sh
-cp deploy/nginx.conf /etc/nginx/sites-available/mahjong   # 先改域名
+cp deploy/nginx-bootstrap.conf /etc/nginx/sites-available/mahjong   # 先改域名
 ln -s /etc/nginx/sites-available/mahjong /etc/nginx/sites-enabled/
+mkdir -p /var/www/html && nginx -t && systemctl reload nginx
+certbot certonly --webroot -w /var/www/html -d example.com
+cp deploy/nginx.conf /etc/nginx/sites-available/mahjong             # 改域名，以及 connect-src
 nginx -t && systemctl reload nginx
 ```
+
+certbot 会装一个定时器自动续期，而续期后必须让 nginx 知道新文件：先跑一次 `certbot renew --dry-run`，并加上 `--deploy-hook 'systemctl reload nginx'`，让续期自动重载。下面的 Caddy 不需要这些。
 
 那两个端口上没有别的东西的主机用 **Caddy**（`deploy/Caddyfile`）。它会自己申请和续期证书，这正是它仍然被保留在这里的全部理由。
 
@@ -259,6 +266,11 @@ curl -s -o /dev/null -w '%{http_code}\n' https://your.domain/admin   # 必须是
 | 连不上 Pantheon | 请求根本没得到任何回答 | CSP `connect-src`、混合内容、DNS、防火墙 |
 | Pantheon 出错了 | Frey 返回 5xx | Frey 自己的日志；Hugin 挂掉会造成这个 |
 | 这个账号没有报名本次活动 | Frey 说是，这台服务器说否 | 这个账号不在那十二人里 |
+| 连不上抽签服务器（不是 Pantheon） | relay 没在跑，nginx 回了 502/504，或者根本没有任何应答 | relay 在运行吗？先看它的日志（§3），再看 nginx 的 error log |
+| 登录尝试太频繁 | 这台服务器回答 429 | `server.trust_proxy`（§4）：在代理后面，限额是所有人共用的一份 |
+| 这个页面是用 http 打开的，登录状态保存不下来 | 这台服务器拒绝了：生产模式，而代理没有报告 https | TLS（§4）；代理配置里的 `X-Forwarded-Proto` |
+| 登录成功，但浏览器没有保存会话 | 登录之后紧接着的 `GET /api/me` 回答 401 | 浏览器：cookie 被禁用，或者是隐私窗口 |
+| 抽签服务器出错了 | 这台服务器返回 500 | 这台服务器的日志，里面有完整的栈 |
 
 **绊倒大多数部署的**是第三行，而且它有一个具体的成因。`pantheon.frey_base_url` 是**后端**用的，本文件 §1 在 Pantheon 共用主机时把它指向 localhost 是对的。但**浏览器**拿到的也是同一个 URL，而且它要自己去调 Frey，在选手的手机上 localhost 就是那台手机。把 `pantheon.frey_public_url` 设成选手能解析的地址：
 
@@ -273,7 +285,14 @@ curl -s -o /dev/null -w '%{http_code}\n' https://your.domain/admin   # 必须是
 
 当面向浏览器的那个 URL 是回环或私有地址时，服务器在启动时会警告，`/admin` 里也有对应的一行。那个源同样必须出现在代理的 CSP `connect-src` 里，否则请求在离开浏览器之前就被拦住了。
 
-中间那四种情况还会在下面打印技术行——HTTP 状态码和 Twirp code——好让选手原样转发。
+除了前两行和「没有报名」那一行，其余每一种都会在下面打印技术行——HTTP 状态码，以及有的话 Twirp code——好让选手原样转发。这张表背后的规则：除非 Frey 或者这台服务器对 Frey token 的复查拒绝了凭证，否则任何失败都不会显示成「密码错误」。第一次生产环境的登录失败，对面是一台没在运行的服务器，页面却说「密码错误」；表的下半部分就是它现在会说的话。
+
+`tools/check-signin.js` 可以在任何装了 Node 的机器上，把一次登录的 Pantheon 那一半逐步走一遍——浏览器的调用、relay 的复查、活动报名——然后说出是哪一步失败、页面本来会显示什么。加 `--admin` 还会检查座位表同步要用的凭据，在只读能检查的范围内。密码在隐藏提示符里输入，任何机密都不会被打印，所以输出可以直接贴给帮忙的人：
+
+```sh
+node tools/check-signin.js --email someone@example.com --event 2
+node tools/check-signin.js --admin --event 2
+```
 
 在正日子之前，对着一个真实的 Pantheon 把它们各复现一遍：
 

@@ -157,6 +157,7 @@ Forseti 会读 `eventConfig.windShuffleMode` 并把它传过去，所以只要�
 | 写入座位表 | Mimir | `UpdatePrescriptedEventConfig` |
 | 应用某一节的座位 | Mimir | `MakePrescriptedSeating` |
 | 预览下一节的座位 | Mimir | `GetNextPrescriptedSeating` |
+| 活动名称，用于页面标题 | Mimir | `GetEventsById` |
 
 ### 5.1 线上实际长什么样
 

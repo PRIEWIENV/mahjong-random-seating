@@ -145,6 +145,29 @@ test('an unreachable Pantheon is named down to the address and the reason', asyn
   }
 });
 
+test('a public name that does not resolve is told to check its spelling, not to edit /etc/hosts', async () => {
+  // The hosts-file advice is for the shipped .local defaults, which resolve on the box
+  // running the containers and nowhere else. The first public name this fired for was a
+  // real domain with a stray character typed onto the end, and the operator was told to
+  // edit /etc/hosts.
+  const { TwirpPantheon } = require('../server/pantheon');
+  const { fx, cfg } = fixture();
+  const problems = [];
+  const name = 'gameapi.pantheon.riichi.fr~';
+  const pantheon = new TwirpPantheon({ mimir_base_url: `https://${name}` }, {}, {
+    fetch: async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error(`getaddrinfo ENOTFOUND ${name}`), { code: 'ENOTFOUND' }) });
+    },
+  });
+  await snapshotRoster(cfg, problems, pantheon);
+  const said = problems.join('\n');
+  assert.ok(said.includes(`the name ${name} does not resolve`), said);
+  assert.match(said, /spelling/);
+  assert.ok(said.includes(`getent hosts ${name}`), 'and how to check it on the box');
+  assert.ok(!said.includes('/etc/hosts'), `a public domain is not a hosts-file problem:\n${said}`);
+  cleanup(fx.dir);
+});
+
 test('the snapshot is ordered by local_id, so two freezes of one roster agree', async () => {
   const { fx, cfg } = fixture();
   const shuffled = [...registered(cfg)].reverse();

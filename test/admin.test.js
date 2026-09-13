@@ -219,6 +219,7 @@ function checksFor(over) {
     isStub: false,
     mirror: { enabled: true, repo: 'me/repo', branch: 'main' },
     production: true,
+    overTls: true,
     ...rest,
   });
   cleanup(fx.dir);
@@ -304,4 +305,15 @@ test('the dashboard answers nothing but GET', async () => {
     assert.equal(r.status, 405, `${method} /admin`);
   }
   await s.close();
+});
+
+test('the TLS row reports how the request arrived, not what NODE_ENV says', () => {
+  // The row used to be `!production` dressed up as a TLS check: a production server
+  // with no certificate in front said "session cookies are marked Secure" in green while
+  // no browser could keep one and nobody could sign in.
+  assert.equal(checksFor({})['Session cookies are marked Secure, and this request came over TLS'], 'ok');
+  const plain = checksFor({ overTls: false });
+  assert.equal(plain['Session cookies are marked Secure, but this request came over plain http'], 'fail');
+  assert.ok(!('Session cookies are marked Secure' in plain), 'the old row, which was green here, is gone');
+  assert.equal(checksFor({ production: false, overTls: false })['This page is being served without TLS'], 'warn');
 });

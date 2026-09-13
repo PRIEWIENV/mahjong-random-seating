@@ -307,4 +307,4 @@ function freyPublicUrlIsLocal(runtime) {
   }
 }
 
-module.exports = { loadRuntime, DEFAULTS, OPERATIONAL_KEYS, freyPublicUrl, freyPublicUrlIsLocal };
+module.exports = { loadRuntime, DEFAULTS, OPERATIONAL_KEYS, freyPublicUrl, freyPublicUrlIsLocal, LOCAL_NAME };

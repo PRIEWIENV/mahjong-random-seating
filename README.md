@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2024-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-424%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-432%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -88,7 +88,7 @@ one of which admits the "opposite once" condition. The design is not chosen; it 
 ```sh
 git clone <this repository> && cd mahjong-random-seating
 npm ci
-npm test                  # 424 unit tests, offline, ~12 s
+npm test                  # 432 unit tests, offline, ~12 s
 npm run rehearse          # the full draw, end to end, in a sandbox, ~3 min
 ```
 
@@ -151,7 +151,7 @@ Listed in reading order. No single path needs all seven.
 
 ```sh
 npm ci
-npm test                  # 424 unit tests, offline, ~12 s
+npm test                  # 432 unit tests, offline, ~12 s
 npm run verify-template   # re-derives every invariant of the frozen template
 npm run e2e               # RUNBOOK A2-A7 against live drand, ~90 s
 npm run rehearse          # RUNBOOK B/C/D end to end in a sandbox, ~3 min
@@ -397,6 +397,7 @@ tools/
   freeze.js                  # RUNBOOK 8-11 as one command: snapshot, check, commit, tag
   rehearse.js                # RUNBOOK B/C/D end to end in a sandbox, before the day
   pantheon-fixture.js        # builds the test event on a local Pantheon (dev only)
+  check-signin.js            # one account's sign-in against Pantheon, step by step, from any machine
   decrypt-submissions.js     # participant-side verification
 test/
   *.test.js                  # unit tests, incl. the roll-call against the snapshot

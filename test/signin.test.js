@@ -125,3 +125,63 @@ test('stub mode never touches Frey', async () => {
     () => authorize({ authMode: 'stub', personId: '1001', freyBaseUrl: 'http://frey.pantheon.local:4004' }));
   assert.equal(seen, '/api/dev-authorize');
 });
+
+// ---------------------------------------------------------------------------
+// signInProblem: what the page says about a failed sign-in, and what it must not say
+// ---------------------------------------------------------------------------
+
+/** An error the way req() in client/api.js builds one from a non-2xx answer. */
+function relayAnswer(status, body) {
+  const err = new Error(body?.message || `HTTP ${status}`);
+  err.status = status;
+  err.code = body?.error;
+  err.body = body;
+  return err;
+}
+
+test('nothing but a refusal of the credentials reads as a wrong password', async () => {
+  // The first production sign-in failed with "Pantheon did not recognise that email and
+  // password". The password was right. What the page could not tell apart from a wrong
+  // password: nginx answering for a relay that was down, the relay's shared rate limit,
+  // a 500, a network failure on the way to it, and a cookie the browser would not keep.
+  const { signInProblem } = await api();
+  const cases = [
+    ['nginx 502 with the relay down (HTML, no JSON)', relayAnswer(502, null), 'relay_unreachable'],
+    ['nginx 504', relayAnswer(504, null), 'relay_unreachable'],
+    ['429 from the rate limit twelve people share behind one proxy',
+      relayAnswer(429, { error: 'rate_limited', message: 'Too many attempts; wait a minute.' }), 'rate_limited'],
+    ['500 from the relay', relayAnswer(500, { error: 'internal' }), 'relay_error'],
+    ['no answer from the relay at all',
+      Object.assign(new Error('Could not reach the draw server'), { code: 'relay_unreachable', detail: 'TypeError: Failed to fetch' }),
+      'relay_unreachable'],
+    ['sign-in over plain http in production',
+      relayAnswer(400, { error: 'plain_http', message: 'This page reached the draw server over plain http.' }), 'plain_http'],
+    ['a cookie the browser did not keep', Object.assign(new Error('x'), { code: 'session_not_kept' }), 'session_not_kept'],
+    ['503 because the relay could not reach Pantheon',
+      relayAnswer(503, { error: 'pantheon_unavailable', message: 'Cannot reach Pantheon right now.' }), 'pantheon_unavailable'],
+    ['an answer with a code nobody expected', relayAnswer(418, { error: 'teapot' }), 'unexpected'],
+  ];
+  for (const [label, err, kind] of cases) {
+    const p = signInProblem(err);
+    assert.equal(p.kind, kind, label);
+    assert.notEqual(p.kind, 'bad_credentials', `${label} must never read as a wrong password`);
+    assert.ok(p.detail, `${label} must carry a technical line: ${JSON.stringify(p)}`);
+  }
+
+  // The two that really are about the credentials, and the one that is neither.
+  assert.equal(signInProblem(relayAnswer(401, { error: 'bad_credentials', message: 'Pantheon did not recognise that email and password.' })).kind, 'bad_credentials');
+  assert.equal(signInProblem(Object.assign(new Error('x'), { code: 'unknown_account' })).kind, 'unknown_account');
+  const outsider = signInProblem(relayAnswer(403, { error: 'not_registered', message: 'That account is not registered for this event.' }));
+  assert.equal(outsider.kind, 'not_registered');
+  assert.equal(outsider.detail, null, 'not being in the twelve is information, not a fault to forward');
+});
+
+test('the relay not answering at all is a coded error, not a bare TypeError', async () => {
+  // fetch() rejects with a TypeError when nothing answers. Left as it was, that reached
+  // the sign-in stage with no code and no status and fell through to "wrong password".
+  const { getMe } = await api();
+  await withFetch(async () => { throw new TypeError('Failed to fetch'); }, async () => {
+    await assert.rejects(getMe(), (err) =>
+      err.code === 'relay_unreachable' && /draw server/.test(err.message) && /Failed to fetch/.test(err.detail));
+  });
+});

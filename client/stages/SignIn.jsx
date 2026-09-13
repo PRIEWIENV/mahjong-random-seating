@@ -8,9 +8,12 @@ import { useText } from '../i18n';
  * The browser authenticates against Pantheon directly and posts only the returned
  * token pair; this app never handles a Pantheon password (PANTHEON-INTEGRATION.md §2).
  *
- * The two failure messages must stay distinct and non-confusable. "Not registered for
- * this event" is a normal outcome, not an error state, and is styled as information —
- * a player who is simply not in the twelve should not be made to feel something broke.
+ * The failure messages must stay distinct and non-confusable. "Not registered for this
+ * event" is a normal outcome, not an error state, and is styled as information — a
+ * player who is simply not in the twelve should not be made to feel something broke.
+ * Which failure it was is decided by signInProblem() in api.js, not here, so the one
+ * rule that matters — nothing reads as a wrong password unless Frey or this server's
+ * re-check refused the credentials — is a tested property rather than a default branch.
  *
  * Stub mode swaps the fields and nothing else. It is the same card, the same shell and
  * the same rhythm, because it is the page a player will meet in production and the only
@@ -36,6 +39,14 @@ const TEXT = {
     unreachable: '连不上 Pantheon，所以没能验证你的身份。这不是你的问题，请联系组织者。',
     misconfigured: '这次抽签的 Pantheon 地址配置有误，登录无法进行。请把下面这行发给组织者。',
     pantheonError: 'Pantheon 出错了，暂时无法登录。稍后再试，或联系组织者。',
+    notRegistered: '这个账号没有报名本次活动，无法参加抽签。',
+    pantheonUnavailable: '抽签服务器现在连不上 Pantheon，所以没能验证你的身份。稍后再试。',
+    rateLimited: '登录尝试太频繁，请等一分钟再试。',
+    plainHttp: '这个页面是用 http 打开的，登录状态保存不下来。请用 https:// 重新打开。',
+    sessionNotKept: '登录成功，但浏览器没有保存会话。请检查是否禁用了 cookie，或者换一个浏览器。',
+    relayUnreachable: '连不上抽签服务器（不是 Pantheon）。这不是你的问题，请联系组织者。',
+    relayError: '抽签服务器出错了。请把下面这行发给组织者。',
+    unexpected: '登录失败，原因这个页面认不出来。请把下面这行发给组织者。',
     fineprint: '你的密码只发给 Pantheon，不会经过这个应用。',
   },
   en: {
@@ -56,6 +67,14 @@ const TEXT = {
     unreachable: 'Pantheon could not be reached, so your sign-in could not be checked. This is not something you did; please tell the organiser.',
     misconfigured: 'This draw is pointed at the wrong Pantheon address, so sign-in cannot work. Please send the line below to the organiser.',
     pantheonError: 'Pantheon returned an error, so sign-in is unavailable right now. Try again shortly, or tell the organiser.',
+    notRegistered: "That account isn't registered for this event, so it can't take part in the draw.",
+    pantheonUnavailable: 'The draw server cannot reach Pantheon right now, so your sign-in could not be checked. Try again shortly.',
+    rateLimited: 'Too many sign-in attempts from this address. Wait a minute and try again.',
+    plainHttp: 'This page was opened over http, so the sign-in cannot be kept. Open it again at https://.',
+    sessionNotKept: 'Pantheon accepted the sign-in, but this browser did not keep the session. Check whether cookies are blocked, or try another browser.',
+    relayUnreachable: 'The draw server could not be reached — this one, not Pantheon. This is not something you did; please tell the organiser.',
+    relayError: 'The draw server returned an error. Please send the line below to the organiser.',
+    unexpected: 'Sign-in failed for a reason this page does not recognise. Please send the line below to the organiser.',
     fineprint: 'Your password goes to Pantheon only. It never passes through this app.',
   },
 };
@@ -132,37 +151,49 @@ export default function SignIn({ status, onSignedIn }) {
         freyBaseUrl: status?.frey_base_url,
         freyAuthorizePath: status?.frey_authorize_path,
       });
-      const me = await api.createSession(pair.person_id, pair.auth_token);
+      await api.createSession(pair.person_id, pair.auth_token);
+      // A 200 from POST /api/session says the server issued a cookie. It does not say
+      // the browser kept it, and over plain http in production it will not: the cookie
+      // is marked Secure, the page moved on, and the first failure was the submission,
+      // after the player had sealed a number. So the session is read back before the
+      // page moves, and a 401 here is reported as what it is.
+      let me;
+      try {
+        me = await api.getMe();
+      } catch (e) {
+        if (e.status !== 401) throw e;
+        const err = new Error('signed in, but the browser did not keep the session cookie');
+        err.code = 'session_not_kept';
+        err.detail = 'POST /api/session → 200, then GET /api/me → 401';
+        throw err;
+      }
       onSignedIn(me);
     } catch (err) {
-      // §3 requires the failures to stay distinguishable, and the old `else` swallowed
-      // every one of them into "wrong password" — including an unreachable Frey and a
-      // mistyped base URL, which sent more than one deployment looking at the wrong
-      // thing. Anything the player cannot act on carries the technical line as well, so
+      // §3 requires the failures to stay distinguishable. The old `default` here said
+      // "wrong password" for anything it did not name, and on the first production
+      // deployment that covered a server that was down, a shared rate limit and a 500.
+      // Anything the player cannot act on carries the technical line as well, so
       // whoever they forward it to sees what actually happened.
-      const detail = err.detail || null;
-      switch (err.code) {
-        case 'not_registered':
-          setProblem({ kind: 'info', text: err.message });
-          break;
-        case 'pantheon_unavailable':          // our server could not reach Pantheon
-          setProblem({ kind: 'error', text: err.message, detail });
-          break;
-        case 'pantheon_unreachable':          // the browser could not reach Frey
-          setProblem({ kind: 'error', text: t.unreachable, detail: detail || err.message });
-          break;
-        case 'pantheon_misconfigured':
-          setProblem({ kind: 'error', text: t.misconfigured, detail: detail || err.message });
-          break;
-        case 'pantheon_error':
-          setProblem({ kind: 'error', text: t.pantheonError, detail });
-          break;
-        case 'unknown_account':
-          setProblem({ kind: 'error', text: t.unknownAccount });
-          break;
-        default:
-          setProblem({ kind: 'error', text: t.rejected });
-      }
+      const p = api.signInProblem(err);
+      const text = {
+        not_registered: t.notRegistered,
+        pantheon_unavailable: t.pantheonUnavailable, // this server could not reach Pantheon
+        bad_credentials: t.rejected,
+        unknown_account: t.unknownAccount,
+        pantheon_unreachable: t.unreachable,         // the browser could not reach Frey
+        pantheon_misconfigured: t.misconfigured,
+        pantheon_error: t.pantheonError,
+        rate_limited: t.rateLimited,
+        plain_http: t.plainHttp,
+        session_not_kept: t.sessionNotKept,
+        relay_unreachable: t.relayUnreachable,       // the browser could not reach THIS server
+        relay_error: t.relayError,
+        unexpected: t.unexpected,
+      }[p.kind];
+      // The refusals a player can act on alone carry no technical line: a status code
+      // under "wrong password" reads as blame.
+      const quiet = p.kind === 'bad_credentials' || p.kind === 'unknown_account' || p.kind === 'not_registered';
+      setProblem({ kind: p.kind === 'not_registered' ? 'info' : 'error', text, detail: quiet ? null : p.detail });
       setBusy(false);
     }
   }

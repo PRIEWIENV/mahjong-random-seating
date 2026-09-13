@@ -68,7 +68,11 @@ function collect(ctx) {
   // most — stub-in-production, mirror-off-in-production — can be asserted on directly
   // instead of only ever being exercised in the one configuration a laptop happens to be in.
   const production = ctx.production ?? process.env.NODE_ENV === 'production';
-  const adminOverPlainHttp = !production;
+  // How THIS request arrived, from the proxy's X-Forwarded-Proto (server.js overTls).
+  // The row below used to be `!production` dressed up as a TLS check, which meant a
+  // production server with no certificate in front reported "session cookies are marked
+  // Secure" in green while no browser could keep one and nobody could sign in.
+  const overTls = ctx.overTls === true;
 
   const committedBundle = (() => {
     try {
@@ -181,13 +185,18 @@ function collect(ctx) {
           : 'server.run_finalise is off in data/runtime.json, so something else has to run it, ' +
             'and nothing has. Set it back to true, or run: node server/finalise.js')
   );
-  check(
-    adminOverPlainHttp ? 'warn' : 'ok',
-    adminOverPlainHttp ? 'This page is being served without TLS' : 'Session cookies are marked Secure',
-    adminOverPlainHttp
-      ? 'the roster and the submission timeline are going over the wire in the clear'
-      : 'NODE_ENV=production'
-  );
+  if (!production) {
+    check('warn', 'This page is being served without TLS',
+      'the roster and the submission timeline are going over the wire in the clear; NODE_ENV is not production');
+  } else if (overTls) {
+    check('ok', 'Session cookies are marked Secure, and this request came over TLS',
+      'NODE_ENV=production; the proxy reports X-Forwarded-Proto: https');
+  } else {
+    check('fail', 'Session cookies are marked Secure, but this request came over plain http',
+      'No browser will keep the cookie, so nobody can sign in — the server refuses sign-in ' +
+      'over http rather than issue one. Put TLS in front (deploy/README.md §4); if it is ' +
+      'there already, it is not sending X-Forwarded-Proto.');
+  }
 
   const artefacts = {
     'data/protocol.json': digestOf(path.join(cfg.dataDir, 'protocol.json')),
