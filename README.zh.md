@@ -160,6 +160,7 @@ tools/
   freeze.js                  # 快照名册、检查、提交、打 tag
   pick-round.js              # 目标轮次与截止时刻，保持一致
   check-signin.js            # 把一个账号的 Pantheon 登录逐步走一遍
+  setup-mirror.js            # 镜像用的 GitHub token：取得、验证可写、写入配置
   new-round.js  end-event.js # 作废之后；活动之后
   build-client.js  md-to-page.js  verify-template.js  verify_template.py
   verify_contribution.py  decrypt-submissions.js  pantheon-fixture.js

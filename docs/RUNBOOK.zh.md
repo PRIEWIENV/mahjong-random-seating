@@ -21,9 +21,10 @@
 
 - [ ] Node 24+，克隆，`git checkout <tag>`，`npm ci --omit=dev`，`node tools/build-client.js --verify-hash` —— [指南 §5](../deploy/README.zh.md#5-在-tag-上安装)
 - [ ] `.env` 写好并 `chmod 600`；`data/runtime.json` 填上 Pantheon 地址和 `trust_proxy: true`；Pantheon 同机时加 hosts 记录 —— [指南 §6](../deploy/README.zh.md#6-配置)
+- [ ] `node tools/setup-mirror.js` —— 取得 GitHub token、验证确实能写、写进 `.env`；没有它，密文就不会在到达时被公开 —— [指南 §6](../deploy/README.zh.md#6-配置)
 - [ ] 证书，nginx，`connect-src` 里有 Frey 的源 —— [指南 §7](../deploy/README.zh.md#7-tls-和反向代理)
 - [ ] 启动了，重启之后还在 —— [指南 §8](../deploy/README.zh.md#8-启动)
-- [ ] 四条 `curl` 检查，`/admin` 全绿，`tools/check-signin.js --email <你的邮箱>` 和 `--admin` —— [指南 §9](../deploy/README.zh.md#9-公布之前先检查)
+- [ ] 四条 `curl` 检查，`/admin` 全绿，`tools/setup-mirror.js --check`，`tools/check-signin.js --email <你的邮箱>` 和 `--admin` —— [指南 §9](../deploy/README.zh.md#9-公布之前先检查)
 
 ## C. 提交窗口
 

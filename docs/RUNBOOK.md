@@ -24,9 +24,10 @@ marked 🔒 enter the frozen state: after them nothing frozen may change.
 
 - [ ] Node 24+, clone, `git checkout <tag>`, `npm ci --omit=dev`, `node tools/build-client.js --verify-hash` — [guide §5](../deploy/README.md#5-install-at-the-tag)
 - [ ] `.env` written and `chmod 600`; `data/runtime.json` with the Pantheon URLs and `trust_proxy: true`; a hosts entry if Pantheon shares the box — [guide §6](../deploy/README.md#6-configure)
+- [ ] `node tools/setup-mirror.js` — the GitHub token, proved to write, into `.env`; without it nothing is published as it arrives — [guide §6](../deploy/README.md#6-configure)
 - [ ] certificate, nginx with the Frey origin in `connect-src` — [guide §7](../deploy/README.md#7-tls-and-the-reverse-proxy)
 - [ ] started, and started again after a reboot — [guide §8](../deploy/README.md#8-start-it)
-- [ ] the four `curl` checks, `/admin` all green, `tools/check-signin.js --email <yours>` and `--admin` — [guide §9](../deploy/README.md#9-check-before-you-announce)
+- [ ] the four `curl` checks, `/admin` all green, `tools/setup-mirror.js --check`, `tools/check-signin.js --email <yours>` and `--admin` — [guide §9](../deploy/README.md#9-check-before-you-announce)
 
 ## C. Submission window
 

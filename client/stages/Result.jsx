@@ -30,8 +30,9 @@ const TEXT = {
     v1: (tag) => ['冻结的四个文件（roster.json、protocol.json、schedule_template.json、generate.js）在提交开放前就已打上 git tag ', tag, '。'],
     v1NoTag: '冻结的四个文件（roster.json、protocol.json、schedule_template.json、generate.js）在提交开放前就已打上 git tag。',
     v1get: 'results.json 是抽签之后才写的，不在 tag 里，要另外从默认分支取一次：',
-    repoUnknown: '<组织者的仓库>',
+    v1NoMirror: '这次抽签没有配置公开镜像仓库，所以 results.json 和 events/ 只在组织者手里，没有可以直接克隆的地址。向组织者要这两份文件，下面每一步照样能对着它们核验。',
     v2: (round) => ['每个人的密文在收到时就已公开（', 'events/submissions/', '），drand 第 ', round, ' 轮的签名任何人都能取到：'],
+    v2NoMirror: (round) => ['密文没有被镜像到公开仓库，所以没有办法核对它们在开奖之前就已经存在——这一条只能信组织者。drand 第 ', round, ' 轮的签名则任何人都能取到：'],
     v3: '每份贡献是 SHA256(域 ‖ "contrib" ‖ local_id ‖ 数字 ‖ nonce ‖ 时间)，全部异或之后得到 R =',
     v4: '种子 = SHA256(域 ‖ "seed" ‖ R ‖ drand签名 ‖ 参与者编号) =',
     v5: '重跑一遍，必须逐字节一致：',
@@ -46,8 +47,9 @@ const TEXT = {
     v1: (tag) => ['The four frozen files (roster.json, protocol.json, schedule_template.json, generate.js) were git-tagged ', tag, ' before submissions opened.'],
     v1NoTag: 'The four frozen files (roster.json, protocol.json, schedule_template.json, generate.js) were git-tagged before submissions opened.',
     v1get: ' results.json was written after the draw, so it is not inside the tag and has to be taken from the default branch as well:',
-    repoUnknown: '<the organiser’s repository>',
+    v1NoMirror: ' This draw was not mirrored to a public repository, so results.json and events/ exist only on the organiser’s machine and there is no address to clone. Ask them for both files; every step below still checks out against those.',
     v2: (round) => ['Every ciphertext was published as it arrived (', 'events/submissions/', '), and the signature for drand round ', round, ' is public:'],
+    v2NoMirror: (round) => ['The ciphertexts were not mirrored anywhere public, so there is no way to confirm they existed before the draw — that part rests on the organiser. The signature for drand round ', round, ' is public either way:'],
     v3: 'Each contribution is SHA256(domain ‖ "contrib" ‖ local_id ‖ number ‖ nonce ‖ time); XOR them all and you get R =',
     v4: 'seed = SHA256(domain ‖ "seed" ‖ R ‖ drand signature ‖ participant ids) =',
     v5: 'Run it again; it must match byte for byte:',
@@ -74,6 +76,7 @@ export default function Result({ status, me, result }) {
   const tag = (result.generate_script_ref || '').split('@')[1] || null;
   const [v1a, v1tag, v1b] = t.v1(tag);
   const [v2a, v2path, v2b, v2round, v2c] = t.v2(result.round_used);
+  const [v2na, v2nround, v2nb] = t.v2NoMirror(result.round_used);
 
   /**
    * How to get the files this panel then tells you to check.
@@ -83,13 +86,28 @@ export default function Result({ status, me, result }) {
    * written after the freeze, so they are on the default branch and NOT inside the tag,
    * and a reader who checks the tag out is left holding neither. The third line is what
    * closes that, and origin/HEAD avoids having to know the branch's name.
+   *
+   * The repository is the operator's real one, out of MIRROR_REPO by way of /api/status.
+   * It used to be a constant copied out of the deployment guide, complete with that
+   * guide's stand-in account name — the worst kind of wrong, because such an address
+   * reads as real and it clones, and what a player then checks is somebody else's draw.
+   * test/result-verify.test.js keeps those names out of this file and out of the bundle.
+   *
+   * With mirroring off there is no address at all, so the panel does not print a clone
+   * command — a placeholder in a copyable block is still something people paste. It
+   * says where the files actually are instead, and drops the claim that the ciphertexts
+   * were public as they arrived, because without a mirror they were not. That claim is
+   * the one thing on this page a player cannot check for themselves, so it must not be
+   * made on their behalf when it is untrue (PROTOCOL.md §5).
    */
-  const repo = status?.mirror_repo ? `https://github.com/${status.mirror_repo}` : t.repoUnknown;
-  const fetchCmd = [
-    `git clone ${repo} draw && cd draw`,
-    `git checkout ${tag || '<tag>'}`,
-    'git checkout origin/HEAD -- results.json events/',
-  ].join('\n');
+  const mirrored = Boolean(status?.mirror_repo);
+  const fetchCmd = mirrored
+    ? [
+        `git clone https://github.com/${status.mirror_repo} draw && cd draw`,
+        `git checkout ${tag || '<tag>'}`,
+        'git checkout origin/HEAD -- results.json events/',
+      ].join('\n')
+    : null;
 
   return (
     <div className="stage result">
@@ -118,11 +136,13 @@ export default function Result({ status, me, result }) {
           <ol>
             <li>
               {tag ? <>{v1a}<code>{v1tag}</code>{v1b}</> : t.v1NoTag}
-              {t.v1get}
-              <code className="block">{fetchCmd}</code>
+              {mirrored ? t.v1get : t.v1NoMirror}
+              {fetchCmd && <code className="block">{fetchCmd}</code>}
             </li>
             <li>
-              {v2a}<code>{v2path}</code>{v2b}<code>{v2round}</code>{v2c}
+              {mirrored
+                ? <>{v2a}<code>{v2path}</code>{v2b}<code>{v2round}</code>{v2c}</>
+                : <>{v2na}<code>{v2nround}</code>{v2nb}</>}
               <code className="block">{`curl ${status?.drand?.api ?? '<drand api>'}/${status?.drand?.chain_hash ?? '<chain>'}/public/${result.round_used}`}</code>
             </li>
             <li>{t.v3}<code className="block">{result.R}</code></li>

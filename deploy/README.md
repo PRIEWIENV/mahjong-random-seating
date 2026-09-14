@@ -123,7 +123,7 @@ NODE_ENV=production
 PANTHEON_MODE=twirp
 
 # Mirroring: every ciphertext is published to the repository as it arrives.
-# The token is a fine-grained PAT with contents:write on this one repository.
+# Do not fill these three in by hand — `node tools/setup-mirror.js` writes them below.
 MIRROR_REPO=<owner>/<repo>
 MIRROR_BRANCH=main
 MIRROR_TOKEN=github_pat_...
@@ -138,6 +138,55 @@ ADMIN_TOKEN=...
 ```sh
 chmod 600 .env
 ```
+
+#### The GitHub token for mirroring
+
+```sh
+node tools/setup-mirror.js          # asks, checks it works, writes the three settings
+node tools/setup-mirror.js --check  # later: is the token still good?
+```
+
+Run it and it works out the repository from `git remote origin`, tells you exactly what
+to click, takes the token at a hidden prompt, **proves it can actually write** to the
+repository, and only then writes `MIRROR_REPO`, `MIRROR_BRANCH` and `MIRROR_TOKEN` into
+`.env` at mode `600`. Nothing needs editing by hand, and the token never appears on a
+command line or in your shell history.
+
+The one step it cannot do for you is GitHub's: a token is issued to a human in a
+browser, and no API mints one. (Device flow would need an OAuth App whose owner every
+operator of this code then depends on, and it would still send you to github.com to type
+a code.) So, once, at
+[github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)
+— or Settings → Developer settings → Personal access tokens → **Fine-grained tokens** →
+**Generate new token**:
+
+| Field | What to put |
+|---|---|
+| Token name | anything, e.g. `seating mirror` |
+| Expiration | past the day of the draw |
+| Resource owner | the account or organisation that owns the mirror repository |
+| Repository access | **Only select repositories** → your fork |
+| Permissions | Repository permissions → **Contents** → **Read and write** |
+
+Generate it and copy the `github_pat_…` value; GitHub shows it once. Paste it at the
+prompt. If you already use the [GitHub CLI](https://cli.github.com/) on this machine and
+are signed in, the tool offers `gh auth token` instead and you can skip the browser
+entirely — at the price of a token covering your whole account rather than one
+repository, which is a poor trade for a credential that then lives on a server.
+
+> [!NOTE]
+> The check is a real write: it creates `.mirror-check` on the branch and deletes it
+> again, leaving two commits. That is deliberate. `GET /repos` reports the permissions
+> of the *user*, not of the token, so a read-only token on your own repository looks
+> writable — and the thing that would otherwise discover it is a player's submission
+> during the window. `--no-probe` skips it and says so.
+
+> [!WARNING]
+> Mirroring is what makes ciphertexts public as they arrive, timestamped by someone the
+> organiser does not control (PROTOCOL.md §5). Leave `MIRROR_REPO`/`MIRROR_TOKEN` unset
+> and the server still runs — it logs `[mirror] disabled` and keeps everything locally —
+> but you lose the thing that stops an organiser dropping an inconvenient submission
+> after seeing the result. Do not run a real event without it.
 
 > [!NOTE]
 > **No Pantheon admin token to obtain.** Writing the seat plan back to Pantheon needs an
@@ -279,6 +328,14 @@ curl -s -o /dev/null -w '%{http_code}\n' https://<your domain>/admin   # must be
 Then open `https://<your domain>/admin?token=<ADMIN_TOKEN>`. Every row of the pre-flight
 panel must be green. The two that make a deployment unfit for a real draw are
 **Mirroring to the repository: DISABLED** and **Pantheon adapter is the STUB**.
+
+The panel's mirroring row only says the settings are present. To confirm the token still
+writes — tokens expire, and a fine-grained one can lose the repository when an
+organisation changes its policy:
+
+```sh
+node tools/setup-mirror.js --check       # reads .env, changes nothing
+```
 
 Then sign in on the page yourself, with your own Pantheon account. If that fails, on any
 machine with Node:

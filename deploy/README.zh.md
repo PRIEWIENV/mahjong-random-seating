@@ -93,7 +93,7 @@ NODE_ENV=production
 PANTHEON_MODE=twirp
 
 # 镜像：每一份密文一到达就发布到仓库里。
-# token 是一个 fine-grained PAT，只对这一个仓库有 contents:write。
+# 这三行不要手填 —— `node tools/setup-mirror.js` 会替你写好，见下。
 MIRROR_REPO=<owner>/<repo>
 MIRROR_BRANCH=main
 MIRROR_TOKEN=github_pat_...
@@ -107,6 +107,33 @@ ADMIN_TOKEN=...
 ```sh
 chmod 600 .env
 ```
+
+#### 镜像用的 GitHub token
+
+```sh
+node tools/setup-mirror.js          # 问你、验证能用、写进配置
+node tools/setup-mirror.js --check  # 以后随时检查 token 是否还有效
+```
+
+跑起来它会从 `git remote origin` 认出仓库，告诉你该点哪里，用隐藏输入接收 token，**先实际验证它真的能写**，通过之后才把 `MIRROR_REPO`、`MIRROR_BRANCH`、`MIRROR_TOKEN` 以 `600` 权限写进 `.env`。全程不用手改文件，token 也不会出现在命令行或 shell 历史里。
+
+唯一替不了你的是 GitHub 那一步：token 是 GitHub 发给真人的，需要在浏览器里签发，没有任何 API 能凭空生成一个。（OAuth device flow 要一个注册好的 OAuth App，那会让每一个跑这份代码的人都依赖那个 App 的所有者，而且照样要你去 github.com 上输一串码。）所以这一步做一次就好，打开 [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)，或者走菜单：Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → **Generate new token**：
+
+| 字段 | 填什么 |
+|---|---|
+| Token name | 随便，比如 `seating mirror` |
+| Expiration | 晚于开奖那天 |
+| Resource owner | 拥有镜像仓库的那个账号或组织 |
+| Repository access | **Only select repositories** → 你的 fork |
+| Permissions | Repository permissions → **Contents** → **Read and write** |
+
+点 Generate token，复制那串 `github_pat_…`，GitHub 只显示这一次。回到终端粘贴即可。如果这台机器上已经装了 [GitHub CLI](https://cli.github.com/) 并且登录着，工具会问你要不要直接用 `gh auth token`，那样连浏览器都不用开——代价是那是你整个账号的 token，而不是只限这一个仓库的，对一个要长期放在服务器上的凭证来说不划算。
+
+> [!NOTE]
+> 那次验证是真的写入：它会在分支上建一个 `.mirror-check` 再删掉，留下两个 commit。这是故意的。`GET /repos` 返回的是**用户**的权限而不是 token 的权限，所以一个只读 token 用在你自己的仓库上看起来也是可写的——而真正会发现这件事的，是提交窗口期间某位选手的那一份提交。加 `--no-probe` 可以跳过，工具会明说这一项没验。
+
+> [!WARNING]
+> 镜像正是「密文一到达就公开、并由组织者控制不了的第三方打上时间戳」这件事（PROTOCOL.md §5）。不设 `MIRROR_REPO`/`MIRROR_TOKEN` 服务器照样能跑——它会打印 `[mirror] disabled` 并把东西都只留在本地——但你会失去那个阻止组织者在看到结果之后丢掉一份不合意提交的东西。正式活动不要这样跑。
 
 > [!NOTE]
 > **不用再去弄 Pantheon 管理员 token。** 把座位表写回 Pantheon 需要一个「管理这场活动」
@@ -225,6 +252,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://<你的域名>/admin   # 必须
 ```
 
 然后打开 `https://<你的域名>/admin?token=<ADMIN_TOKEN>`。起飞前检查面板每一行都必须是绿的。让部署不适合办真实抽签的两行是 **Mirroring to the repository: DISABLED** 和 **Pantheon adapter is the STUB**。
+
+面板上那一行只能说明配置项存在。要确认 token 现在仍然写得进去——token 会过期，fine-grained 的那种也可能因为组织改了策略而丢掉仓库：
+
+```sh
+node tools/setup-mirror.js --check       # 只读 .env，什么都不改
+```
 
 然后用你自己的 Pantheon 账号在页面上登录一次。失败的话，在任何装了 Node 的机器上：
 

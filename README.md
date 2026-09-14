@@ -193,6 +193,7 @@ tools/
   freeze.js                  # snapshot the roster, check, commit, tag
   pick-round.js              # target_round and cutoff, kept consistent
   check-signin.js            # one account's sign-in against Pantheon, step by step
+  setup-mirror.js            # the GitHub mirror token: obtain, prove it writes, store
   new-round.js  end-event.js # after a void; after the event
   build-client.js  md-to-page.js  verify-template.js  verify_template.py
   verify_contribution.py  decrypt-submissions.js  pantheon-fixture.js
