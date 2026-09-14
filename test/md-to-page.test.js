@@ -20,7 +20,7 @@ const read = (name) => fs.readFileSync(path.join(ROOT, 'docs', name), 'utf8');
 
 test('the real document renders, and every section becomes a heading with an id', () => {
   const doc = render(read('seating-design.md'));
-  assert.equal(doc.title, 'How the Seating Chart Was Built');
+  assert.equal(doc.title, 'Designing a Fair and Balanced Seating Draw for a Mahjong Tournament');
   assert.ok(doc.sections.length >= 8, `expected the document's sections, got ${doc.sections.length}`);
   for (const s of doc.sections) {
     assert.ok(s.id && s.title, 'a section needs both an id and a title');
@@ -37,10 +37,19 @@ test('the two language versions have not drifted apart', () => {
   assert.equal(count(zh.html, /<figure>/g), count(en.html, /<figure>/g), 'a figure is missing from one version');
   assert.equal(count(zh.html, /class="flow"/g), count(en.html, /class="flow"/g), 'a diagram is missing from one version');
   assert.equal(count(zh.html, /<table/g), count(en.html, /<table/g), 'the template table is missing from one version');
-  // Every figure in one must be the same figure in the other: the caption is translated,
-  // the picture is not.
-  const srcs = (html) => (html.match(/src="([^"]+)"/g) || []).sort();
-  assert.deepEqual(srcs(zh.html), srcs(en.html), 'the versions point at different figures');
+  // Every figure in one must be the SAME figure in the other, in the same order. The
+  // pictures carry text — seat labels, wind letters, the caption inside fig2 — so each
+  // has a translated twin at the same path with a .zh.svg extension. Checking the
+  // mapping rather than equality keeps the drift protection while allowing that: a
+  // Chinese figure with no English original, or an English one nobody translated, fails.
+  const srcs = (html) => (html.match(/src="([^"]+)"/g) || []).map((m) => m.slice(5, -1));
+  const enFigs = srcs(en.html);
+  const zhFigs = srcs(zh.html);
+  assert.deepEqual(zhFigs, enFigs.map((f) => f.replace(/\.svg$/, '.zh.svg')),
+    'the versions point at different figures');
+  for (const f of [...enFigs, ...zhFigs]) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'docs', f.replace(/^\//, ''))), `${f} does not exist`);
+  }
 });
 
 /**

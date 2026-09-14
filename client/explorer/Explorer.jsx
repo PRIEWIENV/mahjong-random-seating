@@ -40,7 +40,7 @@ const TEXT = {
     clear: '清除选择 (Esc)',
     player: '玩家',
     you: '你',
-    legendNote: '格子里的字是那一轮的风位',
+    legendNote: '格子里的字是你在那一轮的起始风位',
     cellTitle: (round, table, wind) => `${round} · ${table} · ${wind}家`,
   },
   en: {
@@ -49,7 +49,7 @@ const TEXT = {
     clear: 'Clear selection (Esc)',
     player: 'Player',
     you: 'you',
-    legendNote: 'The letter in each cell is that round’s seat wind',
+    legendNote: 'The letter in each cell is your starting wind in that round',
     cellTitle: (round, table, wind) => `${round} · ${table} · ${wind}`,
   },
 };

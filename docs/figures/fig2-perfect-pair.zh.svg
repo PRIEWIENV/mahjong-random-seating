@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 500" width="980" height="500" font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4b5058"/>
+    </marker>
+  </defs>
+  <rect width="980" height="500" fill="#ffffff"/>
+
+  <text x="24" y="32" font-size="14.5" fill="#6b7078">任意两位选手恰好相遇三次。不同之处只在于这三次相遇是怎么安排的。</text>
+
+  <!-- ===================== row 1: perfect (cy = 150) ===================== -->
+  <text x="24" y="122" font-size="15.5" font-weight="bold" fill="#2f7a4f">完美配对</text>
+  <text x="24" y="148" font-size="12.5" fill="#6b7078">两人各有一次在对方的上家，</text>
+  <text x="24" y="166" font-size="12.5" fill="#6b7078">所以上家位置带来的优势</text>
+  <text x="24" y="184" font-size="12.5" fill="#6b7078">正好互相抵消。</text>
+
+  <!-- panel 1: opposite -->
+  <circle cx="390" cy="150" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <circle cx="290" cy="150" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <line x1="340" y1="177" x2="340" y2="123" stroke="#94a3b8" stroke-width="1.7" stroke-dasharray="5 4"/>
+  <circle cx="340" cy="200" r="21" fill="#e8f0f9" stroke="#2f6fb3" stroke-width="2"/>
+  <text x="340" y="206" text-anchor="middle" font-size="15" font-weight="bold" fill="#2f6fb3">A</text>
+  <circle cx="340" cy="100" r="21" fill="#fdeee6" stroke="#b3441d" stroke-width="2"/>
+  <text x="340" y="106" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3441d">B</text>
+  <text x="340" y="248" text-anchor="middle" font-size="13" fill="#22252a">第 1 次相遇：对家</text>
+
+  <!-- panel 2: A before B -->
+  <circle cx="590" cy="100" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <circle cx="540" cy="150" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <path d="M608,197 Q642,202 637,168" fill="none" stroke="#4b5058" stroke-width="2" marker-end="url(#a2)"/>
+  <circle cx="590" cy="200" r="21" fill="#e8f0f9" stroke="#2f6fb3" stroke-width="2"/>
+  <text x="590" y="206" text-anchor="middle" font-size="15" font-weight="bold" fill="#2f6fb3">A</text>
+  <circle cx="640" cy="150" r="21" fill="#fdeee6" stroke="#b3441d" stroke-width="2"/>
+  <text x="640" y="156" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3441d">B</text>
+  <text x="590" y="248" text-anchor="middle" font-size="13" fill="#22252a">第 2 次相遇：A 在 B 上家</text>
+
+  <!-- panel 3: B before A -->
+  <circle cx="840" cy="100" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <circle cx="790" cy="150" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <path d="M858,197 Q892,202 887,168" fill="none" stroke="#4b5058" stroke-width="2" marker-end="url(#a2)"/>
+  <circle cx="840" cy="200" r="21" fill="#fdeee6" stroke="#b3441d" stroke-width="2"/>
+  <text x="840" y="206" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3441d">B</text>
+  <circle cx="890" cy="150" r="21" fill="#e8f0f9" stroke="#2f6fb3" stroke-width="2"/>
+  <text x="890" y="156" text-anchor="middle" font-size="15" font-weight="bold" fill="#2f6fb3">A</text>
+  <text x="840" y="248" text-anchor="middle" font-size="13" fill="#2f7a4f">第 3 次相遇：B 在 A 上家</text>
+
+  <line x1="24" y1="286" x2="956" y2="286" stroke="#e6e8ec" stroke-width="1.4"/>
+
+  <!-- ===================== row 2: not perfect (cy = 370) ===================== -->
+  <text x="24" y="342" font-size="15.5" font-weight="bold" fill="#b3441d">不完美</text>
+  <text x="24" y="368" font-size="12.5" fill="#6b7078">两次都是 A 在 B 的上家，</text>
+  <text x="24" y="386" font-size="12.5" fill="#6b7078">这是一份细微却系统性的优势，</text>
+  <text x="24" y="404" font-size="12.5" fill="#6b7078">而且永远得不到补偿。</text>
+
+  <!-- panel 1 -->
+  <circle cx="390" cy="370" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <circle cx="290" cy="370" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <line x1="340" y1="397" x2="340" y2="343" stroke="#94a3b8" stroke-width="1.7" stroke-dasharray="5 4"/>
+  <circle cx="340" cy="420" r="21" fill="#e8f0f9" stroke="#2f6fb3" stroke-width="2"/>
+  <text x="340" y="426" text-anchor="middle" font-size="15" font-weight="bold" fill="#2f6fb3">A</text>
+  <circle cx="340" cy="320" r="21" fill="#fdeee6" stroke="#b3441d" stroke-width="2"/>
+  <text x="340" y="326" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3441d">B</text>
+  <text x="340" y="468" text-anchor="middle" font-size="13" fill="#22252a">第 1 次相遇：对家</text>
+
+  <!-- panel 2 -->
+  <circle cx="590" cy="320" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <circle cx="540" cy="370" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <path d="M608,417 Q642,422 637,388" fill="none" stroke="#4b5058" stroke-width="2" marker-end="url(#a2)"/>
+  <circle cx="590" cy="420" r="21" fill="#e8f0f9" stroke="#2f6fb3" stroke-width="2"/>
+  <text x="590" y="426" text-anchor="middle" font-size="15" font-weight="bold" fill="#2f6fb3">A</text>
+  <circle cx="640" cy="370" r="21" fill="#fdeee6" stroke="#b3441d" stroke-width="2"/>
+  <text x="640" y="376" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3441d">B</text>
+  <text x="590" y="468" text-anchor="middle" font-size="13" fill="#22252a">第 2 次相遇：A 在 B 上家</text>
+
+  <!-- panel 3 -->
+  <circle cx="840" cy="320" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <circle cx="790" cy="370" r="15" fill="#f4f5f7" stroke="#dfe2e6"/>
+  <path d="M858,417 Q892,422 887,388" fill="none" stroke="#4b5058" stroke-width="2" marker-end="url(#a2)"/>
+  <circle cx="840" cy="420" r="21" fill="#e8f0f9" stroke="#2f6fb3" stroke-width="2"/>
+  <text x="840" y="426" text-anchor="middle" font-size="15" font-weight="bold" fill="#2f6fb3">A</text>
+  <circle cx="890" cy="370" r="21" fill="#fdeee6" stroke="#b3441d" stroke-width="2"/>
+  <text x="890" y="376" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3441d">B</text>
+  <text x="840" y="468" text-anchor="middle" font-size="13" fill="#b3441d">第 3 次相遇：又是 A 在 B 上家</text>
+</svg>
