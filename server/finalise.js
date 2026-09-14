@@ -267,6 +267,22 @@ function takeSnapshot(cfg, store, log) {
  * in run(). Every exclusion is published.
  */
 /**
+ * A decryption failure that is NOT a property of the ciphertext, so the whole pass is
+ * abandoned and retried rather than the player being excluded.
+ *
+ * The distinction is the important one in this file. An exclusion is permanent and
+ * public: it drops someone out of a draw they submitted to on time, in a file that is
+ * mirrored the moment it is written. So it may only ever be the answer to "this
+ * ciphertext is bad", never to "this machine could not do the work just now" — those
+ * two produce the same exception from tlock-js and must not produce the same outcome.
+ *
+ * Retrying on something that will never clear costs a stalled draw an operator can see
+ * and fix. Excluding on something transient costs twelve people their round, silently
+ * and irreversibly. The error is always resolved in the first direction.
+ */
+class PassAbandoned extends Error {}
+
+/**
  * The beacon exists, but this machine's clock has not reached the round's time.
  *
  * tlock-js decides this locally — `genesis_time + (round - 1) * period > Date.now()` —
@@ -278,8 +294,57 @@ function takeSnapshot(cfg, store, log) {
  * thing it guards against — excluding a player who did nothing wrong, permanently and
  * in public — is not something to leave to one calculation being right.
  */
-class BeaconNotReadyError extends Error {}
+class BeaconNotReadyError extends PassAbandoned {}
 const BEACON_NOT_READY = /too early to decrypt/i;
+
+/**
+ * The chain could not be reached to fetch the round's signature.
+ *
+ * tlock-js fetches the beacon through an HttpChainClient inside `timelockDecrypt`, once
+ * per ciphertext. So a network that drops after the beacon-wait loop has already
+ * succeeded makes EVERY submission throw — and, before this existed, every one of them
+ * was written into `excluded` as undecryptable, the quorum check then failed against
+ * zero openable ciphertexts, and the round was voided with all twelve players publicly
+ * recorded as having sent something that would not open. None of which was true: the
+ * ciphertexts were fine and the draw was recoverable the moment the link came back.
+ *
+ * It is the same class of fault as the clock one above and gets the same treatment:
+ * abandon the pass, let the caller retry. The retry loop already polls to its deadline,
+ * and the scheduled job simply leaves it for the next run.
+ */
+class BeaconUnreachableError extends PassAbandoned {}
+
+// Transport failures, by the code on the error or anywhere down its `cause` chain
+// (undici nests the real one), then by message for the layers that only stringify.
+const TRANSPORT_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT',
+  'EPIPE', 'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH', 'EHOSTDOWN', 'EPROTO',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+]);
+// Every alternative here is a transport phrase. Deliberately none of them is a word a
+// tlock decryption failure uses ("unable to decrypt", "could not parse", "invalid"), so
+// a bad ciphertext cannot be mistaken for a bad network and loop forever.
+const TRANSPORT_TEXT =
+  /fetch failed|failed to fetch|getaddrinfo|socket hang up|error fetching url|econn|enotfound|eai_again|etimedout|enetunreach|ehostunreach|und_err_|network (?:error|is unreachable|is down)/i;
+
+function isTransportFailure(err) {
+  for (let e = err, depth = 0; e && depth < 8; e = e.cause, depth++) {
+    if (TRANSPORT_CODES.has(e.code)) return true;
+    if (e.name === 'AbortError' || e.name === 'TimeoutError') return true;
+    if (typeof e.message === 'string' && TRANSPORT_TEXT.test(e.message)) return true;
+  }
+  return false;
+}
+
+/** The message plus whatever the cause chain adds, so a bare "fetch failed" says why. */
+function describeError(err) {
+  const parts = [];
+  for (let e = err, depth = 0; e && depth < 8; e = e.cause, depth++) {
+    const line = e.code ? `${e.message} (${e.code})` : e.message;
+    if (line && !parts.includes(line)) parts.push(line);
+  }
+  return parts.join(' <- ') || String(err);
+}
 // A moment past the round's time rather than exactly on it: the comparison is strict
 // and both sides are computed to the millisecond.
 const CLOCK_SLACK_MS = 250;
@@ -310,6 +375,12 @@ async function decryptSnapshot(snapshot, cfg, log, { decryptFn = decryptPayload 
         if (BEACON_NOT_READY.test(err.message)) {
           throw new BeaconNotReadyError(
             `round ${cfg.protocol.target_round} is not yet servable for decryption: ${err.message}`);
+        }
+        // Same reasoning one step out: the chain is fetched per ciphertext, so a link
+        // that drops here would otherwise exclude everyone for a fault that is ours.
+        if (isTransportFailure(err)) {
+          throw new BeaconUnreachableError(
+            `cannot reach the drand chain to decrypt (local_id ${s.local_id}): ${describeError(err)}`);
         }
         excluded.push({ local_id: s.local_id, reason: err.message });
         log.error?.(`[finalise] local_id ${s.local_id}: UNDECRYPTABLE — excluded (${err.message})`);
@@ -777,7 +848,7 @@ async function run(opts = {}) {
       ({ decrypted, excluded } = await decryptSnapshot(snapshot, cfg, log, { decryptFn: opts.decryptFn }));
       break;
     } catch (err) {
-      if (!(err instanceof BeaconNotReadyError)) throw err;
+      if (!(err instanceof PassAbandoned)) throw err;
       if (!wait) {
         // The scheduled job: do nothing and let the next run have it. §8 again — a few
         // seconds of delay cannot change an outcome fixed at the cutoff.
@@ -785,7 +856,10 @@ async function run(opts = {}) {
         return { phase: 'awaiting_round' };
       }
       if (Date.now() > deadline) {
-        log.error?.(`[finalise] gave up waiting for the beacon to propagate: ${err.message}`);
+        // Still 'awaiting_round', never 'void'. The outcome was fixed at the cutoff and
+        // nothing here has learned anything about it; a draw that could not run is a
+        // draw to run again, not a round to void.
+        log.error?.(`[finalise] gave up waiting to decrypt: ${err.message}`);
         return { phase: 'awaiting_round', error: err.message };
       }
       log.info?.(`[finalise] ${err.message}; retrying in ${pollMs / 1000}s`);
@@ -850,7 +924,7 @@ async function run(opts = {}) {
 
 module.exports = {
   run, phaseOf, takeSnapshot, publishRoll, rollBody, rollDigest, decryptSnapshot, syncToPantheon, publishSync,
-  retryNapMs, BeaconNotReadyError,
+  retryNapMs, PassAbandoned, BeaconNotReadyError, BeaconUnreachableError, isTransportFailure,
   readPublishedResults, republishIfUnmirrored, takeLock, releaseLock, lockPath,
   stateIsFromAnotherRound, refuseStaleState,
   KEY_PHASE, KEY_SNAPSHOT, KEY_ROLL, KEY_RESULT, KEY_SYNC, KEY_TICK, KEY_PUBLISHED,

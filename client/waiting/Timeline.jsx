@@ -55,7 +55,7 @@ const TEXT = {
     roundsToGo: (n) => `还差 ${n.toLocaleString()} 轮`,
     roundsHere: '已经到达',
     beaconDown: '信标暂时读不到，上面的当前轮次可能不是最新的。',
-    what: '开奖等的是 drand 这条公共信标链走到目标轮次。那一轮的值一出现，密文就能打开——包括我们在内，谁也没法让它早一点或晚一点。',
+    what: '等待 drand 公共信标链走到目标轮次就可以开奖。目标轮次的签名一旦生成，所有已提交密文就能打开。',
   },
   en: {
     open: 'Submissions open',
@@ -71,7 +71,7 @@ const TEXT = {
     roundsToGo: (n) => `${n.toLocaleString()} rounds to go`,
     roundsHere: 'Reached',
     beaconDown: 'The beacon is not readable right now, so the current round above may be stale.',
-    what: 'The draw waits for the public drand chain to reach the target round. The moment that round’s value exists the ciphertexts can be opened, and nobody — us included — can make it happen sooner or later.',
+    what: 'The draw happens once the public drand chain reaches the target round. As soon as that round’s signature exists, every submitted ciphertext can be opened.',
   },
 };
 

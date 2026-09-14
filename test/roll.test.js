@@ -22,7 +22,7 @@ const crypto = require('node:crypto');
 
 const {
   run, publishRoll, rollBody, rollDigest, takeSnapshot, retryNapMs, decryptSnapshot,
-  BeaconNotReadyError, KEY_ROLL,
+  BeaconNotReadyError, BeaconUnreachableError, isTransportFailure, KEY_ROLL,
 } = require('../server/finalise');
 const { Store } = require('../server/db');
 const { StubPantheon } = require('../server/pantheon');
@@ -259,6 +259,108 @@ test('a ciphertext that is genuinely unopenable is still excluded, one player on
   assert.equal(excluded.length, 1);
   assert.equal(excluded[0].local_id, 2);
   assert.match(excluded[0].reason, /not JSON/);
+  c.close();
+});
+
+/**
+ * The network dropping mid-draw.
+ *
+ * tlock fetches the round's signature through an HTTP chain client inside every single
+ * `timelockDecrypt`, so a link that goes down after the beacon-wait loop has already
+ * succeeded makes all twelve throw at once. Before these, every one of them was recorded
+ * as an undecryptable submission, the second quorum check failed against nothing, and
+ * the round was voided — publishing twelve players as having sent ciphertexts that would
+ * not open, when the ciphertexts were fine and the fault was entirely local. Seen for
+ * real by pulling the network during `npm run demo`, which came back to a page reading
+ * "only 12 sealed a number, short of the 8 required".
+ */
+test('a network that drops mid-decryption stops the pass instead of excluding everyone', async () => {
+  const c = fixture();
+  const seen = [];
+  await assert.rejects(
+    () => decryptSnapshot(snapOf(1, 2, 3), c.cfg, QUIET, {
+      decryptFn: async (ct) => {
+        seen.push(ct);
+        // What node's fetch actually throws: a bare TypeError with the real reason
+        // nested in `cause`. A predicate that only read `message` would miss it.
+        throw Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.drand.sh'), { code: 'ENOTFOUND' }),
+        });
+      },
+    }),
+    (err) => err instanceof BeaconUnreachableError && /cannot reach the drand chain/.test(err.message),
+  );
+  // First failure, not the twelfth: they would all fail identically and none is at fault.
+  assert.deepEqual(seen, ['c1']);
+  c.close();
+});
+
+test('the reported reason names the cause, not just "fetch failed"', async () => {
+  // An operator reading the log has to be able to tell a dead DNS from a refused
+  // connection, and undici hides that one level down.
+  const c = fixture();
+  await assert.rejects(
+    () => decryptSnapshot(snapOf(1), c.cfg, QUIET, {
+      decryptFn: async () => {
+        throw Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), { code: 'ECONNREFUSED' }),
+        });
+      },
+    }),
+    (err) => /fetch failed/.test(err.message) && /ECONNREFUSED/.test(err.message),
+  );
+  c.close();
+});
+
+test('transport failures are told apart from ciphertext failures', () => {
+  // The two must never be confused in either direction. Excluding on a transient fault
+  // is permanent and public; retrying on a permanent one only stalls a draw an operator
+  // can see.
+  for (const err of [
+    Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET', message: 'socket hang up' } }),
+    Object.assign(new Error('x'), { cause: { cause: { code: 'EAI_AGAIN', message: 'getaddrinfo EAI_AGAIN' } } }),
+    Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }),
+    new Error('Error fetching URL https://api.drand.sh/public/1 : 502'),
+    Object.assign(new Error('failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' }),
+    new Error('network is unreachable'),
+  ]) {
+    assert.equal(isTransportFailure(err), true, err.message);
+  }
+  for (const err of [
+    new Error('decrypted payload is not JSON'),
+    new Error('Unable to decrypt the ciphertext'),
+    new Error('user_input must be an integer in 0..100'),
+    new Error('could not parse the age header'),
+    new Error("It's too early to decrypt the ciphertext - decryptable at round 32098187"),
+    new Error('invalid armor'),
+  ]) {
+    assert.equal(isTransportFailure(err), false, err.message);
+  }
+});
+
+test('a dropped network leaves the round pending, never void', async () => {
+  // The whole point. `awaiting_round` is recoverable the moment the link comes back;
+  // a void is not recoverable at all — it costs twelve people a fresh submission each.
+  const c = fixture();
+  const now = Date.parse(c.cfg.protocol.submission_cutoff_utc) - 60_000;
+  for (let id = 1; id <= 12; id++) {
+    c.store.insertSubmission(id, fakeCiphertext(c.cfg.protocol.target_round, c.cfg.protocol.chain_hash), now);
+  }
+  const out = await run({
+    cfg: c.cfg, store: c.store, log: QUIET, wait: false,
+    now: c.cfg.protocol.target_round_ms + 1000,
+    mirror: { enabled: false, enqueue() {}, flush: async () => {}, drain: async () => true },
+    pantheon: new StubPantheon({ roster: c.fx.roster }),
+    drand: { round: async () => ({ round: c.cfg.protocol.target_round, signature: 'ab'.repeat(48), mirrors: ['m'] }) },
+    decryptFn: async () => {
+      throw Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.drand.sh'), { code: 'ENOTFOUND' }),
+      });
+    },
+  });
+  assert.equal(out.phase, 'awaiting_round');
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'events', 'void.json')), false, 'a network blip voided the round');
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'results.json')), false);
   c.close();
 });
 

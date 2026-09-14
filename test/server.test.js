@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const { createServer, listenOn, shutdown } = require('../server/server');
@@ -480,6 +481,75 @@ test('a protocol frozen before the window origin existed still serves a status',
   const { body } = await s.get('/api/status');
   assert.equal(body.submission_opens_utc, null);
   assert.equal(body.phase, 'open');
+  await s.close();
+});
+
+/**
+ * Which shortfall voided the round.
+ *
+ * The void page has only ever had `submitted_count` and `quorum` to work with, so it
+ * could state one reason: too few sealed by the cutoff. A round can also fall short at
+ * the other end — everybody sealed, too few would open — and about that one the page
+ * said "only 12 sealed a number, short of the 8 required", a sentence with no reading
+ * under which it is true. The counts have to come from the notice, which is the only
+ * thing that knows what actually happened.
+ */
+test('a void from undecryptable submissions is reported as that, not as a shortfall of people', async () => {
+  const now = Date.now();
+  const s = await boot({ protocol: { submission_cutoff_utc: new Date(now - 5000).toISOString() }, now: () => now });
+  // Deliberately no submissions in this store, so submitted_count is 0 while the notice
+  // says twelve. The page must read the notice: the two disagree by design here, and on
+  // a restored database after a real void they disagree for real.
+  // The shape server/finalise.js publishes for the second quorum check.
+  fs.mkdirSync(path.join(s.cfg.root, 'events'), { recursive: true });
+  fs.writeFileSync(path.join(s.cfg.root, 'events', 'void.json'), JSON.stringify({
+    phase: 'void',
+    target_round: s.cfg.protocol.target_round,
+    quorum: s.cfg.protocol.quorum,
+    reason: 'quorum not met once undecryptable submissions were excluded',
+    snapshot_size: 12,
+    decrypted: 3,
+    excluded: Array.from({ length: 9 }, (_, i) => ({ local_id: i + 4, reason: 'bad armor' })),
+  }));
+
+  const { body } = await s.get('/api/status');
+  assert.equal(body.phase, 'void');
+  assert.equal(body.voided.reason, 'quorum not met once undecryptable submissions were excluded');
+  assert.equal(body.voided.sealed, 12);
+  assert.equal(body.voided.opened, 3);
+  assert.equal(body.voided.excluded_count, 9);
+  // The per-player failure strings stay in the published notice and the archive. They
+  // are not needed to explain the void and do not belong in a payload every browser polls.
+  assert.equal(body.voided.excluded, undefined);
+  await s.close();
+});
+
+test('a void from too few submissions reports no opened count at all', async () => {
+  // Nothing was opened: the round ended before the beacon. `opened: null` is what makes
+  // the page choose the other sentence, so it must not be defaulted to 0.
+  const now = Date.now();
+  const s = await boot({ protocol: { submission_cutoff_utc: new Date(now - 5000).toISOString() }, now: () => now });
+  fs.mkdirSync(path.join(s.cfg.root, 'events'), { recursive: true });
+  fs.writeFileSync(path.join(s.cfg.root, 'events', 'void.json'), JSON.stringify({
+    phase: 'void',
+    target_round: s.cfg.protocol.target_round,
+    quorum: s.cfg.protocol.quorum,
+    reason: 'quorum not met at the cutoff',
+    received: 5,
+    submitted_local_ids: [1, 2, 3, 4, 5],
+  }));
+  const { body } = await s.get('/api/status');
+  assert.equal(body.voided.sealed, 5);
+  assert.equal(body.voided.opened, null);
+  await s.close();
+});
+
+test('a void with no notice on disk says nothing rather than guessing', async () => {
+  const now = Date.now();
+  const s = await boot({ protocol: { submission_cutoff_utc: new Date(now - 5000).toISOString() }, now: () => now });
+  const { body } = await s.get('/api/status');
+  assert.equal(body.phase, 'void');
+  assert.equal(body.voided, null, 'it invented a reason');
   await s.close();
 });
 

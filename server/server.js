@@ -307,6 +307,49 @@ function createServer(opts = {}) {
   }
 
   /**
+   * The substance of events/void.json, for the page that has to explain the void.
+   *
+   * Only the counts and the reason, not the notice itself: `excluded` carries one
+   * error string per player, which belongs in the published file and in the archive,
+   * not in a payload every browser polls.
+   *
+   * Cached on mtime because the status payload is rebuilt on every poll and on every
+   * broadcast, and this file does not change while the phase does not.
+   */
+  let voidCache = null;
+  function voidDetail(phase) {
+    if (phase !== 'void') return null;
+    const file = path.join(cfg.root, 'events', 'void.json');
+    let mtime;
+    try {
+      mtime = fs.statSync(file).mtimeMs;
+    } catch {
+      // Phase says void but the notice is not on disk. Say nothing rather than guess;
+      // the page then falls back to the counts it already has.
+      return null;
+    }
+    if (voidCache && voidCache.mtime === mtime) return voidCache.value;
+    let value = null;
+    try {
+      const n = JSON.parse(fs.readFileSync(file, 'utf8'));
+      value = {
+        reason: typeof n.reason === 'string' ? n.reason : null,
+        // How many were sealed by the cutoff, under whichever name this notice used.
+        sealed: Number.isFinite(n.snapshot_size) ? n.snapshot_size
+          : Number.isFinite(n.received) ? n.received : null,
+        // How many of those actually opened. Absent on the cutoff-shortfall notice,
+        // because nothing was opened: the round ended before the beacon.
+        opened: Number.isFinite(n.decrypted) ? n.decrypted : null,
+        excluded_count: Array.isArray(n.excluded) ? n.excluded.length : 0,
+      };
+    } catch (err) {
+      log.warn?.(`[server] events/void.json is not readable: ${err.message}`);
+    }
+    voidCache = { mtime, value };
+    return value;
+  }
+
+  /**
    * Whether the draw is merely pending or actually late.
    *
    * This process never draws. server/finalise.js does, on a timer (deploy/README.md
@@ -415,6 +458,14 @@ function createServer(opts = {}) {
       // so counting it would title the screen announcing that attempt 2 failed "attempt 3".
       attempt: previous.filter((a) => a.target_round !== cfg.protocol.target_round).length + 1,
       previous_rounds: previous,
+      // Why this round is void, when it is. A round can fall short in two different
+      // places — too few sealed by the cutoff, or enough sealed but too few that would
+      // open — and without this the page could only name the first. It said "only 12
+      // sealed a number, short of the 8 required" about a draw where all twelve had
+      // sealed, because `submitted_count` is who submitted and the shortfall was
+      // somewhere else entirely. Read out of events/void.json, which is already public
+      // the moment it is written, so nothing here is newly disclosed.
+      voided: voidDetail(phase),
       // UI-SPEC §5: the countdown is driven by this, so it never drifts. The same
       // instant the phase and the lateness above were read at, or a page could show a
       // countdown and a lateness that disagree by a tick.

@@ -34,6 +34,8 @@ const TEXT = {
     roundIs: (n) => `drand 第 ${n.toLocaleString()} 轮`,
     retry: (n, had, quorum) =>
       `这是第 ${n} 次开奖。上一次截止时只有 ${had} 位提交，未达到 ${quorum} 位的门槛，按事先定好的规则作废了。`,
+    retryOpen: (n, quorum) =>
+      `这是第 ${n} 次开奖。上一次提交的人数是够的，但开奖时能打开的密文不足 ${quorum} 份，按事先定好的规则作废了。`,
     retryLink: '上一次的全部密文和参数都在这里',
     retryTail: '，等那一轮的信标公布后任何人都能自己解开核对。',
     range: (max) => `0 到 ${max} 之间的任意整数——幸运数字、生日，都行。`,
@@ -61,6 +63,8 @@ const TEXT = {
     roundIs: (n) => `drand round ${n.toLocaleString()}`,
     retry: (n, had, quorum) =>
       `This is draw attempt ${n}. Last time only ${had} numbers were sealed by the cutoff, short of the ${quorum} required, so that round was voided under the rule set before it started.`,
+    retryOpen: (n, quorum) =>
+      `This is draw attempt ${n}. Enough numbers were sealed last time, but fewer than ${quorum} of them would open at the draw, so that round was voided under the rule set before it started.`,
     retryLink: 'Every ciphertext and parameter from that attempt is here',
     retryTail: ', and once that round’s beacon is out anyone can open them and check.',
     range: (max) => `Any whole number from 0 to ${max}. A lucky number, a birthday, anything.`,
@@ -215,7 +219,13 @@ export default function Submit({ protocol, status, me, serverNow, onSubmitted })
         */}
         {status?.attempt > 1 && last?.status === 'void' && (
           <p className="note retry">
-            {t.retry(status.attempt, last.submitted_count, last.quorum)}
+            {/* Which shortfall it was. The two are different accusations and only one
+                of them is about how many people turned up; `reason` is the wording
+                server/finalise.js publishes into the notice and archives in the index.
+                An unrecognised reason falls back to the count-based sentence. */}
+            {/undecryptable/i.test(last.reason || '')
+              ? t.retryOpen(status.attempt, last.quorum)
+              : t.retry(status.attempt, last.submitted_count, last.quorum)}
             {' '}
             <a href={`/${last.archive}/manifest.json`} target="_blank" rel="noreferrer">{t.retryLink}</a>
             {t.retryTail}
