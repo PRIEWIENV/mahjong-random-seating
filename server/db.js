@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   local_id   INTEGER NOT NULL,
   person_id  INTEGER NOT NULL,
   created_ms INTEGER NOT NULL,
-  expires_ms INTEGER NOT NULL
+  expires_ms INTEGER NOT NULL,
+  is_admin   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_ms);
 
@@ -113,6 +114,11 @@ class Store {
     this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
+    // In-place upgrade: a sessions table created before is_admin existed has no such
+    // column, and CREATE TABLE IF NOT EXISTS does not add one. Absent is not an error —
+    // sessions are ephemeral — but the read path expects the column, so add it once.
+    const hasIsAdmin = this.db.prepare("PRAGMA table_info(sessions)").all().some((c) => c.name === 'is_admin');
+    if (!hasIsAdmin) this.db.exec('ALTER TABLE sessions ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
   }
 
   // ---- submissions ------------------------------------------------------
@@ -151,11 +157,11 @@ class Store {
   }
 
   // ---- sessions ---------------------------------------------------------
-  createSession(localId, personId, nowMs, ttlMs = this.sessionTtlMs) {
+  createSession(localId, personId, nowMs, isAdmin = false, ttlMs = this.sessionTtlMs) {
     const token = crypto.randomBytes(32).toString('base64url');
     this.db
-      .prepare('INSERT INTO sessions (token_hash, local_id, person_id, created_ms, expires_ms) VALUES (?, ?, ?, ?, ?)')
-      .run(hashToken(token), localId, personId, nowMs, nowMs + ttlMs);
+      .prepare('INSERT INTO sessions (token_hash, local_id, person_id, created_ms, expires_ms, is_admin) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(hashToken(token), localId, personId, nowMs, nowMs + ttlMs, isAdmin ? 1 : 0);
     return token;
   }
 

@@ -1753,12 +1753,54 @@ checks, sign-in refused over plain http and accepted with the proxy's header, th
 on the server's own timer, and the close. What it could not exercise is in the guide's
 own words: TLS, nginx and a real Pantheon.
 
+## 6ab. The admin token nobody should have to find
+
+Writing the seat plan back to Pantheon needs an account that administers the event, and
+the first deployments got the credential for it by hand: sign in against Frey with curl,
+read the 96-character `auth_token` out of the JSON, and paste it into `.env` without it
+landing in the shell history. Every part of that is a place to slip, and the symptom of
+slipping is a sync that fails after the draw, when the seat plan is the only thing left
+to do.
+
+But an event admin who opens the ordinary page has already handed Frey their password and
+received exactly that token — the sign-in path holds it for the length of one request and
+then throws it away. And Frey answers `GetOwnedEventIds({person_id})` with the events a
+person administers: a plain lookup, but it is only ever asked for a person whose token
+`QuickAuthorize` has just accepted, so the answer means "does this signed-in person
+administer this event". So the page can do two things the operator used to do by hand.
+It shows the admin the organiser dashboard — a link, not a jump, because an admin is
+usually a player too and the draw is where they should land. And, against a real Pantheon
+only, it captures their token to `var/admin-credential.json` (`0600`, gitignored, never
+logged, never echoed) for the finalise job to read when it writes the plan. The operator
+sets no admin token at all; `PANTHEON_ADMIN_TOKEN` stays as an override for a fixed
+service account, and wins when it is set.
+
+This is a deliberate, narrow hole in the wall that read "never mixed with the player
+sign-in path". The wall kept the fairness-critical sign-in from depending on the admin
+write, and it still does: the capture is a side-effect-free lookup, wrapped so any
+failure reads as "not an admin" and never blocks a player; the token is the admin's own;
+and the write still happens only in the finalise job, after the draw is final and
+published. The stub is skipped on purpose — its token is a fake that would poison a later
+real sync — so the path is exercised by `tools/rehearse.js` (player 1 is an admin there)
+and by unit tests, not by capturing anything real. `ADMIN_TOKEN` becomes optional in the
+bargain: an event admin reaches `/admin` with their own session, and the dashboard says
+where the sync credential came from without ever showing it.
+
+The last piece is when it goes away. Frey's tokens do not expire: one stands until that
+person changes their password, so a captured token left on disk outlives by an unbounded
+margin the event it was captured for. Closing the event deletes it. That happens inside
+`endEvent`, but deliberately not through the machinery that clears everything else: the
+rest of what a close removes is first archived into `events/` and mirrored to GitHub, and
+this is the one file in the tree that must never be archived or mirrored anywhere. Its
+rule runs the other way round. Everything else is deleted because the archive safely
+holds it; this is deleted precisely because the archive does not and must not.
+
 ## 10. What was verified, and how
 
 | Check | Status |
 |---|---|
 | `tools/verify_template.py` re-derives every template invariant | passes |
-| Unit tests (`npm test`) — 433 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example, the sign-in classifier, sign-in over http, the admin TLS row, the quick start | pass |
+| Unit tests (`npm test`) — 446 across generate, encoding, config, roll-call, resume, attempts, admin, freeze, checkout, API, stats, Pantheon, sign-in, ciphertext admission, mirroring, SSE, timestamping, the roll, the draw schedule, the document renderer, the document set, the licence notices, shutdown, the draw lock, .env, closing an event, whose attempt a round belongs to, stylesheet scope, the deployment documents, the drand cross-check, the tlock payload gate, the browser’s sealing, the database two processes share, the ignore rules, reaching Pantheon, the runtime example, the sign-in classifier, sign-in over http, the admin TLS row, the quick start, the organiser dashboard by Pantheon identity, the captured admin credential | pass |
 | The frozen/operational split, tested from both sides (`test/config.test.js`) | passes |
 | A player dropped from both lists reproduces byte for byte, and the roll-call catches it | passes |
 | A finished draw survives a lost database without being declared void | passes |
@@ -1769,6 +1811,9 @@ own words: TLS, nginx and a real Pantheon.
 | Mirroring retries, then gives up after five attempts without stranding the queue | passes |
 | The SSE hub replays to a late stream, suppresses repeats, and stops its heartbeat with the last client | passes |
 | The Pantheon token is verified once and appears in no table, log line or response | passes |
+| An event admin signs in with `is_admin` set, opens `/admin` with their own session, and a player cannot; the captured token never reaches the dashboard (`npm run rehearse`, `test/server.test.js`) | passes |
+| The captured admin credential round-trips `0600`, the environment overrides it, and a unit-constructed client never reads any file (`test/admin-credential.test.js`) | passes |
+| Closing an event deletes the captured token, a dry run does not, and it reaches neither the archive, the manifest nor the mirror (`test/rounds.test.js`) | passes |
 | Behind a proxy the rate limit is per player, and a forged `X-Forwarded-For` buys nothing | passes |
 | The `.ots` this writes is accepted by python-opentimestamps, with four calendar attestations | passes |
 | The roll is published and anchored at the cutoff, not at the draw | passes |

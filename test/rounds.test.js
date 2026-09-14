@@ -622,6 +622,54 @@ test('a dry run says what it would do and changes nothing', () => {
   cleanup(c.fx.dir);
 });
 
+test('closing an event deletes the captured admin token, and a dry run leaves it alone', () => {
+  // Frey's tokens do not expire, so one captured at sign-in would otherwise outlive the
+  // event by however long that person keeps their password. The close is where it goes.
+  const { saveAdminCredential, adminCredentialFileIn } = require('../server/admin-credential');
+
+  const dry = attempt(12);
+  fs.writeFileSync(path.join(dry.fx.dir, 'results.json'), '{"round_used":1}\n');
+  dry.store.set('phase', 'done');
+  const dryFile = adminCredentialFileIn(dry.cfg.root);
+  saveAdminCredential({ person_id: 42, auth_token: 'password-equivalent', title: 'Feiyang' }, dryFile);
+
+  const preview = endEvent(dry.cfg, dry.store, { dryRun: true, mirror: dry.mirror, log: QUIET });
+  assert.equal(preview.credentialCleared, true, 'the dry run reports that there is one to delete');
+  assert.equal(fs.existsSync(dryFile), true, 'a dry run deletes nothing, least of all a secret');
+  cleanup(dry.fx.dir);
+
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'), '{"round_used":1}\n');
+  c.store.set('phase', 'done');
+  const file = adminCredentialFileIn(c.cfg.root);
+  saveAdminCredential({ person_id: 42, auth_token: 'password-equivalent', title: 'Feiyang' }, file);
+
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true);
+  assert.equal(out.credentialCleared, true);
+  assert.equal(fs.existsSync(file), false, 'the captured token must not survive the event');
+
+  // And it must never have been archived or mirrored on the way out: the archive is
+  // published, and this is the one file in the tree that can never be.
+  const archived = fs.readdirSync(arch(c, out.targetRound));
+  assert.ok(!archived.some((f) => f.includes('admin-credential')), 'the token must not be in the archive');
+  const manifest = JSON.parse(fs.readFileSync(path.join(arch(c, out.targetRound), 'manifest.json'), 'utf8'));
+  assert.ok(!JSON.stringify(manifest).includes('password-equivalent'), 'no token in the manifest');
+  assert.ok(!c.mirrored.some((p) => String(p).includes('admin-credential')),
+    'the token must never be handed to the mirror');
+  cleanup(c.fx.dir);
+});
+
+test('closing an event with no captured token says so rather than claiming a deletion', () => {
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'), '{"round_used":1}\n');
+  c.store.set('phase', 'done');
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true);
+  assert.equal(out.credentialCleared, false);
+  cleanup(c.fx.dir);
+});
+
 test('with nothing to close it says so instead of pretending', () => {
   const c = attempt(0);
   const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });

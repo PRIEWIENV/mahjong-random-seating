@@ -6,7 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2024-5FA04E?logo=node.js&logoColor=white)](package.json)
-[![Tests](https://img.shields.io/badge/tests-433%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-446%20passing-brightgreen)](test/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-1-informational)](package.json)
 [![drand](https://img.shields.io/badge/randomness-drand%20quicknet-6f42c1)](https://drand.love)
 
@@ -90,7 +90,7 @@ flowchart LR
 ## 开发
 
 ```sh
-npm test                  # 433 个单元测试，离线，约 12 秒
+npm test                  # 446 个单元测试，离线，约 12 秒
 npm run rehearse          # 组织者的完整流程，无界面，在沙盒里，约 3 分钟
 npm run e2e               # 选手的完整流程，对着真实 drand，约 90 秒
 npm run verify-template   # 重新推导座位模板的每一条不变量

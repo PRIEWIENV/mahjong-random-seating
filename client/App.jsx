@@ -88,6 +88,7 @@ const TEXT = {
     navDraw: '抽签',
     navDoc: '原理',
     navLabel: '页面',
+    adminPanel: '组织者面板',
   },
   en: {
     brand: 'Seating draw',
@@ -99,6 +100,7 @@ const TEXT = {
     navDraw: 'The draw',
     navDoc: 'How it works',
     navLabel: 'Pages',
+    adminPanel: 'Organiser panel',
   },
 };
 
@@ -140,6 +142,12 @@ function Chrome({ lang, setLang, me, onSignOut, children, stage, view, setView, 
 
         <div className="who">
           {me && <span className="who-name">{me.title}</span>}
+          {/* Shown, not jumped to: an event admin is usually a player too, so the draw
+              stays where it is and the dashboard opens beside it. Server-rendered and
+              gated by the same session cookie, so a link is all the client does. */}
+          {me?.is_admin && (
+            <a className="linkish" href="/admin" target="_blank" rel="noopener">{t.adminPanel}</a>
+          )}
           <button
             className="lang-toggle"
             onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}

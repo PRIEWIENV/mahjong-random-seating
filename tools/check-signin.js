@@ -7,6 +7,8 @@
  *   1. the call the BROWSER makes: Frey Authorize with email + password
  *   2. the re-check the RELAY makes: Frey QuickAuthorize with the token from step 1
  *   3. the registration the RELAY checks: Mimir GetAllRegisteredPlayers
+ *   3b. whether this account administers the event: Frey GetOwnedEventIds — an admin's
+ *      sign-in shows the organiser panel and captures the seat-plan sync's credential
  *   4. with --admin: the credentials the seat-plan sync will use, as far as a read-only
  *      call can check them
  *
@@ -197,6 +199,25 @@ async function checkPlayer({ email, eventId, browserFrey, frey, mimir }) {
   }
   console.log(`   OK    registered: local_id ${me.local_id ?? '(none)'}`);
   if (me.local_id == null) console.log('   note: no local_id yet, so freeze.js will refuse this roster until one is assigned');
+
+  // ---- 3b. does this account administer the event? --------------------------
+  // Frey GetOwnedEventIds is what the sign-in path uses to decide whether to offer the
+  // organiser dashboard and to capture this token for the seat-plan sync. Reported here
+  // so an organiser can confirm, before the event, that their own sign-in will do both.
+  console.log(`${LF}3b. relay -> Frey GetOwnedEventIds  personId ${personId}`);
+  try {
+    const owned = await pantheon.ownedEventIds(personId);
+    if (owned.map(Number).includes(Number(eventId))) {
+      console.log(`   OK    this account administers event ${eventId}`);
+      console.log('   so signing in through the page shows the organiser panel and captures the');
+      console.log('   credential the seat-plan sync needs — PANTHEON_ADMIN_TOKEN is not required.');
+    } else {
+      console.log(`   this account does NOT administer event ${eventId} (a player, not an organiser)`);
+      console.log('   fine for a player; for the sync, an event admin must sign in, or set PANTHEON_ADMIN_TOKEN.');
+    }
+  } catch (e) {
+    console.log(`   note: could not check admin ownership (${e.message}); sign-in itself is unaffected`);
+  }
 
   console.log(`${LF}All three Pantheon steps pass for this account. If the page still refused, it now says which`);
   console.log('of these it was: the draw server unreachable (nginx 502), rate limited (429), a server error');

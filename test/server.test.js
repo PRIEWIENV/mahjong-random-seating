@@ -23,6 +23,9 @@ async function boot(opts = {}) {
   const pantheon = opts.pantheon || new StubPantheon({
     roster: fx.roster,
     eventTitle: opts.eventTitle,
+    // Which fixture accounts count as event admins (Frey GetOwnedEventIds), so the
+    // dashboard-by-identity path can be exercised without a real Pantheon.
+    adminPersonIds: opts.adminPersonIds || [],
     // A genuinely valid Pantheon account that is NOT in the event — UI-SPEC §3's
     // second failure message only exists if the fake can represent this case.
     extraAccounts: [{ person_id: 9999, auth_token: 'token-9999' }],
@@ -217,10 +220,51 @@ test('/api/me needs a session and reports submitted state', async () => {
   const { cookie } = await s.signIn(1003);
   const me = await s.get('/api/me', cookie);
   assert.equal(me.status, 200);
-  assert.deepEqual(me.body, { local_id: 3, title: s.fx.roster.players[2].title, submitted: false });
+  assert.deepEqual(me.body, { local_id: 3, title: s.fx.roster.players[2].title, submitted: false, is_admin: false });
 
   assert.equal((await s.submit(cookie, ct(s.cfg.protocol))).status, 201);
   assert.equal((await s.get('/api/me', cookie)).body.submitted, true);
+  await s.close();
+});
+
+// ---------------------------------------------------------------------------
+// Event admins: the dashboard follows Pantheon identity, not a separate token
+// ---------------------------------------------------------------------------
+
+test('an event admin signs in with is_admin set; an ordinary player does not', async () => {
+  const s = await boot({ adminPersonIds: [1001] });
+  const admin = await s.signIn(1001);          // local_id 1, an event admin
+  assert.equal(admin.status, 200);
+  assert.equal(admin.body.is_admin, true);
+  assert.equal((await s.get('/api/me', admin.cookie)).body.is_admin, true);
+
+  const player = await s.signIn(1003);          // local_id 3, not an admin
+  assert.equal(player.body.is_admin, false);
+  assert.equal((await s.get('/api/me', player.cookie)).body.is_admin, false);
+  await s.close();
+});
+
+test('the dashboard opens for an admin session and 404s for a player — with no ADMIN_TOKEN set', async () => {
+  const s = await boot({ adminPersonIds: [1001] });
+  // No adminToken passed to createServer, so the query-string door is shut. Identity is
+  // the only way in.
+  assert.equal((await s.get('/admin')).status, 404, 'anonymous learns nothing');
+
+  const admin = await s.signIn(1001);
+  assert.equal((await s.get('/admin', admin.cookie)).status, 200);
+  assert.equal((await s.get('/admin/data.json', admin.cookie)).status, 200);
+
+  const player = await s.signIn(1003);
+  assert.equal((await s.get('/admin', player.cookie)).status, 404, 'a player who is not an admin still cannot open it');
+  await s.close();
+});
+
+test('the admin adapter reports where the sync credential came from, never the token', async () => {
+  const s = await boot({ adminPersonIds: [1001] });
+  const admin = await s.signIn(1001);
+  const data = (await s.get('/admin/data.json', admin.cookie)).body;
+  const serialised = JSON.stringify(data);
+  assert.ok(!serialised.includes('token-1001'), 'the captured token never reaches the dashboard');
   await s.close();
 });
 

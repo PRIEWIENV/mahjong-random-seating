@@ -198,6 +198,29 @@ function collect(ctx) {
       'there already, it is not sending X-Forwarded-Proto.');
   }
 
+  // Whether the post-draw seat-plan sync has an admin credential to write with, and
+  // where it came from — never the token itself (server/admin-credential.js). Only for
+  // a real Pantheon: the stub has no sync to run.
+  if (!isStub) {
+    const ac = ctx.adminCredential || { source: null };
+    const done = status.phase === 'done';
+    check(
+      ac.source ? 'ok' : (done ? 'fail' : 'warn'),
+      ac.source === 'env'
+        ? 'Seat-plan sync has admin credentials (from the environment)'
+        : ac.source === 'captured'
+          ? 'Seat-plan sync has admin credentials (captured when an admin signed in)'
+          : 'Seat-plan sync has no admin credentials yet',
+      ac.source === 'env'
+        ? 'PANTHEON_ADMIN_PERSON_ID / PANTHEON_ADMIN_TOKEN are set in the environment'
+        : ac.source === 'captured'
+          ? `captured from ${ac.title || 'an event admin'}${ac.at ? ` at ${ac.at}` : ''} — the token is never shown here`
+          : 'no event admin has signed in yet and PANTHEON_ADMIN_TOKEN is unset. An event admin ' +
+            'signing in through the page captures it automatically; until then the seat plan ' +
+            'cannot be written back (you can still paste it in by hand after the draw)'
+    );
+  }
+
   const artefacts = {
     'data/protocol.json': digestOf(path.join(cfg.dataDir, 'protocol.json')),
     'data/roster.json': digestOf(path.join(cfg.dataDir, 'roster.json')),

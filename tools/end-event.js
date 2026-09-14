@@ -18,6 +18,11 @@
  * The order is archive, verify, then clear. Nothing is deleted that the archive does not
  * already hold, and if the archive does not verify, nothing is deleted at all.
  *
+ * One thing is deleted for the opposite reason. `var/admin-credential.json` holds the
+ * admin token captured when an event admin signed in (server/admin-credential.js), and
+ * it is the one file that must never be archived or mirrored anywhere. Frey's tokens do
+ * not expire, so it is cleared with the event rather than left to outlive it.
+ *
  *   node tools/end-event.js --dry-run     say what would happen, change nothing
  *   node tools/end-event.js               do it
  *   node tools/end-event.js --abandon     ...for a round that never reached an end
@@ -77,6 +82,9 @@ function main(argv) {
       note(`into ${archiveRel(out.targetRound)}/, with ${out.willArchive.submissions} ciphertext(s)`);
       note(out.removed.length ? `then cleared: ${out.removed.join(', ')}, events/submissions/` : 'then cleared: nothing live');
       note(`and ${out.cleared} submission row(s) from var/state.sqlite`);
+      note(out.credentialCleared
+        ? 'and var/admin-credential.json, the captured admin token, would be deleted'
+        : 'no captured admin token on disk, so there is none to delete');
       if (out.frozenMoved) warnFrozenMoved(out, cfg);
       note('nothing was changed');
       return 0;
@@ -85,6 +93,11 @@ function main(argv) {
     ok(`round ${out.targetRound} archived as ${out.status} into ${archiveRel(out.targetRound)}/`);
     ok(`archive verified: ${Object.keys(out.archived.files).length} file(s), every digest recomputed`);
     ok(`cleared ${out.cleared} submission row(s) and ${out.removed.length} live path(s)`);
+    if (out.credentialCleared) {
+      ok('deleted var/admin-credential.json, the admin token captured at sign-in');
+      note("Frey's tokens do not expire, so it is removed with the event rather than left");
+      note('on disk. The next event captures a fresh one when an admin signs in.');
+    }
     if (out.frozenMoved) warnFrozenMoved(out, cfg);
     for (const rel of out.removed) note(`removed ${rel}`);
 

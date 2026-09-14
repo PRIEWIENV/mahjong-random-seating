@@ -135,7 +135,12 @@ Forseti 会读 `eventConfig.windShuffleMode` 并把它传过去，所以只要�
 
 活动本身必须被标记为 prescripted（活动上的 `is_prescripted`；创建时设置，或者通过 `UpdateEvent`），这样手动和自动排座对它都会被禁用。
 
-修改活动配置的调用需要管理员账号，所以后端在同步这一步需要它自己的 Pantheon 管理员凭证——放在服务器的环境变量里，绝不进仓库，也绝不和上面选手登录那条路径混在一起。Pantheon 配置里非机密的那一半（基础 URL、Twirp 路径模板、服务名）住在 `runtime.json` 里，刻意放在冻结之外：Pantheon 在主机上的位置影响不了抽签。而同步被允许写什么是有影响的，所以 `wind_shuffle_mode` 留在冻结的 `protocol.json` 里（`PROTOCOL.zh.md` §4.1）。
+修改活动配置的调用需要管理员账号，所以同步这一步需要 Pantheon 管理员凭证——绝不进仓库、绝不写日志、绝不被任何端点回显。给它凭证有两条路，环境变量永远优先：
+
+1. **固定的服务账号**，放在 `PANTHEON_ADMIN_PERSON_ID` / `PANTHEON_ADMIN_TOKEN` 里。这是最初的做法，如果不会有活动管理员从页面登录，就用它。
+2. **登录时捕获。** 一位活动管理员从普通页面登录时，已经把密码交给了 Frey，并拿到了同步需要的那个等价于密码的 `auth_token`，而 `Frey.GetOwnedEventIds({person_id})` 能说出他是否管理这场活动。于是登录路径检查它，对管理员就把 token 捕获到 `var/admin-credential.json`（`0600`、已 gitignore）供 finalise 任务读取——手工弄一个管理员 token 是最初几次部署老出错的一步，这一步就此去掉。Frey 的 token 不会过期，所以关闭活动时会把它删掉（`tools/end-event.js`）；和那一步清理的其他东西不同，它在离场前绝不被归档、也绝不被镜像。见 `server/admin-credential.js`。
+
+这是对那堵曾写着「绝不和选手登录路径混在一起」的墙的一次刻意的、狭窄的跨越。那堵墙的存在，是为了让事关公平的登录不依赖管理员写操作，而现在它依然不依赖：捕获是一次无副作用的查询，包裹起来后任何失败都读作「不是管理员」，绝不挡住选手；捕获的是管理员自己的 token；而写操作本身仍然只发生在 finalise 任务里，在抽签已成定局并公示之后。`GetOwnedEventIds` 也决定了页面是否给出组织者面板（`/admin`）——活动管理员用自己的会话就能进，所以 `ADMIN_TOKEN` 现在是可选的。Pantheon 配置里非机密的那一半（基础 URL、Twirp 路径模板、服务名）住在 `runtime.json` 里，刻意放在冻结之外：Pantheon 在主机上的位置影响不了抽签。而同步被允许写什么是有影响的，所以 `wind_shuffle_mode` 留在冻结的 `protocol.json` 里（`PROTOCOL.zh.md` §4.1）。
 
 ## 4. 同步失败的处理
 

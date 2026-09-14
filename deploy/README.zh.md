@@ -98,18 +98,26 @@ MIRROR_REPO=<owner>/<repo>
 MIRROR_BRANCH=main
 MIRROR_TOKEN=github_pat_...
 
-# Pantheon 管理员账号，只用于开奖后的座位表同步。
-# 就是那个账号登录时 Frey 返回的一对值（personId、authToken）。
-PANTHEON_ADMIN_PERSON_ID=...
-PANTHEON_ADMIN_TOKEN=...
-
-# 组织者面板，在 /admin?token=...  （openssl rand -hex 16）
+# 可选 —— 组织者面板，在 /admin?token=...  （openssl rand -hex 16）
+# 通常不需要：任何一位活动管理员用普通页面登录后，就能用自己的会话打开面板。
+# 只有当你想要一个「还没人登录时也能用」的链接、或想从一台没登录的机器打开时才设它。
 ADMIN_TOKEN=...
 ```
 
 ```sh
 chmod 600 .env
 ```
+
+> [!NOTE]
+> **不用再去弄 Pantheon 管理员 token。** 把座位表写回 Pantheon 需要一个「管理这场活动」
+> 的账号。你不必找出它的 token 再粘到这里：当一位活动管理员通过普通页面登录时，服务器
+> 会认出他（Frey `GetOwnedEventIds`）、给他显示组织者面板、并把同步要用的 token 就地捕获
+> —— 以 `0600` 存在 `var/` 里，不写日志、不进仓库。所以唯一的要求是**开奖前有一位活动
+> 管理员登录过一次**，而组织者本来就会登录。用
+> `node tools/check-signin.js --email you@example.com` 的第 3b 步可以确认你自己的账号符合
+> 条件。如果你更想用一个固定的服务账号，就在 `.env` 里设 `PANTHEON_ADMIN_PERSON_ID` 和
+> `PANTHEON_ADMIN_TOKEN`，它会优先于自动捕获的那份。
+> Frey 的 token 永不过期，所以关闭活动（§14）会把捕获的那份删掉。
 
 **`data/runtime.json`**：
 
@@ -277,6 +285,8 @@ node tools/end-event.js
 ```
 
 它把这次尝试——密文、截止时的名单、结果、同步结果、它运行时的冻结文件——归档到 `events/rounds/<target_round>/`，验证每一个摘要，然后才清理 `var/` 和 `events/` 下的现场文件。归档验证不过，什么都不清理。先把服务器停掉（`systemctl --user stop mahjong-relay`）。
+
+它还会删掉 `var/admin-credential.json`，也就是登录时捕获的管理员 token，这个文件从不被归档、也从不被镜像。Frey 的 token 不会过期，所以它跟着活动一起走，而不是留在盘上。下一场活动会重新捕获一份。
 
 > [!WARNING]
 > 先冻结下一场，这一场的 `protocol.json` 就会在归档之前被覆盖。工具会发现并说出来，但证据就不完整了。而且在收尾之前，服务器会拒绝为下一场启动，而不是把上一场的座位表端出来。

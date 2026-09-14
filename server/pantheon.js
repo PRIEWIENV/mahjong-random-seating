@@ -35,6 +35,7 @@
 
 const fs = require('node:fs');
 const { LOCAL_NAME } = require('./runtime');
+const { loadAdminCredential, ADMIN_CREDENTIAL_FILE } = require('./admin-credential');
 
 const DEFAULT_TWIRP_PATH = '/v2/{service}/{method}';
 
@@ -174,10 +175,21 @@ class TwirpPantheon {
     this.pathTemplate = cfg.twirp_path_template || DEFAULT_TWIRP_PATH;
     this.freyService = cfg.frey_service || 'common.Frey';
     this.mimirService = cfg.mimir_service || 'common.Mimir';
-    // Admin credentials for the sync step only. §3: kept in the environment, never in
-    // the repository, and never used on the sign-in path.
-    this.adminPersonId = env.PANTHEON_ADMIN_PERSON_ID ? Number(env.PANTHEON_ADMIN_PERSON_ID) : null;
-    this.adminToken = env.PANTHEON_ADMIN_TOKEN || null;
+    // Admin credentials for the sync step. §3/§4: kept out of the repository. Two
+    // sources, environment first: a fixed service account in PANTHEON_ADMIN_PERSON_ID /
+    // PANTHEON_ADMIN_TOKEN, or — when those are unset — the credential captured when an
+    // event admin signed in through the ordinary page (server/admin-credential.js). The
+    // file is opt-in via opts.adminCredentialFile so a unit test never picks up a
+    // developer's captured token by accident; createPantheon turns it on for the real
+    // server and the finalise job.
+    const captured = opts.adminCredentialFile ? loadAdminCredential(opts.adminCredentialFile) : null;
+    this.adminPersonId = env.PANTHEON_ADMIN_PERSON_ID
+      ? Number(env.PANTHEON_ADMIN_PERSON_ID)
+      : (captured ? Number(captured.person_id) : null);
+    this.adminToken = env.PANTHEON_ADMIN_TOKEN || (captured ? captured.auth_token : null);
+    this.adminCredentialSource = env.PANTHEON_ADMIN_TOKEN ? 'env' : (captured ? 'captured' : null);
+    this.adminCredentialTitle = env.PANTHEON_ADMIN_TOKEN ? null : (captured ? captured.title || null : null);
+    this.adminCredentialAt = env.PANTHEON_ADMIN_TOKEN ? null : (captured ? captured.captured_at || null : null);
     this.timeoutMs = opts.timeoutMs ?? 10_000;
     this.fetch = opts.fetch || globalThis.fetch;
   }
@@ -191,7 +203,8 @@ class TwirpPantheon {
     if (admin) {
       if (!this.adminToken || !this.adminPersonId) {
         throw new PantheonError(
-          'PANTHEON_ADMIN_PERSON_ID and PANTHEON_ADMIN_TOKEN are not set; the seat-plan sync needs an admin account'
+          'the seat-plan sync has no admin credentials: no event admin has signed in to be ' +
+          'captured, and PANTHEON_ADMIN_PERSON_ID / PANTHEON_ADMIN_TOKEN are not set'
         );
       }
       // Header names differ between Pantheon versions; these are the documented ones.
@@ -251,6 +264,25 @@ class TwirpPantheon {
     // unrecognisable body is a refusal rather than — as it was — an implicit yes.
     const ok = field(out, 'auth_success') ?? out.authorized ?? out.success;
     return ok === true;
+  }
+
+  /**
+   * Frey GetOwnedEventIds — the ids of the events this person administers.
+   *
+   * Sign-in uses it for two things (PANTHEON-INTEGRATION.md §4): whether to offer the
+   * organiser's dashboard, and whether to capture this person's token for the seat-plan
+   * sync. A live instance answers it as a plain lookup keyed by person_id, without auth
+   * of its own — but it is only ever called for a person whose token QuickAuthorize has
+   * just accepted, so "does this signed-in person administer the event" is exactly what
+   * the answer means. It must never throw into the sign-in path: a player's sign-in
+   * cannot depend on it, so the caller treats any failure as "not an admin".
+   */
+  async ownedEventIds(personId) {
+    const out = await this.#call(this.freyBase, this.freyService, 'GetOwnedEventIds', {
+      person_id: personId,
+    });
+    const ids = out.eventIds || field(out, 'event_ids') || [];
+    return Array.isArray(ids) ? ids.map(Number) : [];
   }
 
   /**
@@ -324,12 +356,14 @@ class StubPantheon {
    * @param {Array}  [o.extraAccounts]   [{person_id, auth_token, title}] valid but unregistered
    * @param {number} [o.eventId]        the event these players are registered to
    * @param {string} [o.eventTitle]     what Mimir would call the event
+   * @param {Array}  [o.adminPersonIds] person_ids ownedEventIds should report as admins
    *
    * Tokens default to "token-<person_id>"; a test that needs a specific one writes it
    * into `accounts` after construction.
    */
-  constructor({ roster, extraAccounts = [], eventId, eventTitle } = {}) {
+  constructor({ roster, extraAccounts = [], eventId, eventTitle, adminPersonIds = [] } = {}) {
     this.eventId = eventId ?? roster?.pantheon_event_id ?? 42;
+    this.adminPersonIds = new Set((adminPersonIds || []).map(Number));
     this.registered = (roster?.players || []).map((p) => ({
       person_id: p.person_id, title: p.title, local_id: p.local_id,
       // Carried through rather than forced false: someone attending but not playing is
@@ -350,6 +384,11 @@ class StubPantheon {
   async verifyToken(personId, authToken) {
     this.calls.push(['verifyToken', personId]);
     return this.accounts.get(personId) === authToken;
+  }
+
+  async ownedEventIds(personId) {
+    this.calls.push(['ownedEventIds', personId]);
+    return this.adminPersonIds.has(Number(personId)) ? [this.eventId] : [];
   }
 
   async getEventRoster(eventId) {
@@ -405,10 +444,21 @@ function createPantheon(cfg, env = process.env, opts = {}) {
       // it, and an operator's runtime.json still wins over both.
       eventTitle: env.PANTHEON_STUB_EVENT_TITLE
         || `Stub event ${seed?.pantheon_event_id ?? 42}`,
+      // Which stub accounts count as event admins, so rehearse.js and demo.js can
+      // exercise the organiser dashboard and the is_admin flag without a real Pantheon.
+      adminPersonIds: (env.PANTHEON_STUB_ADMIN_IDS || '')
+        .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0),
       ...opts,
     });
   }
-  return new TwirpPantheon(cfg?.runtime?.pantheon || {}, env, opts);
+  // The real client reads a captured admin credential (server/admin-credential.js) as a
+  // fallback for the sync when PANTHEON_ADMIN_TOKEN is unset. opt-in via this path so it
+  // is on for the server and finalise job and off in tests that construct the class
+  // directly. A caller may pass adminCredentialFile: null to force it off.
+  return new TwirpPantheon(cfg?.runtime?.pantheon || {}, env, {
+    adminCredentialFile: ADMIN_CREDENTIAL_FILE,
+    ...opts,
+  });
 }
 
 module.exports = {

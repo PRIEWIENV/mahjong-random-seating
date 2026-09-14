@@ -31,6 +31,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { writeLocal } = require('./mirror');
+const { clearAdminCredential, adminCredentialFileIn } = require('./admin-credential');
 
 const ROUNDS_DIR = 'events/rounds';
 const INDEX_PATH = `${ROUNDS_DIR}/index.json`;
@@ -426,6 +427,8 @@ function endEvent(cfg, store, opts = {}) {
       willArchive: { submissions: rows.length, files: live, already: existing },
       removed: live,
       cleared: rows.length,
+      // Reported, never touched here: a dry run deletes nothing, least of all a secret.
+      credentialCleared: fs.existsSync(adminCredentialFileIn(cfg.root)),
     };
   }
 
@@ -454,9 +457,18 @@ function endEvent(cfg, store, opts = {}) {
   }
   const cleared = store.clearRound();
 
+  // The seat-plan sync's captured admin credential (server/admin-credential.js). Kept out
+  // of `removed` and out of LIVE_FILES on purpose: those are archived and mirrored before
+  // they are cleared, and this is the one file that must never be archived anywhere. It
+  // is deleted for the opposite reason to everything above — not because the evidence is
+  // safely stored, but because a password-equivalent token that does not expire has no
+  // business outliving the event it was captured for.
+  const credentialCleared = clearAdminCredential(adminCredentialFileIn(cfg.root));
+
   log.info?.(`[rounds] event closed: round ${targetRound} archived as ${status}, ` +
-    `${cleared} submission(s) and ${removed.length} live path(s) cleared`);
-  return { ok: true, status, targetRound, frozenMoved, archived: check.manifest, cleared, removed };
+    `${cleared} submission(s) and ${removed.length} live path(s) cleared` +
+    (credentialCleared ? ', captured admin credential deleted' : ''));
+  return { ok: true, status, targetRound, frozenMoved, archived: check.manifest, cleared, removed, credentialCleared };
 }
 
 module.exports = {

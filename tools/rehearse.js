@@ -300,6 +300,9 @@ async function main(argv) {
       cwd: dir,
       env: {
         ...process.env, ...env, PORT: String(port), ADMIN_TOKEN: adminToken,
+        // Player 1 administers the event (Frey GetOwnedEventIds, stood in for here), so
+        // the dashboard-by-identity path is exercised alongside the token one.
+        PANTHEON_STUB_ADMIN_IDS: String(EVENT.players[0].person_id),
         // The deployed default is that the server draws, on its own timer. Five seconds
         // rather than sixty only so the rehearsal is not mostly spent waiting for a
         // tick; everything else about the path is the shipped one.
@@ -339,6 +342,31 @@ async function main(argv) {
     assert.equal(child.exitCode, null, 'the server exited after logging that it had started');
     ok(`server up on ${base}, event ${EVENT_ID}, admin dashboard enabled, /api/status answering`);
     note('it also runs the draw itself, every 5s here — that is the deployed default');
+
+    // The dashboard follows Pantheon identity, not only ADMIN_TOKEN: player 1 is an event
+    // admin, so their ordinary session opens /admin, and a player's session does not.
+    {
+      const asAdmin = await fetch(`${base}/api/session`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ person_id: roster.players[0].person_id, auth_token: `token-${roster.players[0].person_id}` }),
+      });
+      const adminBody = await asAdmin.json();
+      assert.equal(adminBody.is_admin, true, 'the event admin must sign in with is_admin set');
+      const adminCookie = asAdmin.headers.getSetCookie?.()[0].split(';')[0];
+      const openBySession = await fetch(`${base}/admin`, { headers: { cookie: adminCookie } });
+      assert.equal(openBySession.status, 200, 'an admin session must open /admin with no token');
+
+      const asPlayer = await fetch(`${base}/api/session`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ person_id: roster.players[1].person_id, auth_token: `token-${roster.players[1].person_id}` }),
+      });
+      const playerBody = await asPlayer.json();
+      assert.equal(playerBody.is_admin, false, 'an ordinary player is not an admin');
+      const playerCookie = asPlayer.headers.getSetCookie?.()[0].split(';')[0];
+      const denied = await fetch(`${base}/admin`, { headers: { cookie: playerCookie } });
+      assert.equal(denied.status, 404, 'a player session must not open /admin');
+      ok('the dashboard follows Pantheon identity: admin session opens /admin, a player session gets 404');
+    }
 
     const { load } = require('../server/config');
     const cfg = load({ dataDir: path.join(dir, 'data') });

@@ -47,6 +47,7 @@ const { startScheduler } = require('./schedule');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
+const { saveAdminCredential, loadAdminCredential } = require('./admin-credential');
 const { readIndex, attemptsInThisRun, ROUNDS_DIR } = require('./rounds');
 const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
 
@@ -500,9 +501,37 @@ function createServer(opts = {}) {
       });
     }
 
-    const token = store.createSession(frozen.local_id, personId, nowFn());
-    log.info?.(`[session] local_id ${frozen.local_id} (${frozen.title}) signed in`);
-    return sendJson(res, 200, { local_id: frozen.local_id, title: frozen.title, submitted: Boolean(store.getSubmission(frozen.local_id)) }, {
+    // 4. does this person administer the event? Non-fatal: a player's sign-in must never
+    // depend on it (PANTHEON-INTEGRATION.md §4), so any failure reads as "not an admin".
+    // When they are an admin, flag the session so /admin opens for them and the page
+    // offers the link, and — against a real Pantheon only — capture their token for the
+    // post-draw seat-plan sync so no admin token has to be pasted into .env by hand. The
+    // stub is skipped on purpose: its token is a fake that would poison a later real sync.
+    let isAdmin = false;
+    try {
+      const owned = await pantheon.ownedEventIds(personId);
+      isAdmin = owned.map(Number).includes(Number(cfg.roster.pantheon_event_id));
+    } catch (err) {
+      log.warn?.(`[session] admin check skipped: ${err.message}`);
+    }
+    if (isAdmin && !isStub) {
+      try {
+        saveAdminCredential({
+          person_id: personId,
+          auth_token: authToken,
+          event_id: cfg.roster.pantheon_event_id,
+          title: frozen.title,
+          captured_at: new Date().toISOString(),
+        });
+        log.info?.(`[session] captured admin credential from ${frozen.title} for the seat-plan sync`);
+      } catch (err) {
+        log.warn?.(`[session] could not store admin credential: ${err.message}`);
+      }
+    }
+
+    const token = store.createSession(frozen.local_id, personId, nowFn(), isAdmin);
+    log.info?.(`[session] local_id ${frozen.local_id} (${frozen.title}) signed in${isAdmin ? ' (event admin)' : ''}`);
+    return sendJson(res, 200, { local_id: frozen.local_id, title: frozen.title, submitted: Boolean(store.getSubmission(frozen.local_id)), is_admin: isAdmin }, {
       'set-cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}${secureCookie ? '; Secure' : ''}`,
     });
   }
@@ -616,11 +645,27 @@ function createServer(opts = {}) {
   // that away for a convenience nobody needs, since the organiser is already on the box
   // when they run tools/new-round.js.
   function adminAuthorised(req, url) {
+    // An event admin who signed in through the ordinary page (Frey GetOwnedEventIds said
+    // they administer this event) reaches the dashboard with their own session cookie —
+    // no separate token to set or share. This is what makes ADMIN_TOKEN optional.
+    const sess = currentSession(req);
+    if (sess && sess.is_admin) return true;
+    // ADMIN_TOKEN is the other way in: an operator on the box who is not (or not yet) a
+    // signed-in admin, and the path the query-string link and the mjs_admin cookie use.
     if (!adminToken) return false;
     const supplied = url.searchParams.get('token') || parseCookies(req.headers.cookie)[ADMIN_COOKIE];
     if (typeof supplied !== 'string' || supplied.length !== adminToken.length) return false;
     // Constant time, so the page cannot be used as an oracle for guessing the token.
     return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(adminToken));
+  }
+
+  // Where the seat-plan sync's admin credential comes from, for the dashboard — never
+  // the token itself, only its source. A fixed service account in the environment wins;
+  // otherwise it is whatever an event admin's sign-in captured (server/admin-credential.js).
+  function adminCredentialStatus() {
+    if (process.env.PANTHEON_ADMIN_TOKEN && process.env.PANTHEON_ADMIN_PERSON_ID) return { source: 'env' };
+    const c = loadAdminCredential();
+    return c ? { source: 'captured', title: c.title || null, at: c.captured_at || null } : { source: null };
   }
 
   function admin(req, res, url) {
@@ -634,6 +679,7 @@ function createServer(opts = {}) {
       isStub, mirror, publicDir, now: nowFn(),
       production: secureCookie,
       overTls: overTls(req),
+      adminCredential: adminCredentialStatus(),
     });
     if (url.pathname === '/admin/data.json') return sendJson(res, 200, model);
 
@@ -752,6 +798,7 @@ function createServer(opts = {}) {
           local_id: sess.local_id,
           title: who?.title,
           submitted: Boolean(store.getSubmission(sess.local_id)),
+          is_admin: Boolean(sess.is_admin),
         });
       }
 
@@ -1032,10 +1079,14 @@ if (require.main === module) {
         'to the URL players resolve, and add that origin to the CSP connect-src of the proxy.'
       );
     }
+    // The dashboard is reachable two ways (server/admin.js): any event admin who signs
+    // in through the ordinary page opens it with their own session, and ADMIN_TOKEN is
+    // the fixed backup for an operator on the box. So it is only truly disabled when the
+    // adapter is the stub and no token is set.
     console.info(
       process.env.ADMIN_TOKEN
-        ? `[server] admin dashboard at /admin?token=… (RUNBOOK C/D)`
-        : '[server] admin dashboard disabled (set ADMIN_TOKEN to enable /admin)'
+        ? '[server] admin dashboard at /admin?token=… , or for any event admin who signs in (RUNBOOK C/D)'
+        : '[server] admin dashboard opens for any event admin who signs in; set ADMIN_TOKEN for token access too'
     );
     // Serving the page and running the draw are two different programs. This one starts
     // the other on a timer unless told not to, because the failure it replaces is

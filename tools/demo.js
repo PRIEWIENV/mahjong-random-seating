@@ -119,7 +119,12 @@ async function main(argv) {
     const adminToken = require('node:crypto').randomBytes(12).toString('hex');
     child = spawn(process.execPath, ['server/server.js'], {
       cwd: dir,
-      env: { ...process.env, ...env, PORT: String(port), ADMIN_TOKEN: adminToken, FINALISE_INTERVAL_SECONDS: '5' },
+      env: {
+        ...process.env, ...env, PORT: String(port), ADMIN_TOKEN: adminToken, FINALISE_INTERVAL_SECONDS: '5',
+        // You (player 1) administer the event, so the header shows the organiser panel
+        // once you sign in — the same thing a real event admin sees.
+        PANTHEON_STUB_ADMIN_IDS: String(EVENT.players[0].person_id),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let lastShown = '';
@@ -153,12 +158,14 @@ async function main(argv) {
     console.log(`
   ${bold('Open')}   ${base}
 
-  You are player 1, ${TITLES[0]}: sign in with person_id ${EVENT.players[0].person_id}. The other eleven are
-  simulated and will submit over the next minute or so. Submissions close at ${clock(cutoff)};
-  the beacon lands and the draw runs at about ${clock(drawAt)}. Any id from ${EVENT.players[0].person_id} to
+  You are player 1, ${TITLES[0]}: sign in with person_id ${EVENT.players[0].person_id}. You also administer this
+  event, so once you sign in the header shows an "Organiser panel" link — that is the
+  dashboard, opened by who you are, no token to copy. The other eleven are simulated and
+  will submit over the next minute or so. Submissions close at ${clock(cutoff)}; the beacon
+  lands and the draw runs at about ${clock(drawAt)}. Any id from ${EVENT.players[0].person_id} to
   ${EVENT.players[11].person_id} can sign in, so a second tab can be a second player.
 
-  Organiser's dashboard: ${base}/admin?token=${adminToken}
+  Organiser's dashboard (also reachable by token): ${base}/admin?token=${adminToken}
 
   Ctrl+C when you are done. The copy this runs in is removed; nothing here is kept.
 `);

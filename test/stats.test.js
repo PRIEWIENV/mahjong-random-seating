@@ -248,7 +248,7 @@ test('admin calls carry the event scope Mimir checks rights against', async () =
 
 test('the sync path refuses to run without admin credentials', async () => {
   const p = new TwirpPantheon({}, {}, { fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }) });
-  await assert.rejects(() => p.setPrescript(42, 'x'), /admin account/);
+  await assert.rejects(() => p.setPrescript(42, 'x'), /no admin credentials/);
   // …but the player sign-in path needs none of that (§3: never mixed).
   await assert.doesNotReject(() => p.verifyToken(1, 'tok'));
 });

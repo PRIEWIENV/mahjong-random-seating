@@ -220,6 +220,9 @@ function checksFor(over) {
     mirror: { enabled: true, repo: 'me/repo', branch: 'main' },
     production: true,
     overTls: true,
+    // A clean production deployment has a sync credential — a fixed service account here,
+    // or one an admin's sign-in captured. Tests that care about the empty case override it.
+    adminCredential: { source: 'env' },
     ...rest,
   });
   cleanup(fx.dir);

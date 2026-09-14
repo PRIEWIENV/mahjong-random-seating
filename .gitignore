@@ -12,6 +12,10 @@
 secrets
 *.env
 .env*
+# The admin credential captured at sign-in (server/admin-credential.js). It lives in
+# var/ (ignored below) but is named here too, so relocating it can never publish a
+# password-equivalent token by accident.
+admin-credential.json
 
 # One event's data, not source. These two are the public commitment and they MUST be
 # committed and tagged — in the OPERATOR's repository, by tools/freeze.js, which adds

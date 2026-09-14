@@ -128,18 +128,29 @@ MIRROR_REPO=<owner>/<repo>
 MIRROR_BRANCH=main
 MIRROR_TOKEN=github_pat_...
 
-# The Pantheon admin account, for the seat-plan sync after the draw only.
-# The pair Frey returns when that account signs in (personId, authToken).
-PANTHEON_ADMIN_PERSON_ID=...
-PANTHEON_ADMIN_TOKEN=...
-
-# The organiser's dashboard at /admin?token=...  (openssl rand -hex 16)
+# OPTIONAL — the organiser's dashboard at /admin?token=...  (openssl rand -hex 16)
+# You usually do not need this: any event admin who signs in through the ordinary page
+# opens the dashboard with their own session. Set it only if you want a link that works
+# before anyone has signed in, or from a machine that is not signed in.
 ADMIN_TOKEN=...
 ```
 
 ```sh
 chmod 600 .env
 ```
+
+> [!NOTE]
+> **No Pantheon admin token to obtain.** Writing the seat plan back to Pantheon needs an
+> account that administers the event. You do not have to find its token and paste it
+> here: when an event admin signs in through the ordinary page, the server recognises
+> them (Frey `GetOwnedEventIds`), shows them the organiser panel, and captures the token
+> the sync needs — stored `0600` in `var/`, never logged, never committed. So the one
+> requirement is that **an event admin signs in at some point before the draw**, which
+> the organiser does anyway. Confirm your own account qualifies with
+> `node tools/check-signin.js --email you@example.com` (step 3b). If you would rather use
+> a fixed service account instead, set `PANTHEON_ADMIN_PERSON_ID` and
+> `PANTHEON_ADMIN_TOKEN` in `.env` and that wins over the captured one.
+> Frey's tokens never expire, so closing the event (§14) deletes the captured one.
 
 **`data/runtime.json`**:
 
@@ -352,6 +363,10 @@ It archives the attempt — ciphertexts, the cutoff roll, the result, the sync o
 frozen files it ran under — into `events/rounds/<target_round>/`, verifies every digest,
 and only then clears `var/` and the live files under `events/`. If the archive does not
 verify, nothing is cleared. Stop the server first (`systemctl --user stop mahjong-relay`).
+
+It also deletes `var/admin-credential.json`, the admin token captured at sign-in, which
+is never archived or mirrored. Frey's tokens do not expire, so it goes with the event
+rather than staying on disk. The next event captures a fresh one.
 
 > [!WARNING]
 > Freeze the next event first and this event's `protocol.json` is overwritten before it
