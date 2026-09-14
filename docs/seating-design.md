@@ -132,9 +132,9 @@ The properties asked for above follow. Nobody can steer the draw, because at the
 
 One practical note. The draw goes ahead once at least eight of the twelve have submitted, since a single honest contribution is already enough to make the result unpredictable. This is mainly about tolerating what happens in practice: the availability of the whole system should not be staked on all twelve people submitting on time.
 
-## From twelve submissions to one seating chart
+## The protocol in detail
 
-This section is the whole computation, step by step, with the exact formulas. Everything here is deterministic: the same inputs must produce a byte-identical seating chart, or two people checking the draw would reach different answers and the verifiability property would be worthless.
+This section sets the protocol out in detail, with the exact formulas. Everything here is deterministic: the same inputs must produce a byte-identical seating chart, or two people checking the draw would reach different answers, which would contradict the verifiability claimed above.
 
 Write `‖` for "join these bytes together" and `SEP` for the single byte `0x1F`, the ASCII unit separator. `SHA256` is the [SHA-256](https://en.wikipedia.org/wiki/SHA-2) hash function, which turns any input into 32 bytes.
 
@@ -149,7 +149,7 @@ flowchart LR
   G --> H["pi places people<br/>on the template"]
 ```
 
-### Step 1 — what each player actually submits
+### Step 1 — the player picks a number and submits a ciphertext
 
 When a player types a number `n`, their browser does not seal `n` on its own. It builds a payload of four fields:
 
@@ -160,11 +160,11 @@ When a player types a number `n`, their browser does not seal `n` on its own. It
 | `client_nonce` | 16 random bytes the browser generates |
 | `client_timestamp` | when the browser sealed it, ISO-8601 |
 
-The nonce is why a player who picks `7` contributes just as much unpredictability as one who rolls dice: the browser's 16 random bytes are in there too. It is also what stops anyone guessing a submission from its ciphertext — without it, someone could seal all 256 possible numbers and compare.
+The nonce is why a player who picks `7` contributes just as much randomness as one who rolls dice: the browser's own 16 random bytes are folded in as well. It is also what stops anyone guessing a submission from its ciphertext — without it, someone could seal all 256 possible numbers and compare them against it.
 
-That payload is then timelock-encrypted to the target beacon round, and the ciphertext is published immediately. Publishing it right away is what commits the player to it.
+That payload is then timelock-encrypted to the target beacon round, and the ciphertext is published immediately. Publishing it right away is a step that **commits** the player to that submission.
 
-### Step 2 — one contribution per player
+### Step 2 — open the ciphertexts
 
 At the target round the beacon value appears, every ciphertext opens, and each payload becomes one 32-byte **contribution**:
 
@@ -197,7 +197,7 @@ The order matters, and it is hash first, XOR second. XOR does not mix across bit
 
 ### Step 4 — derive the seed
 
-`R` alone is not the seed. The beacon signature and the list of who took part are folded in:
+`R` alone is not yet the random seed. The beacon signature and the list of who took part are added to it:
 
 ```
 seed = SHA256(
@@ -208,11 +208,11 @@ seed = SHA256(
 )
 ```
 
-The `signature` is drand's [BLS signature](https://en.wikipedia.org/wiki/BLS_digital_signature) for the target round — the same value that opened the ciphertexts. Folding it in means the draw does not rest on the twelve browsers alone: even if every player colluded, they would still not know the beacon value when they submitted. Including `local_ids` means a draw among a different set of participants is a different draw, even with identical numbers.
+The `signature` is drand's [BLS signature](https://en.wikipedia.org/wiki/BLS_digital_signature) for the target round — the same value that opened the ciphertexts. Adding it in means the draw does not rest on the twelve browsers alone: even if every player colluded, they would still not know the beacon value when they submitted. Including `local_ids` is there to tell one draw from another: a draw among a different set of participants is a different draw, even with identical numbers.
 
 ### Step 5 — turn the seed into random numbers
 
-The seed is 32 bytes; a shuffle needs a stream. The stream is SHA-256 in counter mode:
+The random seed is 32 bytes; a shuffle needs a stream. The stream is SHA-256 in counter mode:
 
 ```
 block(i) = SHA256(seed ‖ uint32be(i)),  for i = 0, 1, 2, …
@@ -248,7 +248,7 @@ Fisher-Yates with an exactly uniform source produces each of the 12! = 479,001,6
 pi[k] = the local_id seated on abstract point k of the template   (k = 0..11)
 ```
 
-### Step 7 — place people on the template
+### Step 7 — apply the template
 
 The template is fixed and public. It says, for every round, which abstract point 0–11 sits at which table in which wind. Step 6 said which person is on which point. Composing the two gives the seating chart:
 
@@ -256,7 +256,7 @@ The template is fixed and public. It says, for every round, which abstract point
 seat(round, table, wind) = pi[ template[round][table][wind] ]
 ```
 
-And that is the whole draw. No step in it is a choice.
+And that is the whole draw.
 
 ### A worked example
 
@@ -268,7 +268,7 @@ Real numbers, reproducible by hand. Twelve players submit, and for the sake of t
 | 2 | 42 | `0202…02` | `2026-09-12T20:00:01Z` |
 | 3 | 13 | `0303…03` | `2026-09-12T20:00:02Z` |
 | … | … | … | … |
-| 12 | 77 | `0c0c…0c` | `2026-09-12T20:00:01Z` |
+| 12 | 77 | `0c0c…0c` | `2026-09-12T20:00:11Z` |
 
 The remaining numbers are 88, 3, 100, 21, 55, 9, 64, 30 for players 4 to 11. Step 2 gives each player a contribution; the first three are:
 
@@ -281,9 +281,9 @@ c_3 = cadc54ed7465200610b2be310b8efc49995c0a5387575ebe8842ef9d1bf7cf76
 Step 3 XORs all twelve. Watching just the first byte as each contribution goes in:
 
 ```
-0b → c2 → 08 → 98 → e2 → 59 → 6b → 7d → 36 → 61 → 53 → 0a
+0b → c2 → 08 → 98 → e2 → 59 → 6b → 7d → 36 → 61 → 14 → 17
 
-R = 0ae8acfc6d188e2fd7fb163bcbaf418e912441c3f2af9db5139f835028fee716
+R = 17b4ab1349f8060ff31c2c739f7ff4c37d510329c3a9d78a3c89de9c76338052
 ```
 
 Step 4 folds in the beacon. Taking drand quicknet round 1,000,000, whose signature is public:
@@ -292,16 +292,16 @@ Step 4 folds in the beacon. Taking drand quicknet round 1,000,000, whose signatu
 signature = 83ad29e4c409f9470fc2ef02f90214df49e02b441a1a241a82d622d9f608ef98
             fd8b11a029f1bee9d9e83b45088abe72
 
-seed      = 3ba654a6c2fb12c3e9bb71ae6afc6351c3387fe828955ca5ac965a247941b1ea
+seed      = 75c55c877d1b5e279a2b5629de7b041dedc5dadda05e64b3c62fbb2954d1cd30
 ```
 
 Steps 5 and 6 turn that seed into the permutation:
 
 ```
-pi = [8, 10, 9, 6, 3, 1, 2, 4, 5, 11, 7, 12]
+pi = [2, 4, 8, 7, 10, 6, 12, 5, 1, 11, 3, 9]
 ```
 
-Read it as: template point 0 is player 8, point 1 is player 10, point 2 is player 9, and so on. Step 7 then reads the template — round 1, table 1 is points 0, 1, 2, 3 in E/S/W/N order — so in round 1 player 8 sits East at table 1, player 10 South, player 9 West, player 6 North.
+Read it as: template point 0 is player 2, point 1 is player 4, point 2 is player 8, and so on. Step 7 then reads the template — round 1, table 1 is points 0, 1, 2, 3 in E/S/W/N order — so in round 1 player 2 sits East at table 1, player 4 South, player 8 West, player 7 North.
 
 Change any single input and everything after it changes completely: one player typing 8 instead of 7 gives a different `c_1`, a different `R`, a different seed, and an unrelated permutation. That is what makes the draw unsteerable, and it is also why the published inputs are enough for anyone to check the output.
 
