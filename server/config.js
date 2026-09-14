@@ -155,6 +155,20 @@ function validateProtocol(p) {
         'cannot verify it is talking to the right chain.'
     );
   }
+  // Optional, and deliberately not in `required`: every protocol.json written before it
+  // existed lacks it, and none of them is wrong. tools/pick-round.js --write stamps it
+  // with the moment the round was chosen, which is the moment the window opened. The
+  // waiting page draws its timeline from it; nothing reads it that can change an outcome.
+  // Validated when present, because a start after the cutoff would draw a bar backwards.
+  if (p.submission_opens_utc !== undefined && p.submission_opens_utc !== null && p.submission_opens_utc !== '') {
+    const opens = Date.parse(p.submission_opens_utc);
+    if (!Number.isFinite(opens)) {
+      throw new Error(`protocol.json: submission_opens_utc must be an ISO-8601 instant, got ${JSON.stringify(p.submission_opens_utc)}`);
+    }
+    if (opens >= Date.parse(p.submission_cutoff_utc)) {
+      throw new Error('protocol.json: submission_opens_utc must be before submission_cutoff_utc — the window cannot close before it opens');
+    }
+  }
   if (!Number.isInteger(p.total_slots) || p.total_slots < 1) throw new Error('protocol.json: bad total_slots');
   if (!Number.isInteger(p.quorum) || p.quorum < 1 || p.quorum > p.total_slots) {
     throw new Error(`protocol.json: quorum must be in 1..${p.total_slots}`);

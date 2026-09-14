@@ -15,20 +15,35 @@ import { formatExact, split } from '../clock';
  *   submissions open ─────●───── cutoff ───── the beacon lands
  *                                 └── reveal_gap_seconds ──┘
  *
- * The right-hand segment has a real duration, `reveal_gap_seconds`, and is drawn to
- * scale. The left-hand one has no honest origin — submissions may have opened a
- * fortnight ago — so it is drawn as one reveal-gap of lead-in, and while now is earlier
- * than that the marker pins to the left edge and says so. A bar that invented a start
- * date would be the same lie as an invented progress bar.
+ * `submission_opens_utc` (stamped by tools/pick-round.js) gives the left-hand segment a
+ * real origin, so the whole span is real and the marker moves in proportion to time
+ * actually elapsed. It used to have none — submissions may have opened a fortnight ago —
+ * and was drawn as one reveal-gap of lead-in, which meant the marker sat pinned to the
+ * left edge for three days and then crossed the entire bar in the last minute. A bar
+ * that appears not to be running is its own kind of lie.
  *
- * The state and the time remaining sit in the card's own header rather than floating
- * over the marker: a label riding a marker that reaches either end has nowhere to go.
+ * The sealed segment keeps a floor on its share of the width. Drawn at its true
+ * proportion, a sixty-second gap inside a seventy-two-hour window is 0.02% of the track:
+ * the cutoff mark would land on top of the draw mark, and the segment whose whole purpose
+ * is to be visible would have no pixels. So the submission window is to scale, the gap is
+ * to scale whenever it is at least MIN_GAP_SHARE of the whole, and below that the gap is
+ * floored and the window takes the rest. The marker stays continuous either way, because
+ * it is interpolated within whichever segment now is in.
+ *
+ * A protocol.json frozen before the field existed still works: without an origin the old
+ * synthetic lead-in is used and the start label says the window opened earlier, rather
+ * than inventing a date.
+ *
+ * The state and the time remaining sit together in the card's header, the countdown
+ * beside the state it belongs to. It used to sit at the far right of the card, which put
+ * it directly above the "the draw" label and read as a countdown to the draw when it is
+ * a countdown to the cutoff.
  */
 
 const TEXT = {
   zh: {
     open: '提交开放',
-    cutoff: '封存截止',
+    cutoff: '提交截止',
     draw: '开奖',
     nowOpen: '提交进行中',
     nowSealed: '已封存，等待信标',
@@ -44,7 +59,7 @@ const TEXT = {
   },
   en: {
     open: 'Submissions open',
-    cutoff: 'Sealed',
+    cutoff: 'Submissions close',
     draw: 'The draw',
     nowOpen: 'Open for submissions',
     nowSealed: 'Sealed, waiting for the beacon',
@@ -60,7 +75,15 @@ const TEXT = {
   },
 };
 
-const pct = (n) => `${Math.max(0, Math.min(100, n * 100)).toFixed(2)}%`;
+const clamp01 = (n) => Math.max(0, Math.min(1, n));
+const pct = (n) => `${(clamp01(n) * 100).toFixed(2)}%`;
+
+/**
+ * The least share of the track the sealed segment may have. See the note above: at its
+ * true proportion a one-minute gap in a three-day window is invisible, and an invisible
+ * segment cannot carry the mark and the label that are the point of drawing it.
+ */
+const MIN_GAP_SHARE = 0.18;
 
 export default function Timeline({ status, now }) {
   const lang = useLang();
@@ -70,16 +93,33 @@ export default function Timeline({ status, now }) {
   const drawMs = Date.parse(status.target_round_utc);
   if (!Number.isFinite(cutoffMs) || !Number.isFinite(drawMs)) return null;
 
-  // The gap the protocol actually fixed, not the difference between two parsed strings:
-  // they agree, and where they do not it is the protocol that is right.
-  const gapMs = Math.max((status.reveal_gap_seconds || 0) * 1000, drawMs - cutoffMs, 60_000);
-  const leadMs = gapMs; // the drawn lead-in; see the note above
-  const spanMs = leadMs + gapMs;
-  const startMs = cutoffMs - leadMs;
+  // The real origin, when the freeze recorded one.
+  const openMs = Date.parse(status.submission_opens_utc || '');
+  const toScale = Number.isFinite(openMs) && openMs < cutoffMs;
 
-  const clipped = now < startMs;
-  const position = Math.max(0, Math.min(1, (now - startMs) / spanMs));
-  const cutoffAt = leadMs / spanMs;
+  let cutoffAt;
+  let position;
+  let clipped;
+  if (toScale) {
+    const spanMs = drawMs - openMs;
+    const sealedMs = Math.max(drawMs - cutoffMs, 1);
+    const gapShare = Math.min(0.5, Math.max(sealedMs / spanMs, MIN_GAP_SHARE));
+    cutoffAt = 1 - gapShare;
+    clipped = now < openMs;
+    position = now <= cutoffMs
+      ? cutoffAt * clamp01((now - openMs) / (cutoffMs - openMs))
+      : cutoffAt + gapShare * clamp01((now - cutoffMs) / sealedMs);
+  } else {
+    // No origin was frozen. The gap the protocol actually fixed, not the difference
+    // between two parsed strings: they agree, and where they do not the protocol is right.
+    const gapMs = Math.max((status.reveal_gap_seconds || 0) * 1000, drawMs - cutoffMs, 60_000);
+    const spanMs = gapMs * 2;
+    const startMs = cutoffMs - gapMs;
+    cutoffAt = 0.5;
+    clipped = now < startMs;
+    position = clamp01((now - startMs) / spanMs);
+  }
+  position = clamp01(position);
 
   const sealed = now >= cutoffMs;
   const drawing = now >= drawMs;
@@ -89,6 +129,7 @@ export default function Timeline({ status, now }) {
 
   const cutoffExact = formatExact(status.cutoff_utc, lang);
   const drawExact = formatExact(status.target_round_utc, lang);
+  const openExact = toScale ? formatExact(status.submission_opens_utc, lang) : null;
 
   const latest = status.drand?.latest_round;
   const toGo = Number.isFinite(latest) ? status.target_round - latest : null;
@@ -108,6 +149,20 @@ export default function Timeline({ status, now }) {
         {target != null && <span className="tl-left">{t.left(d, h, m, s)}</span>}
       </div>
 
+      {/* The cutoff is an interior mark, so its label rides above the track centred on
+          it. In the row below it could only ever be centred between its neighbours,
+          which is a different position from the line it names and drifts with their
+          widths. Below the wide breakpoint this becomes an ordinary line above the
+          track, because three dated labels never fit across a phone. */}
+      <div className="tl-caption">
+        <span className="tl-label cutoff" style={{ left: pct(cutoffAt) }}>
+          <span className="tl-name">{t.cutoff}</span>
+          {cutoffExact && (
+            <span className="tl-when">{cutoffExact.local}<em>{cutoffExact.offset}</em></span>
+          )}
+        </span>
+      </div>
+
       <div className="tl-track" role="img" aria-label={stateLabel}>
         <div className="tl-fill" style={{ width: pct(position) }} />
         <span className="tl-stop cutoff" style={{ left: pct(cutoffAt) }} />
@@ -115,16 +170,13 @@ export default function Timeline({ status, now }) {
         <span className={clipped ? 'tl-dot clipped' : 'tl-dot'} style={{ left: pct(position) }} />
       </div>
 
+      {/* The two ends, each against the edge it names. */}
       <div className="tl-labels">
         <div className="tl-label start">
           <span className="tl-name">{t.open}</span>
-          {clipped && <span className="tl-when">{t.earlier}</span>}
-        </div>
-        <div className="tl-label cutoff">
-          <span className="tl-name">{t.cutoff}</span>
-          {cutoffExact && (
-            <span className="tl-when">{cutoffExact.local}<em>{cutoffExact.offset}</em></span>
-          )}
+          {openExact
+            ? <span className="tl-when">{openExact.local}<em>{openExact.offset}</em></span>
+            : <span className="tl-when">{t.earlier}</span>}
         </div>
         <div className="tl-label draw">
           <span className="tl-name">{t.draw}</span>

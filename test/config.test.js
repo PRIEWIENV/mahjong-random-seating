@@ -318,6 +318,27 @@ test('a missing interval names the command that writes it', () => {
   cleanup(fx.dir);
 });
 
+test('the window origin is optional, validated when present, and refused when backwards', () => {
+  // Optional: every protocol.json written before the field existed lacks it. Present:
+  // it has to be a real instant before the cutoff, or the waiting page draws a bar that
+  // runs backwards from a date nobody chose.
+  const fx = makeDataDir({});
+  const file = path.join(fx.dataDir, 'protocol.json');
+  const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+  delete p.submission_opens_utc;
+  fs.writeFileSync(file, JSON.stringify(p, null, 2));
+  assert.ok(load({ dataDir: fx.dataDir }).protocol, 'absence must not be an error');
+
+  fs.writeFileSync(file, JSON.stringify({ ...p, submission_opens_utc: 'the day before' }, null, 2));
+  assert.throws(() => load({ dataDir: fx.dataDir }), /ISO-8601/);
+
+  const after = new Date(Date.parse(p.submission_cutoff_utc) + 1000).toISOString();
+  fs.writeFileSync(file, JSON.stringify({ ...p, submission_opens_utc: after }, null, 2));
+  assert.throws(() => load({ dataDir: fx.dataDir }), /before submission_cutoff_utc/);
+  cleanup(fx.dir);
+});
+
 test('the shipped example carries an interval, so a copy of it is not silently wrong', () => {
   const example = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'data', 'protocol.example.json'), 'utf8'));

@@ -109,6 +109,7 @@ async function main() {
   console.log(`  target_round             ${round}`);
   console.log(`  target_round_utc         ${roundUtc}`);
   console.log(`  submission_cutoff_utc    ${cutoff}`);
+  console.log(`  submission_opens_utc     now  (--write stamps it; the timeline starts here)`);
   console.log(`  reveal_gap_seconds       ${gapSec}  (the roll is fixed this long before the key)`);
   console.log(`  window from now          ${((cutoffMs - Date.now()) / 3_600_000).toFixed(1)} hours`);
 
@@ -133,12 +134,17 @@ async function main() {
     protocol.target_round_utc = roundUtc;
     protocol.submission_cutoff_utc = cutoff;
     protocol.reveal_gap_seconds = gapSec;
+    // When the window opens: now, because choosing the round is what opens it. The
+    // waiting page draws its timeline from here to the beacon, so without it the bar has
+    // no honest origin and the marker can only pin to the left edge until the last
+    // minutes. Nothing reads it except that drawing; it steers nothing.
+    protocol.submission_opens_utc = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     protocol.chain_hash = chainHash;
     protocol.chain_public_key = info.public_key;
     // Deliberately NOT written: the endpoint this was looked up through is operational
     // (§4.2) and does not belong in a frozen file. config.js rejects it if it appears.
     fs.writeFileSync(protocolPath, JSON.stringify(protocol, null, 2) + '\n');
-    console.log(`\n  written to data/protocol.json (target_round, submission_cutoff_utc, chain_hash, chain_public_key)`);
+    console.log(`\n  written to data/protocol.json (target_round, submission_cutoff_utc, submission_opens_utc, chain_hash, chain_public_key)`);
     console.log('  now re-read it, then freeze and tag per RUNBOOK step 8.');
   } else {
     console.log('\n  (add --write to put these into data/protocol.json)');

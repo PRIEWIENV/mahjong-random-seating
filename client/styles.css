@@ -401,7 +401,15 @@ code.block { display: block; background: var(--bg); border: 1px solid var(--line
   .explorer.sel-player .explorer-body, .explorer.sel-round .explorer-body {
     grid-template-columns: minmax(0, 1fr) 380px;
   }
+  /* The player panel is two panels: the three summary figures beside the grid, and the
+     round list and opponent table full width underneath. Eleven rounds of three names
+     and a six-column table do not belong in a 380px column — they wrapped into prose. */
+  .explorer.sel-player .detail-rest { grid-column: 1 / -1; }
 }
+/* Beside the grid the three figures stack; with the whole width they sit in a row. */
+@media (min-width: 560px) and (max-width: 999px) { .detail-stats .stat-row { margin-bottom: 0; } }
+@media (min-width: 1000px) { .detail-stats .stat-row { margin-bottom: 0; } }
+.detail-rest > h4:first-child { margin-top: 0; }
 
 /* §9 non-negotiable: the 12x11 grid must stay legible on a phone. Horizontal scroll
    with the name column pinned — never a cramped grid squeezed to fit. */
@@ -631,13 +639,17 @@ table.opponents tr.imperfect { color: var(--warn); }
 
 /* ---- the timeline ----------------------------------------------------- */
 .timeline-card { margin-bottom: 18px; }
-.tl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* The countdown sits beside the state it counts down to, not at the far right of the
+   card: out there it lined up directly above the "the draw" label and read as a
+   countdown to the draw, when before the cutoff it is a countdown to the cutoff. */
+.tl-head { display: flex; align-items: baseline; justify-content: flex-start; gap: 12px; flex-wrap: wrap; }
 .tl-head h2 { font-size: 1.05rem; }
 .tl-left { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
 .timeline-card.tl-sealed .tl-left, .timeline-card.tl-drawing .tl-head h2 { color: var(--accent); }
 
 .tl-track {
-  position: relative; height: 6px; margin: 18px 0 0;
+  /* No top margin: .tl-caption above supplies the gap from the header. */
+  position: relative; height: 6px; margin: 0;
   background: var(--bg); border: 1px solid var(--line); border-radius: 99px;
 }
 .tl-fill {
@@ -665,10 +677,24 @@ table.opponents tr.imperfect { color: var(--warn); }
 .tl-dot.clipped { border-color: var(--muted); box-shadow: none; }
 .timeline-card.tl-drawing .tl-dot { animation: pulse 1.6s ease-in-out infinite; }
 
+/* The interior mark's caption, above the track and centred on the line it names. Its
+   own row, so it never competes with the end labels for horizontal space. */
+.tl-caption { position: relative; height: 2.5em; margin-top: 4px; }
+.tl-caption .tl-label.cutoff {
+  position: absolute; bottom: 0; translate: -50% 0; text-align: center; white-space: nowrap;
+}
 .tl-labels { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .tl-label { display: flex; flex-direction: column; gap: 1px; font-size: 0.78rem; min-width: 0; }
-.tl-label.cutoff { text-align: center; }
 .tl-label.draw { text-align: right; }
+/* A phone cannot carry a dated caption centred at an arbitrary percentage, so below the
+   wide breakpoint it becomes an ordinary line above the track. */
+@media (max-width: 639px) {
+  .tl-caption { height: auto; margin-top: 10px; }
+  .tl-caption .tl-label.cutoff {
+    position: static; translate: none; text-align: left; left: auto !important;
+    flex-direction: row; gap: 8px; align-items: baseline; white-space: normal;
+  }
+}
 .tl-name { color: var(--ink); font-weight: 600; }
 .tl-when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .tl-when em { font-style: normal; margin-left: 5px; opacity: 0.8; }

@@ -463,10 +463,23 @@ test('/api/status carries everything the waiting view needs (§6)', async () => 
   const s = await boot();
   const { body } = await s.get('/api/status');
   for (const k of ['phase', 'submitted_count', 'quorum', 'total_slots', 'submitted_local_ids',
-                   'cutoff_utc', 'target_round', 'drand', 'server_time_utc']) {
+                   'cutoff_utc', 'submission_opens_utc', 'target_round', 'drand', 'server_time_utc']) {
     assert.ok(k in body, `missing ${k}`);
   }
   for (const k of ['latest_round', 'healthy', 'last_seen_utc']) assert.ok(k in body.drand, `drand.${k} missing`);
+  // The timeline needs an origin to draw to scale; without one it can only pin its
+  // marker to the left edge until the final minutes.
+  assert.ok(Date.parse(body.submission_opens_utc) < Date.parse(body.cutoff_utc));
+  await s.close();
+});
+
+test('a protocol frozen before the window origin existed still serves a status', async () => {
+  // Every protocol.json written before submission_opens_utc existed lacks it, and none
+  // of them is wrong. The field is optional, and the page falls back to "opened earlier".
+  const s = await boot({ protocol: { submission_opens_utc: undefined } });
+  const { body } = await s.get('/api/status');
+  assert.equal(body.submission_opens_utc, null);
+  assert.equal(body.phase, 'open');
   await s.close();
 });
 

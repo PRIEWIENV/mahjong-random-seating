@@ -46,6 +46,8 @@ function makeProtocol(over = {}) {
     chain_public_key: QUICKNET_PK,
     target_round: 1_000_000,
     submission_cutoff_utc: iso(cutoffMs),
+    // A real window, so the waiting page's timeline has an origin to draw from.
+    submission_opens_utc: iso(cutoffMs - 72 * 3_600_000),
     target_round_utc: iso(cutoffMs + gapSec * 1000),
     reveal_gap_seconds: gapSec,
     quorum: 8,

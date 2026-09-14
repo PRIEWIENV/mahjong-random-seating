@@ -7,6 +7,13 @@ import { useLang, useText, WINDS, listOf, roundName, tableName } from '../i18n';
  * breakdown, and the perfect-pair count. Each figure is stated as a construction
  * rather than as luck, because that is what it is — and the one unavoidable imbalance
  * (5-3-3 instead of 4-4-3, for exactly three players) is named rather than hidden.
+ *
+ * It renders as TWO panels, not one, and they are siblings in the explorer's own grid.
+ * The three summary figures are narrow and belong beside the seat grid, where they can
+ * be read against the row that is lifted. The round-by-round list and the opponent table
+ * are wide — eleven rounds of three names each, and a six-column table — and in a 380px
+ * column beside the grid both wrapped into something closer to a paragraph than a table.
+ * So they take a full-width panel underneath, where a row is a row.
  */
 
 const TEXT = {
@@ -24,8 +31,8 @@ const TEXT = {
     byRound: '逐轮',
     opponents: '对手',
     facing: '对家',
-    downstream: '你的下家',
-    upstream: '你的上家',
+    downstream: '下家',
+    upstream: '上家',
     thOpponent: '对手', thSame: '同桌', thFacing: '对家', thTheyUp: '他上家', thYouUp: '你上家',
     balanced: '✓', unbalanced: '不平衡',
     tableShort: (n) => `${n}桌`,
@@ -44,8 +51,8 @@ const TEXT = {
     byRound: 'Round by round',
     opponents: 'Opponents',
     facing: 'facing you',
-    downstream: 'downstream of you',
-    upstream: 'upstream of you',
+    downstream: 'downstream',
+    upstream: 'upstream',
     thOpponent: 'Opponent', thSame: 'Same table', thFacing: 'Facing', thTheyUp: 'They upstream', thYouUp: 'You upstream',
     balanced: '✓', unbalanced: 'uneven',
     tableShort: (n) => `T${n}`,
@@ -61,7 +68,8 @@ export default function PlayerDetail({ stats, localId, rounds, onPickPlayer, onC
   const imperfect = p.opponents.filter((o) => !o.perfect);
 
   return (
-    <aside className="panel detail" aria-label={t.schedule(p.title)}>
+    <>
+    <aside className="panel detail detail-stats" aria-label={t.schedule(p.title)}>
       <div className="panel-head">
         <h3>{p.title}</h3>
         <button className="close" onClick={onClose} aria-label={t.close}>×</button>
@@ -97,6 +105,9 @@ export default function PlayerDetail({ stats, localId, rounds, onPickPlayer, onC
         </div>
       </div>
 
+    </aside>
+
+    <section className="panel detail detail-rest">
       <h4>{t.byRound}</h4>
       <ol className="round-list">
         {rounds.map((r) => {
@@ -149,6 +160,7 @@ export default function PlayerDetail({ stats, localId, rounds, onPickPlayer, onC
           </tbody>
         </table>
       </div>
-    </aside>
+    </section>
+    </>
   );
 }

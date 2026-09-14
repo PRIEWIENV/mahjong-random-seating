@@ -354,6 +354,11 @@ function createServer(opts = {}) {
       submissions: submissionDigests(),
       players: cfg.roster.players.map((p) => ({ local_id: p.local_id, title: p.title })),
       cutoff_utc: cfg.protocol.submission_cutoff_utc,
+      // When the window opened, so the waiting page's timeline has a real origin and its
+      // marker moves in proportion to time actually elapsed. Null for a protocol.json
+      // frozen before tools/pick-round.js began stamping it; the page then says the
+      // window opened earlier rather than inventing a start.
+      submission_opens_utc: cfg.protocol.submission_opens_utc || null,
       // Submissions close at cutoff_utc; the beacon that opens them arrives
       // reveal_gap_seconds later, at target_round_utc. The page needs both, because
       // the interval between them is not dead time: it is when the roll of who
