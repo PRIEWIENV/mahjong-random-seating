@@ -35,6 +35,11 @@ example.com {
 		# drand.mirrors. Switching mirrors mid-window (PROTOCOL.md §4.2) means editing
 		# both: a mirror missing from this list is blocked in the browser, and the
 		# submission stage fails with nothing in the server log to explain it.
+		#
+		# This is the SECOND policy on an /admin response: the app sends its own, and a
+		# browser enforces both at once, so what applies is the intersection. Removing a
+		# source here removes it from the dashboard too, however the app is configured.
+		# Keep 'self' on script-src and style-src.
 		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.drand.sh https://api2.drand.sh https://api3.drand.sh https://drand.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"

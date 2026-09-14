@@ -294,6 +294,26 @@ function duration(ms) {
   return (past ? '-' : '') + parts.join(' ');
 }
 
+/**
+ * The dashboard's stylesheet, served at /admin.css rather than inlined in a <style>.
+ *
+ * Both deployment configurations in deploy/ set a Content-Security-Policy with
+ * `style-src 'self'`, and a response that carries two CSP headers — the proxy's and
+ * this app's — is held to both at once. So the page's own `'unsafe-inline'` bought
+ * nothing in production: the intersection allowed no inline style whatsoever, every
+ * rule below was dropped, and the dashboard rendered as unstyled markup while the
+ * console filled with style-src violations. `'self'` is a source both halves already
+ * permit, which is why this is a file and why nothing on the page carries a `style`
+ * attribute any more.
+ *
+ * The two that genuinely vary — how far the progress bar is filled, and where the
+ * quorum mark sits — are integer percentages, so they are classes rather than computed
+ * values. A hundred and one of each is a lot of rules for two elements and still the
+ * cheapest of the options: CSSOM from a script would need script-src as well, and
+ * rounding to whole percent is invisible on an eight-pixel bar.
+ */
+const PCT_CLASSES = Array.from({ length: 101 }, (_, i) => `.w-${i}{width:${i}%}.l-${i}{left:${i}%}`).join('');
+
 const STYLE = `
 :root{--bg:#f7f7f5;--card:#fff;--ink:#1a1a18;--dim:#6b6b66;--line:#e3e3de;
       --ok:#2f7d4f;--warn:#9a6b12;--fail:#b3261e;--accent:#2b5c8a}
@@ -339,6 +359,12 @@ ul{padding-left:18px;margin:6px 0}
 .check .detail{color:var(--dim);font-size:12px}
 a{color:var(--accent)}
 footer{color:var(--dim);font-size:12px;margin-top:28px}
+.dim{color:var(--dim)}
+.ok{color:var(--ok)}
+.fail{color:var(--fail)}
+.flush{margin:0}
+.chase{margin:10px 0 0}
+${PCT_CLASSES}
 `;
 
 function render(m) {
@@ -369,7 +395,7 @@ function render(m) {
 <meta name="robots" content="noindex,nofollow">
 <meta http-equiv="refresh" content="30">
 <title>抽签管理台 · 事件 ${esc(m.event_id)}</title>
-<style>${STYLE}</style>
+<link rel="stylesheet" href="/admin.css">
 </head><body><main>
 
 <h1>抽签管理台</h1>
@@ -383,13 +409,13 @@ function render(m) {
     <h2>提交进度（RUNBOOK 13）</h2>
     <div class="big">${m.submitted_count} / ${m.total_slots}</div>
     <div class="track">
-      <div class="fill" style="width:${pct.toFixed(1)}%"></div>
-      <div class="mark" style="left:${quorumPct.toFixed(1)}%"></div>
+      <div class="fill w-${Math.round(pct)}"></div>
+      <div class="mark l-${Math.round(quorumPct)}"></div>
     </div>
-    <p class="detail" style="color:var(--dim);margin:0">
+    <p class="detail dim flush">
       门槛 ${m.quorum} 位${m.submitted_count >= m.quorum ? '，已达到' : `，还差 ${m.quorum - m.submitted_count} 位`}
     </p>
-    ${missing.length ? `<p style="margin:10px 0 0">待催办：<strong>${missing.map((r) => esc(r.title)).join('、')}</strong></p>` : ''}
+    ${missing.length ? `<p class="chase">待催办：<strong>${missing.map((r) => esc(r.title)).join('、')}</strong></p>` : ''}
   </div>
 
   <div class="card">
@@ -399,7 +425,7 @@ function render(m) {
       ${kv('截止', `<span class="mono">${esc(m.cutoff_utc)}</span>`)}
       ${kv(m.cutoff_in_ms >= 0 ? '距截止' : '已过截止', duration(m.cutoff_in_ms))}
       ${kv('drand 最新轮次', `<span class="mono">${m.drand?.latest_round ?? '—'}</span>`)}
-      ${kv('drand 状态', m.drand?.healthy ? '可达' : '<span style="color:var(--fail)">无应答</span>')}
+      ${kv('drand 状态', m.drand?.healthy ? '可达' : '<span class="fail">无应答</span>')}
     </dl>
   </div>
 
@@ -437,7 +463,7 @@ function render(m) {
       ${kv('results.json sha256', `<span class="mono">${esc(m.result.digest || '')}</span>`)}
     </dl>
     ${m.result.excluded.length ? `<ul>${m.result.excluded.map((e) => `<li>local_id ${e.local_id}：${esc(e.reason)}</li>`).join('')}</ul>` : ''}
-    <p class="detail" style="color:var(--dim)">
+    <p class="detail dim">
       复算：<code>node generate.js --verify results.json</code>，
       点名核对会自动读取 <code>events/snapshot.json</code>。
     </p>
@@ -448,12 +474,12 @@ function render(m) {
     <h2>Pantheon 同步（RUNBOOK 15）</h2>
     <dl>
       ${kv('状态', m.pantheon_sync.status === 'ok'
-        ? '<span style="color:var(--ok)">ok</span>'
-        : `<span style="color:var(--fail)">${esc(m.pantheon_sync.status)}</span>`)}
+        ? '<span class="ok">ok</span>'
+        : `<span class="fail">${esc(m.pantheon_sync.status)}</span>`)}
       ${kv('时间', `<span class="mono">${esc(m.pantheon_sync.at || '')}</span>`)}
       ${kv('尝试次数', esc(m.pantheon_sync.attempts ?? ''))}
     </dl>
-    ${m.pantheon_sync.remedy ? `<p style="color:var(--fail)">${esc(m.pantheon_sync.remedy)}</p>` : ''}
+    ${m.pantheon_sync.remedy ? `<p class="fail">${esc(m.pantheon_sync.remedy)}</p>` : ''}
   </div>` : ''}
 
   ${m.attempts.length ? `
@@ -469,7 +495,7 @@ function render(m) {
         <td><a href="/${esc(a.archive)}/manifest.json">manifest</a></td>
       </tr>`).join('')}
     </table>
-    <p class="detail" style="color:var(--dim)">
+    <p class="detail dim">
       作废轮次的密文、名册和当时的参数都已存档，任何人都能自行核对。
     </p>
   </div>` : ''}
@@ -482,4 +508,4 @@ function render(m) {
 </main></body></html>`;
 }
 
-module.exports = { collect, render, bundleDigest };
+module.exports = { collect, render, bundleDigest, ADMIN_STYLE: STYLE };

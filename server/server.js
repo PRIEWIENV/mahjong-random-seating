@@ -54,7 +54,7 @@ const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
 /** How long before the cutoff the page switches to its lively cadence. */
 const LIVELY_BEFORE_CUTOFF_MS = 3 * 60_000;
 const { computeStats } = require('./stats');
-const { collect, render } = require('./admin');
+const { collect, render, ADMIN_STYLE } = require('./admin');
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'mjs_session';
@@ -741,8 +741,16 @@ function createServer(opts = {}) {
 
     const headers = {
       'content-type': 'text/html; charset=utf-8',
-      // Nothing here loads anything, and nothing here should ever be framed or indexed.
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+      // One stylesheet from this origin and nothing else; never framed, never indexed.
+      //
+      // It used to say `style-src 'unsafe-inline'`, which was true of the page and
+      // useless in production: nginx and Caddy both add their own CSP, and a response
+      // carrying two of them is held to BOTH. The deployed intersection was therefore
+      // `'unsafe-inline'` AND the proxy's `'self'` — which permits nothing inline at
+      // all, so every rule on the dashboard was dropped and the page arrived as bare
+      // markup. Sources both halves already allow are the only ones that survive that,
+      // which is why server/admin.js now has no inline style left to permit.
+      'content-security-policy': "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'",
       'referrer-policy': 'no-referrer',
       'x-robots-tag': 'noindex, nofollow',
     };
@@ -813,6 +821,20 @@ function createServer(opts = {}) {
       }
 
       if (req.method === 'GET' && p === '/api/status') return sendJson(res, 200, status());
+
+      // The dashboard's stylesheet, as a file rather than a <style> block. See
+      // server/admin.js for why, and note that it is deliberately NOT behind the admin
+      // check: a stylesheet carries no roster, no timeline and no token, and putting it
+      // behind the cookie would not work anyway — `Path=/admin` does not match
+      // `/admin.css`, so the browser would never send it and the page would arrive
+      // unstyled for exactly the reason this change exists to fix.
+      if (req.method === 'GET' && p === '/admin.css') {
+        return send(res, 200, ADMIN_STYLE, {
+          'content-type': 'text/css; charset=utf-8',
+          'cache-control': 'public, max-age=300',
+          'x-robots-tag': 'noindex, nofollow',
+        });
+      }
 
       if (req.method === 'GET' && (p === '/admin' || p === '/admin/data.json')) {
         // Rate-limited like sign-in: the token is the only thing in front of a roster

@@ -455,6 +455,16 @@ Every row but the first two and the not-registered one prints the technical line
 underneath, so a player can forward it. `tools/check-signin.js --email` (§9) reproduces
 the Pantheon half from any machine.
 
+**The dashboard renders with no styling** and the console repeats *"Applying inline
+style violates the following Content Security Policy directive"*. An `/admin` response
+carries two CSP headers — this app's and the proxy's — and a browser enforces both, so
+what actually applies is the intersection. Check that the `style-src` and `script-src`
+in your proxy config still list `'self'`; if a policy was tightened to drop it, the
+dashboard's stylesheet at `/admin.css` is blocked no matter what the app sends. Confirm
+with `curl -sI https://<your domain>/admin.css` (expect `200` and `text/css`) and
+`curl -sI 'https://<your domain>/admin?token=<ADMIN_TOKEN>' | grep -i content-security`
+(expect two lines, both allowing `'self'` for styles).
+
 **Fewer than 8 submissions.** The job declares the attempt void, publishes
 `events/void.json` and archives everything under `events/rounds/<target_round>/`.
 Nothing is deleted. Then, in order:

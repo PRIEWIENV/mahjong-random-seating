@@ -17,6 +17,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const { createServer } = require('../server/server');
@@ -124,6 +125,86 @@ test('the page refuses to be framed or indexed', async () => {
   assert.match(r.headers['content-security-policy'], /frame-ancestors 'none'/);
   assert.match(r.headers['x-robots-tag'], /noindex/);
   assert.equal(r.headers['referrer-policy'], 'no-referrer');
+  await s.close();
+});
+
+/**
+ * Content-Security-Policy, and why this page has no inline style at all.
+ *
+ * In production the response carries TWO CSP headers: this app's and the reverse
+ * proxy's, because deploy/nginx.conf and deploy/Caddyfile both `add_header` one. A
+ * browser enforces both, so what actually applies is the intersection. The page used to
+ * send `style-src 'unsafe-inline'` against the proxy's `style-src 'self'`, and the
+ * intersection of those two permits no inline style whatsoever: every rule was dropped,
+ * the dashboard arrived as bare markup, and the console filled with style-src
+ * violations. Nothing in the unit tests noticed, because with one CSP header the page
+ * was fine.
+ *
+ * So the invariant is not "the CSP allows what the page does" — it is that the page
+ * only ever uses sources the deployment configurations ALSO allow. That is what these
+ * check, including reading the two shipped configs, so a proxy tightened later cannot
+ * silently break the page again.
+ */
+test('the page carries no inline style for a proxy CSP to strip', async () => {
+  const s = await boot();
+  const r = await s.get(`/admin?token=${TOKEN}`);
+  assert.equal(/<style[\s>]/.test(r.body), false, 'a <style> block is back');
+  assert.equal((r.body.match(/\sstyle="/g) || []).length, 0, 'an inline style attribute is back');
+  assert.match(r.body, /<link rel="stylesheet" href="\/admin\.css">/);
+  await s.close();
+});
+
+test('the two varying widths are classes, not computed inline values', async () => {
+  // 7 of 12 submitted, quorum 8 of 12: 58% filled, mark at 67%.
+  const s = await boot({ submitted: 7 });
+  const r = await s.get(`/admin?token=${TOKEN}`);
+  assert.match(r.body, /class="fill w-58"/);
+  assert.match(r.body, /class="mark l-67"/);
+  await s.close();
+});
+
+test('the stylesheet is a real file from this origin', async () => {
+  const s = await boot();
+  const r = await s.get('/admin.css');
+  assert.equal(r.status, 200);
+  assert.match(r.headers['content-type'], /^text\/css/);
+  assert.match(r.body, /\.fill\{/);
+  // Every class the page can emit has to exist, or the bar renders at some other width.
+  for (const i of [0, 1, 58, 67, 100]) {
+    assert.ok(r.body.includes(`.w-${i}{width:${i}%}`), `.w-${i} missing`);
+    assert.ok(r.body.includes(`.l-${i}{left:${i}%}`), `.l-${i} missing`);
+  }
+  await s.close();
+});
+
+test('the stylesheet is not behind the admin cookie, which could never reach it', async () => {
+  // `Path=/admin` does not match `/admin.css`, so a browser would not send the cookie
+  // and the page would arrive unstyled — the exact failure this all exists to fix. It
+  // carries no roster, no timeline and no token, so there is nothing to gate.
+  const s = await boot();
+  const r = await s.get('/admin.css');
+  assert.equal(r.status, 200, 'the stylesheet 404s without a token');
+  assert.equal(/token|person_id|local_id/i.test(r.body), false, 'the stylesheet says something about the event');
+  await s.close();
+});
+
+test('the page and the shipped proxy configs agree on style-src', async () => {
+  const s = await boot();
+  const r = await s.get(`/admin?token=${TOKEN}`);
+  const mine = /style-src ([^;]+)/.exec(r.headers['content-security-policy']);
+  assert.ok(mine, 'the page sets no style-src at all');
+  const sources = mine[1].trim().split(/\s+/);
+  assert.deepEqual(sources, ["'self'"]);
+  for (const file of ['deploy/nginx.conf', 'deploy/Caddyfile']) {
+    const conf = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const theirs = /style-src ([^;"]+)/.exec(conf);
+    assert.ok(theirs, `${file} sets no style-src`);
+    // Every source the page relies on must be in the proxy's list too: the browser
+    // applies both headers, so anything only one of them allows is allowed by neither.
+    for (const src of sources) {
+      assert.ok(theirs[1].includes(src), `${file} does not allow ${src}, so the page will render unstyled`);
+    }
+  }
   await s.close();
 });
 

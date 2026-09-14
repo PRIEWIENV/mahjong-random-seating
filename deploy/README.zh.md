@@ -346,6 +346,8 @@ node tools/end-event.js
 
 除了前两行和「没有报名」那一行，其余每一种都会在下面打印技术行，选手可以原样转发。`tools/check-signin.js --email`（§9）能在任何机器上把 Pantheon 那一半复现一遍。
 
+**管理面板样式全部没渲染出来**，控制台不停报 *"Applying inline style violates the following Content Security Policy directive"*。`/admin` 的响应上带着**两个** CSP 头——应用自己的，和反向代理加的——浏览器会同时执行这两个，真正生效的是它们的交集。检查你的代理配置里 `style-src` 和 `script-src` 是否仍然列着 `'self'`；如果哪一条被收紧到去掉了它，那么无论应用发什么，`/admin.css` 都会被拦下。用这两条确认：`curl -sI https://<你的域名>/admin.css`（应为 `200` 和 `text/css`），以及 `curl -sI 'https://<你的域名>/admin?token=<ADMIN_TOKEN>' | grep -i content-security`（应为两行，两行都允许 `'self'` 作为样式来源）。
+
 **提交不足 8 人。** 任务把这次尝试判为作废，公布 `events/void.json`，把一切归档到 `events/rounds/<target_round>/`。什么都不删。然后按顺序：
 
 1. `node tools/new-round.js --dry-run`——确认归档完整。
