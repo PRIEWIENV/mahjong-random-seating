@@ -211,7 +211,7 @@ test('the result is refetched when the final round moves, not only once ever', (
   // weeks later — held a result fetched before the final round existed and never asked
   // again: the player would be told the draw was complete while the round they were
   // about to sit down for was missing from it.
-  const src = read('client', 'app.jsx');
+  const src = read('client', 'App.jsx');
   assert.match(src, /const finalKey = state\.status\?\.final/);
   assert.match(src, /\$\{state\.status\.final\.state\}:\$\{state\.status\.final\.lock_sha256 \|\| ''\}/,
     'a --relock changes the digest without changing the state, so both are in the key');

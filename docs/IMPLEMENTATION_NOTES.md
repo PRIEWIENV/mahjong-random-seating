@@ -1833,7 +1833,7 @@ Three defects fell out of the same reading, before any of them could happen:
   seat — which carries `rank` and no template `point` — would have overwritten every
   player's `point` with `undefined`, which JSON then drops. Nothing throws; the explorer
   quietly loses a column.
-- `client/app.jsx` fetched the result once and never again, guarded only by `!result`.
+- `client/App.jsx` fetched the result once and never again, guarded only by `!result`.
   Since `phase` is `done` from the first draw onwards, a page left open between the lock
   and the draw would have gone on showing a result from before the final round existed —
   telling the player the draw was complete while the round they were about to sit down

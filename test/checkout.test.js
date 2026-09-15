@@ -73,3 +73,99 @@ test('no byte-pinned artefact carries a CR', () => {
     assert.equal(crs, 0, `${f} contains ${crs} CR bytes; its digest will not match a LF checkout`);
   }
 });
+
+/**
+ * The other thing a checkout can change: the case of a name.
+ *
+ * NTFS and APFS are case-insensitive, so on the machine this was written on
+ * `client/app.jsx` and `client/App.jsx` are the same file and every spelling works.
+ * Linux disagrees, and CI is Linux. A test that read `client/app.jsx` passed here for as
+ * long as it took to push, then failed on the runner with ENOENT on a file that is
+ * plainly there — which reads as a broken checkout rather than as a typo.
+ *
+ * Underneath it the working tree had drifted from the index: git recorded `App.jsx`,
+ * the directory entry said `app.jsx`, and with core.ignorecase on nothing showed in
+ * `git status`. So there are two checks here, because there are two ways to get it
+ * wrong: a name on disk that git spells differently, and a name in source that git
+ * spells differently. Only the index is authoritative — it is what a runner checks out.
+ */
+
+const { execFileSync } = require('node:child_process');
+
+/** Paths as git records them, or null when this is not a git checkout. */
+function trackedFiles() {
+  try {
+    return execFileSync('git', ['ls-files', '-z'], {
+      cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).split('\0').filter(Boolean);
+  } catch {
+    return null;  // an export rather than a clone, or no git — not a failure
+  }
+}
+
+test('every tracked file is on disk under exactly the name git records', (t) => {
+  const tracked = trackedFiles();
+  if (!tracked) return t.skip('not a git checkout');
+
+  // readdir reports the real directory entry, which is where the drift shows. Cached per
+  // directory: this walks the whole index.
+  const entries = new Map();
+  const listing = (dir) => {
+    if (!entries.has(dir)) {
+      try { entries.set(dir, new Set(fs.readdirSync(path.join(ROOT, dir)))); }
+      catch { entries.set(dir, null); }
+    }
+    return entries.get(dir);
+  };
+
+  const wrong = [];
+  for (const rel of tracked) {
+    const dir = path.posix.dirname(rel) === '.' ? '' : path.posix.dirname(rel);
+    const base = path.posix.basename(rel);
+    const names = listing(dir);
+    if (!names || names.has(base)) continue;
+    // Absent entirely is a deleted file, which `git status` already reports. Present
+    // under another case is the one this test exists for.
+    const other = [...names].find((n) => n.toLowerCase() === base.toLowerCase());
+    if (other) wrong.push(`${rel} is on disk as ${dir ? dir + '/' : ''}${other}`);
+  }
+  assert.deepEqual(wrong, [],
+    'the working tree spells these differently from the index; a Linux checkout gets ' +
+    'the index spelling, so anything opening the name you see here will not find it');
+});
+
+test('no source file opens a repository path by a name git spells differently', (t) => {
+  const tracked = trackedFiles();
+  if (!tracked) return t.skip('not a git checkout');
+
+  const exact = new Set(tracked);
+  const byLower = new Map(tracked.map((f) => [f.toLowerCase(), f]));
+
+  // Two shapes reach a file: one literal holding the whole path, and a call whose
+  // arguments are joined — read('client', 'App.jsx'), path.join(ROOT, 'docs', 'x.md').
+  const TOP = '(?:client|server|tools|data|test|docs|public|deploy)';
+  const WHOLE = new RegExp(`['"](${TOP}/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)['"]`, 'g');
+  const CALL = /[A-Za-z_$][\w$.]*\s*\(([^()]*)\)/g;
+  const ARG = /'([^']*)'|"([^"]*)"/g;
+
+  const sources = tracked.filter((f) => /\.(js|jsx)$/.test(f) && !f.startsWith('public/'));
+  const wrong = [];
+  const check = (where, p) => {
+    const rel = p.replace(/^\.\//, '').replace(/^(?:\.\.\/)+/, '');
+    if (exact.has(rel)) return;
+    const spelt = byLower.get(rel.toLowerCase());
+    if (spelt) wrong.push(`${where}: "${p}" — git tracks ${spelt}`);
+  };
+
+  for (const f of sources) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    for (const m of src.matchAll(WHOLE)) check(f, m[1]);
+    for (const m of src.matchAll(CALL)) {
+      const args = [...m[1].matchAll(ARG)].map((a) => a[1] ?? a[2]).filter((a) => a !== '');
+      if (args.length > 1) check(f, args.join('/'));
+    }
+  }
+  assert.deepEqual(wrong, [],
+    'these open a file by a spelling the index does not use; it works on a ' +
+    'case-insensitive filesystem and is ENOENT on Linux');
+});
