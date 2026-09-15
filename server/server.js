@@ -881,6 +881,21 @@ function createServer(opts = {}) {
 
   const DATA_FILES = new Set(['protocol.json', 'roster.json', 'schedule_template.json']);
   const ROLL_FILES = new Set(['snapshot.json', 'snapshot.json.ots']);
+  /**
+   * The final round's published files, under flat names (PROTOCOL.md §11).
+   *
+   * Flat because these are download links on a page, and a link whose path implies a
+   * browsable directory invites somebody to try browsing it. The map is explicit for the
+   * same reason the roll's is: three names in, three files out, and nothing else under
+   * events/final/ is reachable by asking for it — which matters, because a superseded
+   * --relock lock lives in that directory too and is evidence for the archive rather
+   * than a file to hand a player as if it were current.
+   */
+  const FINAL_FILES = new Map([
+    ['final-lock.json', ['events', 'final', 'lock.json']],
+    ['final-lock.json.ots', ['events', 'final', 'lock.json.ots']],
+    ['final.json', ['final.json']],
+  ]);
 
   /**
    * Who to charge a request to, for rate limiting.
@@ -1007,6 +1022,16 @@ function createServer(opts = {}) {
       // point of the file is that anybody can hold a copy.
       if (ROLL_FILES.has(dataName)) {
         const f = path.join(cfg.root, 'events', dataName);
+        if (!fs.existsSync(f)) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+        return serveFile(res, f);
+      }
+
+      // The final round's lock, its anchor, and the draw itself. Same argument as the
+      // roll above: the lock is published precisely so that twelve people can hold their
+      // own copies of it before the beacon, and a copy they have to ask the organiser
+      // for is not that.
+      if (FINAL_FILES.has(dataName)) {
+        const f = path.join(cfg.root, ...FINAL_FILES.get(dataName));
         if (!fs.existsSync(f)) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
         return serveFile(res, f);
       }

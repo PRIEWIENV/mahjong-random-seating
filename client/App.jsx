@@ -217,12 +217,35 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
 
-  // Fetch the result once the draw is finished, whichever way the player arrived.
+  /**
+   * Fetch the result once the draw is finished, whichever way the player arrived — and
+   * again whenever the final round moves (PROTOCOL.md §11).
+   *
+   * The second half is not a refinement. `phase` is 'done' from the first draw onwards
+   * and stays 'done' through the lock and through the twelfth round, which is what every
+   * other part of this system needs it to do. So with `!result` as the only guard, a page
+   * left open — or reopened weeks later from cache — held a result fetched before the
+   * final round existed and would never ask again. The player would be told the draw was
+   * complete while the round they were about to sit down for was missing from it.
+   *
+   * `final.state` plus the lock digest is the whole of what can change: 'none' to
+   * 'locked' to 'drawn', and a --relock replaces the digest without moving the state.
+   * Fetching is keyed to that pair rather than to a timer, so an idle page makes no
+   * requests at all and a page watching the draw refetches exactly once per change.
+   */
+  const finalKey = state.status?.final
+    ? `${state.status.final.state}:${state.status.final.lock_sha256 || ''}`
+    : 'none';
+  const fetchedFor = useRef(null);
   useEffect(() => {
-    if ((stage === 'result' || stage === 'revealing') && !result) {
-      api.getResult().then(setResult).catch(() => {});
-    }
-  }, [stage, result]);
+    if (stage !== 'result' && stage !== 'revealing') return;
+    if (result && fetchedFor.current === finalKey) return;
+    // Claimed before the request rather than after it, so a re-render mid-flight does
+    // not start a second one. Released on failure, so a request that never arrives is
+    // retried rather than remembered as done.
+    fetchedFor.current = finalKey;
+    api.getResult().then(setResult).catch(() => { fetchedFor.current = null; });
+  }, [stage, result, finalKey]);
 
   // The submitted confirmation gives way to waiting on its own (UI-SPEC §5).
   useEffect(() => {

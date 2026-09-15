@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import PlayerDetail from './PlayerDetail';
 import RoundTables from './RoundTables';
 import { useLang, useText, WINDS, roundName, tableName } from '../i18n';
+import { allRounds, isFinal } from '../rounds';
 
 /**
  * The seat plan explorer (UI-SPEC.md §7).
@@ -42,6 +43,9 @@ const TEXT = {
     you: '你',
     legendNote: '格子里的字是你在那一轮的起始风位',
     cellTitle: (round, table, wind) => `${round} · ${table} · ${wind}家`,
+    finalCol: '决赛轮',
+    finalCellTitle: (round, table, wind, rank) => `${round}（决赛）· ${table} · ${wind}家 · 第 ${rank} 名`,
+    finalNote: '最后一列是决赛轮：桌次由前面的名次决定，只有风位是抽的。',
   },
   en: {
     title: 'Seat plan',
@@ -51,6 +55,9 @@ const TEXT = {
     you: 'you',
     legendNote: 'The letter in each cell is your starting wind in that round',
     cellTitle: (round, table, wind) => `${round} · ${table} · ${wind}`,
+    finalCol: 'Final',
+    finalCellTitle: (round, table, wind, rank) => `${round} (final) · ${table} · ${wind} · ranked ${rank}`,
+    finalNote: 'The last column is the final round: its tables come from the standings, and only the winds are drawn.',
   },
 };
 
@@ -59,7 +66,10 @@ export default function Explorer({ result, me }) {
   const t = useText(TEXT);
   const [sel, setSel] = useState(() => readSelectionFromUrl());
   const stats = result.stats;
-  const rounds = result.seating.rounds;
+  // The eleven template rounds AND the final one. A player's evening is twelve rounds
+  // long; only the published FILES are split in two (client/rounds.js).
+  const rounds = allRounds(result);
+  const finalOf = (n) => isFinal(result, n);
   const winds = WINDS[lang];
 
   useEffect(() => { writeSelectionToUrl(sel); }, [sel]);
@@ -102,7 +112,11 @@ export default function Explorer({ result, me }) {
                   <th
                     key={r.round}
                     scope="col"
-                    className={sel.kind === 'round' && sel.id === r.round ? 'on' : ''}
+                    className={[
+                      sel.kind === 'round' && sel.id === r.round ? 'on' : '',
+                      finalOf(r.round) ? 'final' : '',
+                    ].filter(Boolean).join(' ')}
+                    title={finalOf(r.round) ? t.finalCol : undefined}
                     onClick={() => pickRound(r.round)}
                   >
                     R{r.round}
@@ -123,12 +137,15 @@ export default function Explorer({ result, me }) {
                     {rounds.map((r) => {
                       const c = cells.get(id)[r.round];
                       const dim = sel.kind === 'round' && sel.id !== r.round;
+                      const fin = finalOf(r.round);
                       return (
                         <td
                           key={r.round}
-                          className={`t${c.table} ${dim ? 'dim' : ''}`}
+                          className={`t${c.table} ${dim ? 'dim' : ''} ${fin ? 'final' : ''}`}
                           onClick={() => pickRound(r.round)}
-                          title={t.cellTitle(roundName(lang, r.round), tableName(lang, c.table), winds[c.wind])}
+                          title={fin
+                            ? t.finalCellTitle(roundName(lang, r.round), tableName(lang, c.table), winds[c.wind], c.rank)
+                            : t.cellTitle(roundName(lang, r.round), tableName(lang, c.table), winds[c.wind])}
                         >
                           <span className="wind">{winds[c.wind]}</span>
                         </td>
@@ -145,10 +162,11 @@ export default function Explorer({ result, me }) {
             <span className="sw t3" />{tableName(lang, 3)}
             <span className="legend-note">{t.legendNote}</span>
           </p>
+          {rounds.some((r) => finalOf(r.round)) && <p className="legend-note final-note">{t.finalNote}</p>}
         </div>
 
         {sel.kind === 'player' && (
-          <PlayerDetail stats={stats} localId={sel.id} rounds={rounds} onPickPlayer={pickPlayer} onClose={clear} />
+          <PlayerDetail stats={stats} localId={sel.id} rounds={rounds} result={result} onPickPlayer={pickPlayer} onClose={clear} />
         )}
         {sel.kind === 'round' && (
           <RoundTables round={rounds.find((r) => r.round === sel.id)} me={me} onClose={clear} onPickPlayer={pickPlayer} />

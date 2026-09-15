@@ -222,6 +222,58 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
    Not a button: UI-SPEC §1 gives one focal element per stage, and it is not this. */
 .roll-files a { font-weight: 600; }
 
+/* The final round's lock card (PROTOCOL.md §11).
+
+   Deliberately the roll card's shape, class for class: both exist for the same reason
+   and both make the same ask — compare a short string with eleven other people while
+   nobody can yet open what it commits to. Two different-looking cards would read as two
+   different mechanisms. What changes is the accent, because they commit to different
+   things at different moments, and a player scrolling past should be able to tell which
+   one they have already checked. */
+.final-card { border-left-color: var(--t3); }
+.final-beacon {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 14px 0 0;
+}
+.final-beacon code { font: 600 0.95rem/1.4 var(--mono); }
+.final-beacon .dim { color: var(--muted); font-size: 0.85rem; }
+
+/* The three tables, as rank blocks. The rank sits in front of the name because that is
+   what put the player at that table — nothing here was drawn. */
+.final-tables { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.final-tables li {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+}
+.final-tables .tbl { font-size: 0.8rem; font-weight: 700; flex: none; }
+.final-tables .tbl.t1 { color: var(--t1); }
+.final-tables .tbl.t2 { color: var(--t2); }
+.final-tables .tbl.t3 { color: var(--t3); }
+.final-tables .names { display: flex; gap: 12px; flex-wrap: wrap; }
+.final-tables .ranked { display: inline-flex; align-items: baseline; gap: 5px; }
+.final-tables .ranked i {
+  font-style: normal; font: 600 0.7rem/1 var(--mono);
+  color: var(--muted); background: var(--bg-tint);
+  border-radius: 4px; padding: 2px 4px;
+}
+
+/* In the grid, the final round is a column that was not drawn, so it is separated from
+   the eleven that were rather than merely appended to them. */
+table.grid th.final, table.grid td.final { position: relative; }
+table.grid th.final::before, table.grid td.final::before {
+  content: ''; position: absolute; left: -4px; top: 0; bottom: 0;
+  border-left: 1px dashed var(--line);
+}
+table.grid th.final { color: var(--t3); }
+.final-note { margin: 6px 0 0; font-size: 0.8rem; color: var(--muted); }
+.round-list li.final { border-top: 1px dashed var(--line); padding-top: 8px; }
+.round-list li.final .r { color: var(--t3); font-weight: 700; }
+
+/* The second verification block. Same panel as the first, one after the other, because
+   there are now two draws to check and they are checked the same way. */
+.final-verify { border-left: 3px solid var(--t3); }
+
+
 /* The technical line under a failure a player cannot act on: present so it can be
    forwarded to an organiser, quiet enough not to read as the message itself. */
 .note .detail {
