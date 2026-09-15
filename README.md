@@ -44,7 +44,14 @@ submission window, a real timelock, a real beacon — and prints where to look:
 ```
 
 Sign in, pick a number, watch the other envelopes arrive, wait for the beacon, see the
-seat plan and how to recompute it — everything a player sees, in about four minutes.
+seat plan and how to recompute it — everything a player sees, in about six minutes.
+
+It then runs the **twelfth round**, where the tables are earned rather than drawn and only
+the winds are drawn. The standings are invented, because eleven rounds were not really
+played; everything after that is real, including a second beacon, the timestamped lock
+published before it exists, and a draw that nobody triggers — the server does it on its
+own timer when the beacon lands.
+
 Ctrl+C when you are done; it runs in a throwaway copy and leaves nothing behind. Only
 Pantheon, the club's account system, is simulated. `npm run demo -- --window 600` for a
 longer look around.

@@ -254,3 +254,56 @@ test('the lock card offers the files a player would need to check it themselves'
     assert.ok(server.includes(`['${name}',`), `${name} is not served`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// substitutes (PROTOCOL.md 11.6) -- the name on the seat is not always who played it
+// ---------------------------------------------------------------------------
+
+const finalCard = read('client', 'FinalCard.jsx');
+
+test('the card names the person who actually played the seat, not the roster entry', () => {
+  // The whole point of the record. A page that showed the frozen roster's name would be
+  // stating something false about who is sitting at that table, and it would look right.
+  assert.match(finalCard, /subsBySeat/);
+  assert.match(finalCard, /incoming\.title/,
+    'the seat must be labelled with the substitute, not titleOf()');
+  // A seat can change hands more than once; the LAST declaration is who finished in it.
+  assert.match(finalCard, /subsBySeat\.get\(id\)\[subsBySeat\.get\(id\)\.length - 1\]/,
+    'with a chain of substitutions the last one is the person at the table');
+});
+
+test('a substituted seat is marked, so the reader is not silently misled', () => {
+  assert.match(finalCard, /sub-mark/);
+});
+
+test('the card says the substitution changed nothing about the draw, in both languages', () => {
+  // This is the claim that makes a late declaration legitimate, and it is the one a
+  // reader cannot check for themselves. If it is not on the page it is not being made.
+  for (const src of [finalCard, bundle]) {
+    assert.match(src, /\u4fdd\u7559\u4e86\u539f\u6765\u7684 Pantheon \u6ce8\u518c\u4f4d/,
+      'the Chinese explanation must survive into the bundle');
+    assert.match(src, /kept their original Pantheon registration/,
+      'and so must the English');
+  }
+});
+
+test('the whole chain is listed, not only the last name', () => {
+  // "Who played these eleven games" is not answered by the final occupant alone.
+  assert.match(finalCard, /final-subs/);
+  assert.match(finalCard, /subsFrom\(sub\.from_round/);
+  assert.match(finalCard, /sub\.reason/, 'the league rule belongs on the page with it');
+});
+
+test('the page takes the substitutions from the result payload, which prefers the lock', () => {
+  // server.js serves the LOCK's copy once one exists, so the page cannot show a record
+  // that differs from the one under the fingerprint people were asked to compare.
+  assert.match(read('client', 'stages', 'Result.jsx'), /substitutes=\{result\?\.substitutes/);
+  assert.match(read('server', 'server.js'),
+    /substitutes: f\.lock \? \(f\.lock\.substitutes \|\| \[\]\) : cfg\.substitutes\.substitutions/);
+});
+
+test('with no substitutions the card renders nothing about them', () => {
+  // The normal case is no substitutes at all, and an empty heading on every result page
+  // would be twelve people wondering what it means.
+  assert.match(finalCard, /subsBySeat\.size > 0 &&/);
+});

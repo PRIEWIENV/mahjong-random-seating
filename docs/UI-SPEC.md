@@ -162,6 +162,18 @@ An event with a twelfth round (PROTOCOL.md §11) puts three things on the result
 Three sentences in the per-player statistics were true of eleven rounds and false of twelve, and that is the trap this section exists to mark. Winds are counted over **everything played**, because that is the quantity the final round exists to correct. Tables and pairings stay scoped to the **eleven**, because `{4,4,3}` and "11 of the 66 pairs" are properties of the template that `tools/verify_template.py` proves and players are invited to run; a figure that quietly changed meaning would contradict the verifier the page points at.
 
 A player who finishes 4-3-3-2 rather than 3-3-3-3 is told the odds they actually had — 1 in *m*, where *m* is how many at their table needed the same wind — and why the rule is built that way. Not "you were unlucky". The design maximises how many people finish on three of every wind, and the price is that people short of the same wind share one seat. Saying the number is what makes the fairness claim checkable rather than consoling.
+### When the name on the seat is not who played it
+
+A seat can change hands mid-tournament (PROTOCOL.md §11.6). The frozen roster still names whoever started in it, and a page that showed only that name would be stating something false about who is sitting at that table — while looking entirely correct.
+
+So on the lock card, a substituted seat is **labelled with the person who actually finished in it**, marked, and listed underneath with the round they came in and the league rule that allowed it. A seat can change hands more than once; the label is the last occupant, because that is who is at the table, and the list is the whole chain, because "who played these eleven games" is not answered by the last name alone.
+
+The card also states, in both languages, that the substitution **changed nothing about the draw** — the seat kept its Pantheon registration, so the standings still held one row per seat, the tables are what they would have been, and not one byte of the seed moved. That claim is the reason a substitution may be declared late without becoming a lever, and it is the one thing on the card a reader cannot check for themselves. If it is not written there, it is not being made.
+
+With no substitutions there is nothing: no heading, no empty list. The normal case is that nobody dropped out, and a permanent empty section is twelve people wondering what it means.
+
+The page takes this from `/api/result`, which serves the **lock's** copy once a lock exists rather than the live file — so the page can never show a record that differs from the one under the fingerprint people were asked to compare.
+
 ## 8. Data the client needs
 
 ```

@@ -1839,6 +1839,57 @@ Three defects fell out of the same reading, before any of them could happen:
   telling the player the draw was complete while the round they were about to sit down
   for was missing from it.
 
+## 6ad. The afternoon the stub stopped being good enough
+
+Every Mimir call the final round makes was written against `StubPantheon`, because there
+was no instance to write it against. A stub agrees with whatever it was taught, so the
+rows in PANTHEON-INTEGRATION.md §5.2 marked unverified were unverified in the strong
+sense: nobody had ever watched Mimir do them. Getting a local Pantheon up and asking it
+directly — `tools/verify-pantheon-final.js` — took an afternoon and changed four things.
+
+**`games_played` is not a valid `order_by`.** It was in `lock-final.js`'s `SORTABLE` list,
+offered to operators as one of the keys the tool can confirm. Mimir's `_sortItems` takes
+`name`, `rating`, `games_and_rating`, `avg_place`, `avg_score` and `chips`, and throws on
+anything else. An operator who had configured it would have discovered this at the moment
+they were trying to lock the standings, which is the worst moment available.
+
+**And a refused `order_by` comes back as a 500, not a 4xx.** The PHP throws
+`InvalidParametersException` and Twirp reports it as an internal error, so a misspelled key
+is indistinguishable from Mimir being down — and "wait and try again" is exactly the wrong
+advice for the first. The failure path now prints the accepted set alongside the error.
+
+**Mimir compares float keys with an epsilon, and breaks ties on a second key.** `abs(a - b)
+< 0.0001`, and inside that it orders the pair by `avg_place` (or `rating`, depending on the
+key) instead. `checkStandings` used exact equality, and that had both halves wrong at once:
+such a pair was not reported as a tie, *and* the local recomputation disagreed with Mimir's
+perfectly good order and refused a valid table. The order check is now monotonicity in the
+requested direction, which is immune to a secondary key it was never told about, and ties
+use Mimir's own epsilon. The case that matters is a near-tie straddling the 4|5 boundary:
+before, it would have seated somebody at the wrong table without a word.
+
+**An event with "hide results" on returns nothing to a non-admin caller.**
+`EventRatingTable.php` gates the whole table on `!$event->getHideResults() || $isAdmin`, and
+a tournament that hides its standings while it is being played is completely normal. The
+default call therefore returned zero rows, and the refusal read "Pantheon returned 0
+players, the frozen roster has 12" — which sends an operator to check the event id, a thing
+that is not wrong. It is now named, with `--as-admin` as the remedy and a warning that the
+same flag folds in *prefinished* games, so it can only be trusted once every session is
+finished.
+
+Two more findings did not change code but decided a design. The rating table is built from
+**played history**, not from registrations, so a registered player with no finished game is
+absent entirely — which is what rules out every substitute policy except
+`same_registration` (§11.6), since a separately-registered substitute appears as a second,
+partial row for one seat. And `chips` and `avg_place` are simply **absent** from a row when
+they are zero, protobuf having omitted the default, which makes the `?? 0` fallbacks in
+`getRatingTable` load-bearing rather than defensive.
+
+The prize, though, was the row at the top of §5.2's risk list: **an event created for
+eleven sessions accepts a twelve-block prescript**, byte-identical, with no check errors,
+and `next_session_index` round-trips because the controller stores `nextSessionIndex - 1`
+and the reader adds one back. Reading only the model layer shows one half of that and looks
+like an off-by-one. Doing it shows neither half matters.
+
 ## 10. What was verified, and how
 
 | Check | Status |

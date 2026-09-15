@@ -408,7 +408,8 @@ class StubPantheon {
    * Tokens default to "token-<person_id>"; a test that needs a specific one writes it
    * into `accounts` after construction.
    */
-  constructor({ roster, extraAccounts = [], eventId, eventTitle, adminPersonIds = [] } = {}) {
+  constructor({ roster, extraAccounts = [], eventId, eventTitle, adminPersonIds = [],
+                playedFile = null } = {}) {
     this.eventId = eventId ?? roster?.pantheon_event_id ?? 42;
     this.adminPersonIds = new Set((adminPersonIds || []).map(Number));
     this.registered = (roster?.players || []).map((p) => ({
@@ -426,6 +427,15 @@ class StubPantheon {
     this.nextSessionIndex = 0;
     this.calls = [];
     this.standings = null; // setStandings() to script GetRatingTable
+    // A file that, once it exists, means "the round-robin has been played" (PROTOCOL.md 11).
+    //
+    // The final round cannot be rehearsed without it. Its preconditions are that Mimir has
+    // moved next_session_index past every round-robin session and that a standings table
+    // exists -- both of which are consequences of people actually playing, which no demo
+    // does. The state is read fresh on every call rather than at construction, because the
+    // thing being simulated happens WHILE the process is running: the draw publishes the
+    // eleven-block plan first, and only then are those eleven sessions played.
+    this.playedFile = playedFile;
     this.failNext = null; // set to an Error to exercise the sync-failure path
   }
 
@@ -449,9 +459,23 @@ class StubPantheon {
     return eventId === this.eventId ? this.eventTitle : null;
   }
 
+  /** What the played-marker says, or null. Re-read each time; absent is the normal case. */
+  #played() {
+    if (!this.playedFile) return null;
+    try { return JSON.parse(fs.readFileSync(this.playedFile, 'utf8')); }
+    catch { return null; }
+  }
+
   async getPrescript(eventId) {
     this.calls.push(['getPrescript', eventId]);
-    return { event_id: eventId, next_session_index: this.nextSessionIndex, prescript: this.prescript };
+    const played = this.#played();
+    // Mimir advances this as sessions are played. Standing in for that is the whole point
+    // of the marker: without it the pointer sits at 1 forever and the final round is
+    // refused for the correct reason -- the round-robin has not been played.
+    const index = played && this.prescript
+      ? this.prescript.trim().split(/\n\s*\n/).filter(Boolean).length + 1
+      : this.nextSessionIndex;
+    return { event_id: eventId, next_session_index: index, prescript: this.prescript };
   }
 
   /**
@@ -467,6 +491,10 @@ class StubPantheon {
 
   async getRatingTable(eventId, orderBy = 'rating', order = 'desc') {
     this.calls.push(['getRatingTable', eventId, orderBy, order]);
+    const played = this.#played();
+    if (played?.standings && !this.standings) {
+      return played.standings.map((r, i) => ({ ...r, rank: i + 1 }));
+    }
     if (eventId !== this.eventId) return [];
     const rows = this.standings ?? this.registered.map((p, i) => ({
       person_id: p.person_id,
@@ -524,6 +552,8 @@ function createPantheon(cfg, env = process.env, opts = {}) {
       // exercise the organiser dashboard and the is_admin flag without a real Pantheon.
       adminPersonIds: (env.PANTHEON_STUB_ADMIN_IDS || '')
         .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0),
+      // "The round-robin has been played", for tools/demo.js. See StubPantheon.playedFile.
+      playedFile: env.PANTHEON_STUB_PLAYED || null,
       ...opts,
     });
   }

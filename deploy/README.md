@@ -458,6 +458,26 @@ is the whole of the evidence: the standings were fixed before the randomness tha
 them existed, and twelve people holding the same short string is what makes it checkable.
 After that round lands, the same digest proves nothing.
 
+**If somebody drops out part-way through**, declare it when it happens rather than at the
+lock. The substitute plays on that seat's existing Pantheon registration — do not register
+them as a thirteenth person, because the standings are built from *played games* and a
+separately-registered substitute becomes a second, partial row for one seat. Declaring it
+on `/admin` → 声明替补 writes `data/substitutes.json`, which:
+
+- is **not frozen and cannot be** — a player drops out weeks after the tag is made;
+- is **gitignored**, like `protocol.json` and `roster.json`, because it is one event's
+  data. It is published by being copied into `events/final/lock.json`, which is mirrored
+  and timestamped, so there is exactly one published copy and nothing to disagree with;
+- is **archived and cleared** by `tools/end-event.js`. That matters: the next freeze
+  rewrites `roster.json` and `protocol.json` but would leave this file alone, and it would
+  follow the checkout into the next tournament and attribute last season's substitute to a
+  seat they never played. `tools/freeze.js` refuses to tag an event that already declares
+  one, since at freeze time nobody has played a game.
+
+None of it reaches the draw — the seat keeps its registration, so the standings, the bands
+and the seed are exactly what they would have been. PROTOCOL.md §11.6 says why that is
+what makes a late declaration safe rather than convenient.
+
 **The draw needs nobody.** The server runs it when the beacon lands, on the same timer
 that ran the first draw, gated on three file checks and a clock: a lock exists,
 `final.json` does not, and the beacon is due. That is a timer and not an endpoint, so the
