@@ -328,6 +328,53 @@ class TwirpPantheon {
     };
   }
 
+  /**
+   * Mimir GetRatingTable — the standings, in the order Mimir ranks them (PROTOCOL.md §11).
+   *
+   * The final round's tables are read straight off this list, so two things about it
+   * matter more than they would for a figure that is only displayed.
+   *
+   * THERE IS NO RANK FIELD. PlayerInRating carries id, title, rating, chips, games_played,
+   * avg_place, avg_score — and nothing that says "3rd". The rank IS the position in the
+   * list. So the order is the payload, it is returned exactly as the server gave it, and
+   * nothing here re-sorts it. tools/lock-final.js then re-derives the same order locally
+   * from the same key and refuses if the two disagree, which is what makes an order_by
+   * this project has never seen a live instance accept safe to depend on: if Mimir
+   * ignored it, the two orders differ and nothing is written.
+   *
+   * Whether this needs the admin headers is likewise unverified — reading standings is a
+   * public operation on a public event, but an event that is not public may answer 403.
+   * Hence the opt-in rather than a guess in either direction; test/e2e.js A9 settles it
+   * against a live instance.
+   *
+   * Nothing calls this during a request. It runs once, from tools/lock-final.js, and a
+   * human confirms what it returned before anything is written.
+   *
+   * @returns {Promise<Array>} `{rank, person_id, title, rating, chips, avg_place,
+   *          avg_score, games_played}`, rank being 1-based list position
+   */
+  async getRatingTable(eventId, orderBy = 'rating', order = 'desc', { admin = false } = {}) {
+    const out = await this.#call(this.mimirBase, this.mimirService, 'GetRatingTable', {
+      event_id_list: [eventId],
+      order_by: orderBy,
+      order,
+    }, { admin, eventId });
+    const list = out.list || [];
+    // Protobuf JSON omits a field holding its default, so a player on zero chips has no
+    // chips key at all. Absent has to read as 0 here, not as "Mimir did not say" — and
+    // `games_played` absent meaning 0 is exactly the case lock-final.js refuses over.
+    return list.map((p, i) => ({
+      rank: i + 1,
+      person_id: p.id ?? field(p, 'person_id'),
+      title: p.title ?? null,
+      rating: field(p, 'rating') ?? 0,
+      chips: field(p, 'chips') ?? 0,
+      avg_place: field(p, 'avg_place') ?? 0,
+      avg_score: field(p, 'avg_score') ?? 0,
+      games_played: field(p, 'games_played') ?? 0,
+    }));
+  }
+
   /** Mimir UpdatePrescriptedEventConfig. §3: next_session_index = 1 for a fresh plan. */
   async setPrescript(eventId, prescript, nextSessionIndex = 1) {
     await this.#call(this.mimirBase, this.mimirService, 'UpdatePrescriptedEventConfig', {
@@ -378,6 +425,7 @@ class StubPantheon {
     this.prescript = '';
     this.nextSessionIndex = 0;
     this.calls = [];
+    this.standings = null; // setStandings() to script GetRatingTable
     this.failNext = null; // set to an Error to exercise the sync-failure path
   }
 
@@ -404,6 +452,34 @@ class StubPantheon {
   async getPrescript(eventId) {
     this.calls.push(['getPrescript', eventId]);
     return { event_id: eventId, next_session_index: this.nextSessionIndex, prescript: this.prescript };
+  }
+
+  /**
+   * The standings the final round would be seated from.
+   *
+   * Returned in exactly the order it is given, because the orders this has to be able to
+   * produce are mostly the ones tools/lock-final.js must REFUSE: eleven players, a tie
+   * across the 4|5 boundary, somebody who played ten games. The default is the shape the
+   * tool should accept — everyone registered, eleven games each, strictly ordered on
+   * every key — so the happy path needs no setup.
+   */
+  setStandings(rows) { this.standings = rows; }
+
+  async getRatingTable(eventId, orderBy = 'rating', order = 'desc') {
+    this.calls.push(['getRatingTable', eventId, orderBy, order]);
+    if (eventId !== this.eventId) return [];
+    const rows = this.standings ?? this.registered.map((p, i) => ({
+      person_id: p.person_id,
+      title: p.title,
+      rating: 1500 - i * 10,
+      chips: 24 - i * 2,
+      avg_place: 2 + i * 0.05,
+      avg_score: 5000 - i * 400,
+      games_played: 11,
+    }));
+    // Rank is position, never something a caller can hand in: that is the one property
+    // of the real method a stub must not be able to contradict.
+    return rows.map((r, i) => ({ ...r, rank: i + 1 }));
   }
 
   async setPrescript(eventId, prescript, nextSessionIndex = 1) {

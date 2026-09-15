@@ -55,6 +55,21 @@ function warnFrozenMoved(out, cfg) {
   note('      the one after it. If that round was tagged, the tag still has the file.');
 }
 
+/**
+ * Said out loud in both branches, because --abandon means something narrower here than it
+ * does anywhere else in this tool. The event drew and finished; what is being given up on
+ * is a final round whose standings and beacon were already published and timestamped, and
+ * which twelve people were asked to check against each other. The archive keeps the lock
+ * and its .ots proof, so the promise stays readable — this is the line that records that
+ * it was not kept.
+ */
+function warnFinalAbandoned(verb) {
+  note('');
+  note(`NOTE: this ${verb} events/final/lock.json with no final.json beside it. The`);
+  note('      standings and the beacon it named were published and timestamped, and the');
+  note('      final round was never drawn. Both are archived. Tell the players.');
+}
+
 function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const abandon = argv.includes('--abandon');
@@ -86,6 +101,7 @@ function main(argv) {
         ? 'and var/admin-credential.json, the captured admin token, would be deleted'
         : 'no captured admin token on disk, so there is none to delete');
       if (out.frozenMoved) warnFrozenMoved(out, cfg);
+      if (out.final.locked && !out.final.drawn) warnFinalAbandoned('would archive and then clear');
       note('nothing was changed');
       return 0;
     }
@@ -99,6 +115,7 @@ function main(argv) {
       note('on disk. The next event captures a fresh one when an admin signs in.');
     }
     if (out.frozenMoved) warnFrozenMoved(out, cfg);
+    if (out.final.locked && !out.final.drawn) warnFinalAbandoned('archived and then cleared');
     for (const rel of out.removed) note(`removed ${rel}`);
 
     if (!mirror.enabled) {

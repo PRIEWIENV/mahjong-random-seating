@@ -985,3 +985,168 @@ test('outside production plain http signs in as it always did, and the cookie is
   assert.doesNotMatch(res.headers.getSetCookie()[0], /Secure/);
   await s.close();
 });
+
+// ---------------------------------------------------------------------------
+// the twelfth round, served (PROTOCOL.md §11)
+// ---------------------------------------------------------------------------
+
+/** Put a finished eleven-round draw, and optionally a final round, into a booted tree. */
+function withDraw(s, { locked = false, drawn = false, anchored = false } = {}) {
+  const { generate, serialise } = require('../generate');
+  const { generateFinal, serialise: serialiseFinal } = require('../generate-final');
+  const { makeDecrypted, SAMPLE_SIG } = require('./helpers');
+
+  const results = generate({
+    decrypted: makeDecrypted(12),
+    roster: s.cfg.roster, protocol: s.cfg.protocol, template: s.cfg.template,
+    signature: SAMPLE_SIG, round: s.cfg.protocol.target_round,
+  });
+  const resultsBody = serialise(results);
+  fs.writeFileSync(path.join(s.cfg.root, 'results.json'), resultsBody);
+  if (!locked && !drawn) return { results };
+
+  const lock = {
+    event: 'final',
+    locked_at: '2026-09-15T12:00:00Z',
+    target_round: s.cfg.protocol.target_round + 1000,
+    target_round_utc: '2026-09-15T12:45:00Z',
+    results_sha256: crypto.createHash('sha256').update(resultsBody).digest('hex'),
+    R: results.R,
+    standings: [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+  };
+  const lockBody = JSON.stringify(lock, null, 2) + '\n';
+  fs.mkdirSync(path.join(s.cfg.root, 'events', 'final'), { recursive: true });
+  fs.writeFileSync(path.join(s.cfg.root, 'events', 'final', 'lock.json'), lockBody);
+  if (anchored) fs.writeFileSync(path.join(s.cfg.root, 'events', 'final', 'lock.json.ots'), Buffer.from('OTS'));
+  const lockSha = crypto.createHash('sha256').update(lockBody).digest('hex');
+  if (!drawn) return { results, lock, lockSha };
+
+  const final = generateFinal({
+    results, lock: { ...lock, lock_sha256: lockSha },
+    signature: SAMPLE_SIG.replace(/..$/, '11'),
+    roster: s.cfg.roster, protocol: s.cfg.protocol, template: s.cfg.template,
+  });
+  fs.writeFileSync(path.join(s.cfg.root, 'final.json'), serialiseFinal(final));
+  return { results, lock, lockSha, final };
+}
+
+test('the final round is a state, not a phase: `done` never moves', async () => {
+  // Everything that branches on `phase` — the submission gate, finalise.js's refusals,
+  // resetForNewRound, endEvent — is about the FIRST draw. A fourth phase would have made
+  // each of them learn a new word for a state that changes nothing they do.
+  const s = await boot();
+  withDraw(s);
+  let r = await s.get('/api/status');
+  assert.equal(r.body.phase, 'done');
+  assert.deepEqual(r.body.final, { state: 'none' });
+
+  withDraw(s, { locked: true, anchored: true });
+  r = await s.get('/api/status');
+  assert.equal(r.body.phase, 'done', 'a locked final round does not change the phase');
+  assert.equal(r.body.final.state, 'locked');
+
+  withDraw(s, { drawn: true, anchored: true });
+  r = await s.get('/api/status');
+  assert.equal(r.body.phase, 'done', 'nor does a drawn one');
+  assert.equal(r.body.final.state, 'drawn');
+  await s.close();
+});
+
+test('the locked standings are served before the beacon, which is the point of locking them', async () => {
+  const s = await boot();
+  const { lockSha } = withDraw(s, { locked: true, anchored: true });
+  const { body } = await s.get('/api/status');
+  assert.equal(body.final.state, 'locked');
+  assert.equal(body.final.lock_sha256, lockSha, 'the digest twelve people are asked to compare');
+  assert.equal(body.final.anchored, true);
+  assert.deepEqual(body.final.standings, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+  assert.equal(body.final.target_round, s.cfg.protocol.target_round + 1000);
+  assert.equal(body.final.completed_count, null, 'nothing is drawn yet, so nothing is claimed');
+  await s.close();
+});
+
+test('an unanchored lock says so rather than staying quiet about it', async () => {
+  // A stamp made after the beacon proves nothing about before it, so a missing one is
+  // not a detail to leave off the dashboard.
+  const s = await boot();
+  withDraw(s, { locked: true, anchored: false });
+  const { body } = await s.get('/api/status');
+  assert.equal(body.final.anchored, false);
+  await s.close();
+});
+
+test('a final.json with no lock beside it is not a drawn final round', async () => {
+  // The standings and the beacon it was drawn from ARE the lock. Without it there is
+  // nothing to check the file against, and calling it drawn would say there is.
+  const s = await boot();
+  withDraw(s, { drawn: true });
+  fs.rmSync(path.join(s.cfg.root, 'events', 'final', 'lock.json'));
+  const { body } = await s.get('/api/status');
+  assert.equal(body.final.state, 'none');
+  await s.close();
+});
+
+test('/api/result keeps `seating` at eleven rounds and puts the twelfth beside it', async () => {
+  // `seating` is results.json's own key and names a published file. Appending the final
+  // round to it would make this payload disagree with the file every verifier works on.
+  const s = await boot();
+  const { final, lockSha } = withDraw(s, { drawn: true, anchored: true });
+  const { body } = await s.get('/api/result');
+  assert.equal(body.seating.rounds.length, 11);
+  assert.equal(body.final_state, 'drawn');
+  assert.equal(body.final.final_round, 12);
+  assert.equal(body.final.seed, final.seed);
+  assert.equal(body.final_lock.standings.length, 12);
+  assert.equal(crypto.createHash('sha256')
+    .update(fs.readFileSync(path.join(s.cfg.root, 'events', 'final', 'lock.json'))).digest('hex'), lockSha);
+  await s.close();
+});
+
+test('the statistics count winds over twelve rounds and pairs over eleven', async () => {
+  const s = await boot();
+  withDraw(s, { drawn: true });
+  const { body } = await s.get('/api/result');
+  assert.equal(body.stats.rounds_counted, 12);
+  assert.equal(body.stats.pair_rounds_counted, 11, "the pair invariants are the template's");
+  assert.deepEqual(body.stats.final_rounds, [12]);
+
+  for (const id of body.stats.player_order) {
+    const p = body.stats.players[id];
+    const split = [p.winds.E, p.winds.S, p.winds.W, p.winds.N].sort((a, b) => b - a);
+    assert.ok(split.join('') === '3333' || split.join('') === '4332', `${id}: ${split.join('-')}`);
+    assert.deepEqual(p.wind_split_template, [3, 3, 3, 2], 'the eleven-round figure is unchanged');
+    // Every pair still met three times over the template rounds, whatever the final
+    // round did — the figure verify_template.py proves has to keep meaning that.
+    assert.ok(p.opponents.every((o) => o.same_table === 3));
+  }
+  assert.equal(body.stats.totals.wind_complete_players.length, body.final.completed_count);
+  await s.close();
+});
+
+test('a player still has their template point after the final round is counted', async () => {
+  // The regression: the final round's seats carry a rank and no abstract point. Folded
+  // into one loop, every player's `point` became undefined — which JSON then drops, so
+  // nothing threw and the explorer simply lost a column.
+  const s = await boot();
+  withDraw(s, { drawn: true });
+  const { body } = await s.get('/api/result');
+  for (const id of body.stats.player_order) {
+    const point = body.stats.players[id].point;
+    assert.ok(Number.isInteger(point) && point >= 0 && point < 12, `local_id ${id} has point ${point}`);
+  }
+  assert.equal(new Set(body.stats.player_order.map((id) => body.stats.players[id].point)).size, 12);
+  await s.close();
+});
+
+test('the result before any final round is exactly what it always was', async () => {
+  const s = await boot();
+  withDraw(s);
+  const { body } = await s.get('/api/result');
+  assert.equal(body.final_state, 'none');
+  assert.equal(body.final, null);
+  assert.equal(body.final_lock, null);
+  assert.equal(body.stats.rounds_counted, 11);
+  assert.deepEqual(body.stats.final_rounds, []);
+  assert.equal(body.stats.totals.wind_complete_players.length, 0);
+  await s.close();
+});

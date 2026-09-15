@@ -350,6 +350,76 @@ function createServer(opts = {}) {
   }
 
   /**
+   * The twelfth round, as a state rather than a phase (PROTOCOL.md §11).
+   *
+   * Deliberately NOT a fourth phase. `phase` is 'done' from the moment results.json
+   * exists, and it stays 'done' through the lock and through the final draw, because
+   * everything that branches on it — the submission gate, finalise.js's refusals,
+   * resetForNewRound, endEvent — is about the FIRST draw and must go on answering
+   * exactly as it did. A fourth phase would have required every one of them to learn a
+   * new word for a state that changes nothing they do, and the one that forgot would
+   * have been the one that let submissions reopen.
+   *
+   * Three states: 'none' (no lock yet), 'locked' (published and timestamped, waiting on
+   * its beacon), 'drawn'.
+   *
+   * Cached on mtimes, because /api/status is polled by twelve browsers and none of these
+   * files changes while the state does not.
+   */
+  let finalCache = null;
+  function finalFiles() {
+    const lockFile = path.join(cfg.root, 'events', 'final', 'lock.json');
+    const otsFile = `${lockFile}.ots`;
+    const drawnFile = path.join(cfg.root, 'final.json');
+    const stamp = (f) => { try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
+    const key = `${stamp(lockFile)}|${stamp(otsFile)}|${stamp(drawnFile)}`;
+    if (finalCache && finalCache.key === key) return finalCache.value;
+
+    const value = { state: 'none', lock: null, lock_sha256: null, anchored: false, final: null };
+    try {
+      if (fs.existsSync(lockFile)) {
+        const bytes = fs.readFileSync(lockFile);
+        value.lock = JSON.parse(bytes.toString('utf8'));
+        value.lock_sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+        value.anchored = fs.existsSync(otsFile);
+        value.state = 'locked';
+      }
+      // A final.json with no lock beside it is not a drawn final round, it is a file
+      // nobody can check: the standings and the beacon it was drawn from are the lock.
+      if (value.lock && fs.existsSync(drawnFile)) {
+        value.final = JSON.parse(fs.readFileSync(drawnFile, 'utf8'));
+        value.state = 'drawn';
+      }
+    } catch (err) {
+      // Never fatal. The round-robin's result is what this server exists to serve, and a
+      // half-written final round must not take it down with it.
+      log.warn?.(`[server] the final round's files are not readable: ${err.message}`);
+    }
+    finalCache = { key, value };
+    return value;
+  }
+
+  /** The part of that which belongs in a payload twelve browsers poll. */
+  function finalSummary() {
+    const f = finalFiles();
+    if (f.state === 'none') return { state: 'none' };
+    return {
+      state: f.state,
+      // The lock is a published file; none of this is newly disclosed by saying it here,
+      // and the standings are exactly what lets the page show the tables BEFORE the
+      // beacon — which is the whole point of locking them in public.
+      locked_at: f.lock.locked_at ?? null,
+      lock_sha256: f.lock_sha256,
+      anchored: f.anchored,
+      target_round: f.lock.target_round ?? null,
+      target_round_utc: f.lock.target_round_utc ?? null,
+      standings: f.lock.standings ?? null,
+      round: f.final ? f.final.final_round : (cfg.template.rounds.length + 1),
+      completed_count: f.final ? f.final.completed_count : null,
+    };
+  }
+
+  /**
    * Whether the draw is merely pending or actually late.
    *
    * This process never draws. server/finalise.js does, on a timer (deploy/README.md
@@ -387,6 +457,11 @@ function createServer(opts = {}) {
       phase,
       // Null until the beacon is out and the phase has not moved; see drawStatus.
       draw: drawStatus(phase, now),
+      // The twelfth round (PROTOCOL.md §11). Always present, {state: 'none'} until a
+      // lock exists. `phase` stays 'done' through all three of its states — see
+      // finalFiles — so this is the only thing that moves, and the client refetches
+      // /api/result when it does.
+      final: finalSummary(),
       submitted_count: submitted.length,
       quorum: cfg.protocol.quorum,
       total_slots: cfg.protocol.total_slots,
@@ -676,20 +751,49 @@ function createServer(opts = {}) {
     return null;
   }
 
+  /**
+   * The eleven-round result, joined with the twelfth round when there is one.
+   *
+   * `seating` is never touched. It is results.json's own key, it names a published file,
+   * and it holds the eleven template rounds — if the final round were appended to it,
+   * this payload would disagree with the file it is named after, and every verifier a
+   * player is pointed at works on the file. The twelfth round arrives beside it, in
+   * `final`, exactly as it does on disk.
+   *
+   * The statistics are the one place the two are added together, because "three of every
+   * wind" is a fact about all twelve rounds and about nothing less. server/stats.js keeps
+   * the two scopes apart: winds and tables over everything played, pair figures over the
+   * template rounds only, since those are the ones verify_template.py proves.
+   */
+  function resultPayload(base) {
+    const f = finalFiles();
+    const extraRounds = f.final ? f.final.seating.rounds : [];
+    return {
+      ...base,
+      stats: computeStats(base.seating, cfg.roster.players, extraRounds),
+      pantheon_sync: syncOutcome(),
+      // 'none' | 'locked' | 'drawn'. The client watches this to know when to refetch.
+      final_state: f.state,
+      // The published files themselves, whole: both are small, both are already public,
+      // and handing over a subset would mean the page shows figures a reader cannot
+      // trace back to a file they can hash.
+      final_lock: f.lock,
+      final: f.final,
+    };
+  }
+
   function result(res) {
     const stored = store.get(KEY_RESULT);
     if (stored) {
-      const stats = stored.stats || computeStats(stored.seating, cfg.roster.players);
-      return sendJson(res, 200, { ...stored, stats, pantheon_sync: syncOutcome() });
+      // Any stats cached on the row are the eleven-round ones, computed at draw time
+      // when no final round existed. resultPayload recomputes over whatever has been
+      // played since and overwrites them, so this endpoint cannot serve a figure that
+      // was true before the twelfth round and is not now.
+      return sendJson(res, 200, resultPayload(stored));
     }
     const p = path.join(cfg.root, 'results.json');
     if (fs.existsSync(p)) {
-      const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
-      return sendJson(res, 200, {
-        ...parsed,
-        stats: computeStats(parsed.seating, cfg.roster.players),
-        pantheon_sync: syncOutcome(),
-      });
+      return sendJson(res, 200, resultPayload(JSON.parse(fs.readFileSync(p, 'utf8'))));
     }
     return sendJson(res, 404, { error: 'not_yet', phase: phaseOf(cfg, store, nowFn()) });
   }

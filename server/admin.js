@@ -226,6 +226,11 @@ function collect(ctx) {
     'data/roster.json': digestOf(path.join(cfg.dataDir, 'roster.json')),
     'data/schedule_template.json': digestOf(path.join(cfg.dataDir, 'schedule_template.json')),
     'generate.js': digestOf(path.join(cfg.root, 'generate.js')),
+    // Only when there is a twelfth round to draw. On an eleven-round event the row
+    // would be a permanent "missing" for a file nothing is waiting on.
+    ...(cfg.protocol.final_round?.enabled
+      ? { 'generate-final.js': digestOf(path.join(cfg.root, 'generate-final.js')) }
+      : {}),
     'public/app.js + app.css': actualBundle,
   };
 
@@ -263,11 +268,17 @@ function collect(ctx) {
     tag_refs: {
       schedule_template_ref: cfg.protocol.schedule_template_ref,
       generate_script_ref: cfg.protocol.generate_script_ref,
+      generate_final_script_ref: cfg.protocol.generate_final_script_ref || null,
     },
     roster,
     checks,
     artefacts,
     result,
+    // The twelfth round (PROTOCOL.md §11): whether the rules were frozen for one, and
+    // how far along it is. {state: 'none'} until the standings are locked.
+    final_round_enabled: Boolean(cfg.protocol.final_round?.enabled),
+    final: status.final || { state: 'none' },
+    final_digest: digestOf(path.join(cfg.root, 'final.json')),
     pantheon_sync: syncOutcome,
     attempts: readIndex(cfg),
     mirror_enabled: Boolean(mirror?.enabled),
@@ -467,6 +478,38 @@ function render(m) {
       复算：<code>node generate.js --verify results.json</code>，
       点名核对会自动读取 <code>events/snapshot.json</code>。
     </p>
+  </div>` : ''}
+
+  ${m.final_round_enabled ? `
+  <div class="card wide">
+    <h2>决赛轮（PROTOCOL §11）</h2>
+    <p class="detail dim flush">
+      桌次由前 ${m.final.round ? m.final.round - 1 : 11} 轮名次决定，风位由一次新的 drand 抽签决定。
+      名次与信标轮次都在信标出块<strong>之前</strong>锁定并公开。
+    </p>
+    ${m.final.state === 'none' ? `
+    <p class="chase">还没有锁定。循环赛打完之后：<code>node tools/lock-final.js --in 45m --confirm</code></p>` : `
+    <dl>
+      ${kv('状态', m.final.state === 'drawn'
+        ? '<span class="ok">已抽签</span>'
+        : '<span class="mono">已锁定，等待信标</span>')}
+      ${kv('锁定时间', `<span class="mono">${esc(m.final.locked_at || '')}</span>`)}
+      ${kv('lock.json sha256', `<span class="mono">${esc(m.final.lock_sha256 || '')}</span>`)}
+      ${kv('时间戳存证', m.final.anchored
+        ? '<span class="ok">已锚定</span>'
+        : '<span class="fail">没有 .ots —— 信标之后再补证明不了任何事</span>')}
+      ${kv('决赛信标', `<span class="mono">round ${m.final.target_round ?? '—'} · ${esc(m.final.target_round_utc || '')}</span>`)}
+      ${m.final.standings ? kv('名次（一桌 / 二桌 / 三桌）', `<span class="mono">${
+        [0, 4, 8].map((i) => m.final.standings.slice(i, i + 4).join('-')).join(' &nbsp; ')
+      }</span>`) : ''}
+      ${m.final.state === 'drawn' ? kv('十二轮后风位补齐', `${m.final.completed_count} / ${(m.final.standings || []).length}`) : ''}
+      ${m.final.state === 'drawn' ? kv('final.json sha256', `<span class="mono">${esc(m.final_digest || '')}</span>`) : ''}
+    </dl>
+    <p class="detail dim">
+      ${m.final.state === 'drawn'
+        ? '复算：<code>node generate-final.js --verify final.json</code>，第二实现：<code>py tools/verify_final.py</code>'
+        : '信标出块后：<code>node tools/draw-final.js</code>。在那之前，让十二个人互相核对上面那串 sha256。'}
+    </p>`}
   </div>` : ''}
 
   ${m.pantheon_sync ? `

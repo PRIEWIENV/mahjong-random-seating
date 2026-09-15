@@ -129,6 +129,7 @@ ADMIN_TOKEN=x PANTHEON_MODE=stub npm run serve  # 外加组织者面板 /admin?t
 
 ```
 generate.js                  # PROTOCOL §7 —— 冻结；只用 node:crypto，无依赖
+generate-final.js            # PROTOCOL §11 —— 第十二轮决赛；和上面一起冻结
 data/
   schedule_template.json     # 冻结并已验证 —— 不要手改
   protocol.example.json      # 冻结参数：链、目标轮次、人数门槛、输入范围
@@ -170,8 +171,8 @@ test/                        # 单元测试，以及对着真实 drand 的 e2e.j
 ## 硬性规则
 
 1. **不要手改 `data/schedule_template.json`。** 任何改动都会破坏已证明的性质。
-2. **`roster.json`、`protocol.json`、`schedule_template.json` 和 `generate.js` 在提交开放之前一起冻结并打 git tag，在办活动的那个仓库里。** 此后改动任何一个字节都会使保证失效，整场重来。
-3. **就这四个，别的都不冻结。** 一个参数在窗口中途改动能改变或引导结果，就是冻结的；否则就是运营的（[`docs/PROTOCOL.zh.md`](docs/PROTOCOL.zh.md) §4.1）。
+2. **`roster.json`、`protocol.json`、`schedule_template.json`、`generate.js` 和 `generate-final.js` 在提交开放之前一起冻结并打 git tag，在办活动的那个仓库里。** 此后改动任何一个字节都会使保证失效，整场重来。`generate-final.js` 抽的那一轮要过好几周才打，而这正是它现在就打 tag 的理由：它的规则在任何人知道名次之前就固定了。
+3. **就这五个，别的都不冻结。** 一个参数在窗口中途改动能改变或引导结果，就是冻结的；否则就是运营的（[`docs/PROTOCOL.zh.md`](docs/PROTOCOL.zh.md) §4.1）。
 4. **人数门槛的规则也是冻结的**（[`docs/PROTOCOL.zh.md`](docs/PROTOCOL.zh.md) §8）。真的出现 7/12 的时候，不重新商量。
 5. **作废的尝试归档，绝不删除**，在 `events/rounds/<target_round>/` 下。
 6. **选手提交的内容在揭晓之前绝不暴露。** 只有「是否提交了」，以及密封信封的指纹。

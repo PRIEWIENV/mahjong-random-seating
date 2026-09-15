@@ -47,7 +47,12 @@ const { createPantheon } = require('../server/pantheon');
 const { ENCODING_LIMITS } = require('../generate.js');
 
 const ROOT = path.join(__dirname, '..');
-const FROZEN = ['data/roster.json', 'data/protocol.json', 'data/schedule_template.json', 'generate.js'];
+// generate-final.js is in here for the reason the whole freeze exists: the twelfth
+// round's rules have to be fixed before anybody knows the standings they will be applied
+// to. Tagged now, weeks before the round-robin ends, it is a rule nobody could have
+// designed around a result they had already seen.
+const FROZEN = ['data/roster.json', 'data/protocol.json', 'data/schedule_template.json',
+  'generate.js', 'generate-final.js'];
 
 const ok = (s) => `  \x1b[32mOK\x1b[0m    ${s}`;
 const bad = (s) => `  \x1b[31mFAIL\x1b[0m  ${s}`;
@@ -211,6 +216,7 @@ function alignTagRefs(cfg, tag, lines, problems) {
   const want = {
     schedule_template_ref: `data/schedule_template.json@${tag}`,
     generate_script_ref: `generate.js@${tag}`,
+    generate_final_script_ref: `generate-final.js@${tag}`,
   };
   const file = path.join(cfg.dataDir, 'protocol.json');
   let raw;
@@ -239,6 +245,87 @@ function alignTagRefs(cfg, tag, lines, problems) {
   }
 }
 
+/**
+ * The twelfth round's rules, checked before they are tagged (PROTOCOL.md §11).
+ *
+ * None of these can be checked at load time, which is why they live here. All three are
+ * about an agreement between things that only meet at the freeze: the frozen template and
+ * the script that will read it, and the enumeration order that the published draw will be
+ * an index into. Get any of them wrong and nothing fails now — it fails weeks later, in
+ * the ten minutes between the final beacon landing and twelve people wanting to sit down.
+ *
+ * The pinned vectors come from test/final-vectors.json rather than from a copy here.
+ * A fourth statement of the same 24 rows would be a fourth thing to keep true.
+ */
+function finalRoundPreflight(cfg, lines, problems) {
+  if (!cfg.protocol.final_round || cfg.protocol.final_round.enabled !== true) {
+    lines.push(ok('no final round in this freeze (protocol.json has no enabled final_round)'));
+    return;
+  }
+
+  let mod;
+  try {
+    mod = require(path.join(ROOT, 'generate-final.js'));
+  } catch (err) {
+    problems.push(`generate-final.js will not even load, and it is about to be tagged: ${err.message}`);
+    return;
+  }
+
+  let vectors;
+  try {
+    vectors = readJson(path.join(ROOT, 'test', 'final-vectors.json'));
+  } catch (err) {
+    problems.push(`test/final-vectors.json is not readable, so nothing can be pinned against it: ${err.message}`);
+    return;
+  }
+
+  // 1. Every abstract point is short of exactly one wind, and the four winds are short
+  //    for equally many points. deficiencyByPoint asserts both and throws otherwise; a
+  //    template that is not 3-3-3-2 has no twelfth round of this shape to draw at all.
+  let deficiency;
+  try {
+    deficiency = mod.deficiencyByPoint(cfg.template);
+  } catch (err) {
+    problems.push(
+      `the deficient winds do not derive cleanly from data/schedule_template.json: ${err.message}\n` +
+      '        The final round completes players to three of every wind, which needs every point\n' +
+      '        short of exactly one. Freezing a final round over a template without that shape\n' +
+      '        would tag a rule that cannot be carried out.');
+    return;
+  }
+  const spread = {};
+  for (const w of ['E', 'S', 'W', 'N']) spread[w] = deficiency.filter((x) => x === w).length;
+  lines.push(ok(`deficient winds derive from the template: ${spread.E} points short of each of E/S/W/N`));
+
+  if (Array.isArray(vectors.deficiency_by_point)
+      && vectors.deficiency_by_point.join('') !== deficiency.join('')) {
+    problems.push(
+      'the deficient winds derived from data/schedule_template.json are not the ones pinned in\n' +
+      `        test/final-vectors.json.\n        template: ${deficiency.join(' ')}\n` +
+      `        pinned:   ${vectors.deficiency_by_point.join(' ')}\n` +
+      '        Either the template changed or the vectors did. Both are checked in; find out which.');
+  }
+
+  // 2. The 24 assignments, in the order the draw indexes into. An implementation that
+  //    enumerates differently agrees on the seed and disagrees on the seats — which is
+  //    the worst kind of disagreement, because nothing throws.
+  const got = mod.ASSIGNMENTS.map((a) => a.join(''));
+  if (got.join(',') !== (vectors.assignments || []).join(',')) {
+    problems.push(
+      'generate-final.js enumerates the 24 seatings in a different order from the one pinned in\n' +
+      `        test/final-vectors.json.\n        got:    ${got.join(' ')}\n` +
+      `        pinned: ${(vectors.assignments || []).join(' ')}\n` +
+      '        The published draw is an INDEX into this order, so the order is part of the result.');
+  } else {
+    lines.push(ok(`${got.length} seatings enumerated in the pinned order (${got[0]} … ${got[got.length - 1]})`));
+  }
+
+  // 3. And the rules protocol.json states in words are the ones the script implements.
+  //    config.js pins each to one value; this says the two files agree about which.
+  const fr = cfg.protocol.final_round;
+  lines.push(ok(`final round: tables by ${fr.table_assignment}, winds by ${fr.wind_draw}`));
+}
+
 /** Step 11's checks, plus the ones RUNBOOK A leaves to memory. */
 function preflight(cfg, lines, problems) {
   const now = Date.now();
@@ -256,10 +343,13 @@ function preflight(cfg, lines, problems) {
 
   // The tag refs name the tag this freeze is about to create, so they are the one part
   // of protocol.json that cannot be checked by config.js at load time.
-  for (const k of ['schedule_template_ref', 'generate_script_ref']) {
+  for (const k of ['schedule_template_ref', 'generate_script_ref', 'generate_final_script_ref']) {
     const v = cfg.protocol[k];
+    if (v === undefined && k === 'generate_final_script_ref' && !cfg.protocol.final_round?.enabled) continue;
     if (typeof v !== 'string' || !v.includes('@')) problems.push(`protocol.json: ${k} must be "<path>@<tag>"`);
   }
+
+  finalRoundPreflight(cfg, lines, problems);
 
   const run = (label, args) => {
     try {
@@ -509,4 +599,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { snapshotRoster, applyRosterSnapshot, alignTagRefs, preflight, FROZEN };
+module.exports = { snapshotRoster, applyRosterSnapshot, alignTagRefs, preflight, finalRoundPreflight, FROZEN };

@@ -56,6 +56,10 @@ function makeProtocol(over = {}) {
     seed_domain_separation: 'mahjong-seating-v1',
     schedule_template_ref: 'data/schedule_template.json@test',
     generate_script_ref: 'generate.js@test',
+    generate_final_script_ref: 'generate-final.js@test',
+    // §11. Present by default so every fixture exercises the shape a real freeze has;
+    // a test that wants the eleven-round world passes final_round: null.
+    final_round: { enabled: true, table_assignment: 'rank_blocks', wind_draw: 'max_completion_then_uniform' },
     // Only the frozen half (§4.1). Base URLs are operational and live in runtime.json.
     pantheon: { wind_shuffle_mode: 'WIND_SHUFFLE_MODE_PRESCRIPTED' },
     ...over,

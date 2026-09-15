@@ -162,6 +162,7 @@ drand mirrors, Pantheon addresses, the proxy — and is deliberately outside the
 
 ```
 generate.js                  # PROTOCOL.md §7 — frozen; node:crypto only, no dependencies
+generate-final.js            # PROTOCOL.md §11 — the twelfth round; frozen with the rest
 data/
   schedule_template.json     # frozen and verified — do not hand-edit
   protocol.example.json      # FROZEN parameters: chain, target round, quorum, input range
@@ -204,10 +205,13 @@ test/                        # unit tests, and e2e.js against live drand
 
 1. **Do not hand-edit `data/schedule_template.json`.** Any change breaks the proved
    properties.
-2. **`roster.json`, `protocol.json`, `schedule_template.json` and `generate.js` are frozen
-   and git-tagged together before submissions open, in the repository the event is run
-   from.** After that a single changed byte voids the guarantee and the run restarts.
-3. **Those four, and nothing else.** A parameter is frozen if changing it mid-window could
+2. **`roster.json`, `protocol.json`, `schedule_template.json`, `generate.js` and
+   `generate-final.js` are frozen and git-tagged together before submissions open, in the
+   repository the event is run from.** After that a single changed byte voids the guarantee
+   and the run restarts. `generate-final.js` draws a round that will not be played for
+   weeks, and that is exactly why it is tagged now: its rules are fixed before anybody
+   knows the standings they will be applied to.
+3. **Those five, and nothing else.** A parameter is frozen if changing it mid-window could
    change or steer the outcome, and operational otherwise
    ([`docs/PROTOCOL.md`](docs/PROTOCOL.md) §4.1).
 4. **The quorum rule is frozen too** ([`docs/PROTOCOL.md`](docs/PROTOCOL.md) §8). It is not

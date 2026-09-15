@@ -76,6 +76,15 @@ const DEFAULTS = {
     // no value it can take changes who sits where, which is why it belongs on this
     // side of the boundary rather than in the freeze.
     event_title: null,
+    // How Mimir is asked to rank the standings the final round is seated from
+    // (PROTOCOL.md §11). Operational, and only just: the RULE — ranks 1-4 to table one —
+    // is frozen, but which column the league ranks on is a league's own decision and one
+    // it may make after the freeze. It cannot be used to steer the draw, because
+    // tools/lock-final.js re-derives the same order locally from the same key and refuses
+    // to write anything if Mimir's order disagrees, and because the standings it produces
+    // are locked and published before the beacon that seats them is chosen.
+    rating_order_by: 'rating',
+    rating_order: 'desc',
   },
   ui: {
     // UI-SPEC §5's documented fallback cadence when the SSE stream drops. Served to
@@ -125,6 +134,8 @@ const OPERATIONAL_KEYS = {
   'pantheon.frey_service': 'runtime.json → pantheon.frey_service',
   'pantheon.mimir_service': 'runtime.json → pantheon.mimir_service',
   'pantheon.event_title': 'runtime.json → pantheon.event_title',
+  'pantheon.rating_order_by': 'runtime.json → pantheon.rating_order_by',
+  'pantheon.rating_order': 'runtime.json → pantheon.rating_order',
 };
 
 function posInt(section, key, value) {
@@ -175,7 +186,15 @@ function validate(r) {
     }
     r.pantheon.event_title = r.pantheon.event_title.trim();
   }
-  for (const k of ['twirp_path_template', 'frey_service', 'mimir_service']) {
+  if (!['asc', 'desc'].includes(r.pantheon.rating_order)) {
+    throw new Error(`runtime.json: pantheon.rating_order must be "asc" or "desc", got ${JSON.stringify(r.pantheon.rating_order)}`);
+  }
+  // Deliberately not a list of permitted columns. Which order_by values Mimir accepts is
+  // not something this project has verified, and a guessed allowlist would reject a valid
+  // key while still not catching an invalid one. What catches an invalid one is
+  // lock-final.js: it re-sorts locally on the same key and refuses when the two orders
+  // differ, which is a real check rather than a guess about somebody else's enum.
+  for (const k of ['twirp_path_template', 'frey_service', 'mimir_service', 'rating_order_by', 'rating_order']) {
     if (typeof r.pantheon[k] !== 'string' || r.pantheon[k] === '') {
       throw new Error(`runtime.json: pantheon.${k} must be a non-empty string`);
     }

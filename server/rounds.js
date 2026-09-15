@@ -147,8 +147,23 @@ function archiveAttempt(cfg, store, outcome, mirror, log = console) {
     ['results.json', path.join(cfg.root, 'results.json')],
     ['snapshot.json.ots', path.join(cfg.root, 'events', 'snapshot.json.ots')],
     ['sync.json', path.join(cfg.root, 'events', 'sync.json')],
+    // The final round, flattened: the archive has no subdirectories but submissions/.
+    ['final.json', path.join(cfg.root, 'final.json')],
+    ['final-lock.json', path.join(cfg.root, 'events', 'final', 'lock.json')],
+    ['final-lock.json.ots', path.join(cfg.root, 'events', 'final', 'lock.json.ots')],
+    ['final-sync.json', path.join(cfg.root, 'events', 'final', 'sync.json')],
   ]) {
     if (fs.existsSync(abs)) put(rel, fs.readFileSync(abs));
+  }
+  // Superseded locks from a --relock, globbed rather than listed: there may be none and
+  // there is no bound on how many, and each one is a published commitment of its own.
+  const finalDir = path.join(cfg.root, 'events', 'final');
+  if (fs.existsSync(finalDir)) {
+    for (const name of fs.readdirSync(finalDir).sort()) {
+      if (/^lock\.\d+\.json(\.ots)?$/.test(name)) {
+        put(`final-${name}`, fs.readFileSync(path.join(finalDir, name)));
+      }
+    }
   }
   for (const r of rows) {
     put(`submissions/${r.local_id}.json`,
@@ -339,11 +354,22 @@ function resetForNewRound(cfg, store, opts = {}) {
 /** The files one event leaves live in the tree, as opposed to archived. */
 const LIVE_FILES = [
   'results.json',
+  'final.json',
   'events/snapshot.json',
   'events/snapshot.json.ots',
   'events/sync.json',
   'events/void.json',
+  // The final round's standings lock and its OpenTimestamps anchor (PROTOCOL.md §11).
+  // Published and timestamped before the final beacon, so they are evidence in exactly
+  // the way events/snapshot.json is, and they are archived for the same reason.
+  'events/final/lock.json',
+  'events/final/lock.json.ots',
+  'events/final/sync.json',
 ];
+
+/** Where the final round's lock lives, before anything has opened it. */
+const FINAL_LOCK = 'events/final/lock.json';
+const FINAL_RESULT = 'final.json';
 
 /**
  * Close out an event, so the checkout can hold the next one.
@@ -416,6 +442,29 @@ function endEvent(cfg, store, opts = {}) {
     };
   }
 
+  // The final round's commitment, made but not yet kept (PROTOCOL.md §11). Between the
+  // lock and the draw there is a published, OpenTimestamped file naming twelve standings
+  // and the beacon that will seat them, and no final.json yet to close over it. None of
+  // the safeguards above fire here: results.json exists, so `status` is 'done' and
+  // --abandon is not asked for. A routine end-event would delete a promise the twelve
+  // players have already been asked to check against each other, before the beacon it
+  // names has even landed — and deleting it looks exactly like withdrawing it.
+  const finalLocked = fs.existsSync(path.join(cfg.root, FINAL_LOCK));
+  const finalDrawn = fs.existsSync(path.join(cfg.root, FINAL_RESULT));
+  if (finalLocked && !finalDrawn && !opts.abandon) {
+    return {
+      ok: false,
+      error:
+        `${FINAL_LOCK} is published and timestamped, but ${FINAL_RESULT} has not been drawn. ` +
+        'Closing the event now would remove a commitment that is still outstanding.\n' +
+        'If the final round has simply not been drawn yet, draw it: node tools/draw-final.js\n' +
+        'If the final round is being given up on, say so: node tools/end-event.js --abandon. ' +
+        'The lock and its .ots proof are archived either way, so the standings and the beacon ' +
+        'it named stay checkable; what --abandon adds is that giving up on it was a decision ' +
+        'somebody took, and said so.',
+    };
+  }
+
   const existing = fs.existsSync(path.join(archiveAbs(cfg, targetRound), 'manifest.json'));
   // Said in the dry run as well as during the archive, because it is the one thing here
   // a reader might still be able to do something about.
@@ -423,6 +472,7 @@ function endEvent(cfg, store, opts = {}) {
   if (opts.dryRun) {
     return {
       ok: true, dryRun: true, status, targetRound, frozenMoved,
+      final: { locked: finalLocked, drawn: finalDrawn },
       archived: existing ? verifyArchive(cfg, targetRound).manifest : null,
       willArchive: { submissions: rows.length, files: live, already: existing },
       removed: live,
@@ -468,10 +518,13 @@ function endEvent(cfg, store, opts = {}) {
   log.info?.(`[rounds] event closed: round ${targetRound} archived as ${status}, ` +
     `${cleared} submission(s) and ${removed.length} live path(s) cleared` +
     (credentialCleared ? ', captured admin credential deleted' : ''));
-  return { ok: true, status, targetRound, frozenMoved, archived: check.manifest, cleared, removed, credentialCleared };
+  return {
+    ok: true, status, targetRound, frozenMoved, archived: check.manifest, cleared, removed,
+    credentialCleared, final: { locked: finalLocked, drawn: finalDrawn },
+  };
 }
 
 module.exports = {
   archiveVoidedAttempt, archiveAttempt, verifyArchive, resetForNewRound, endEvent, attemptRound, readIndex, attemptsInThisRun,
-  ROUNDS_DIR, INDEX_PATH, archiveRel, LIVE_FILES,
+  ROUNDS_DIR, INDEX_PATH, archiveRel, LIVE_FILES, FINAL_LOCK, FINAL_RESULT,
 };

@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { snapshotRoster, applyRosterSnapshot, alignTagRefs, FROZEN } = require('../tools/freeze');
+const { snapshotRoster, applyRosterSnapshot, alignTagRefs, finalRoundPreflight, FROZEN } = require('../tools/freeze');
 const { load } = require('../server/config');
 const { createPantheon } = require('../server/pantheon');
 const { makeDataDir, makeRoster, cleanup } = require('./helpers');
@@ -344,6 +344,9 @@ test('the tag being created is written into the protocol that names it', () => {
   const written = JSON.parse(fs.readFileSync(path.join(fx.dataDir, 'protocol.json'), 'utf8'));
   assert.equal(written.schedule_template_ref, 'data/schedule_template.json@spring-2026-r3');
   assert.equal(written.generate_script_ref, 'generate.js@spring-2026-r3');
+  // The final round's script is tagged with the rest of the freeze, or the rules for it
+  // would be the one thing in this system that could be written after the fact.
+  assert.equal(written.generate_final_script_ref, 'generate-final.js@spring-2026-r3');
   // And handed back re-loaded, so everything downstream checks the file that will be
   // committed rather than the object this process happened to be holding.
   assert.equal(next.protocol.generate_script_ref, 'generate.js@spring-2026-r3');
@@ -382,14 +385,19 @@ test('the rewritten protocol still loads, and still parses as JSON with a traili
   cleanup(fx.dir);
 });
 
-test('the frozen set is exactly the four PROTOCOL.md §4 names', () => {
-  // Adding a fifth here would silently widen the freeze; dropping one would silently
+test('the frozen set is exactly the five PROTOCOL.md §4 names', () => {
+  // Adding a sixth here would silently widen the freeze; dropping one would silently
   // narrow it. Both are the kind of change that should have to argue with a test.
+  //
+  // generate-final.js is in the set for the same reason generate.js is, and its timing
+  // is the whole argument: tagged at the freeze, it fixes the twelfth round's rules
+  // weeks before anybody knows the standings they will be applied to.
   assert.deepEqual(FROZEN, [
     'data/roster.json',
     'data/protocol.json',
     'data/schedule_template.json',
     'generate.js',
+    'generate-final.js',
   ]);
   for (const f of FROZEN) {
     assert.ok(
@@ -420,4 +428,73 @@ test('no ignore rule is written so that a symlink slips past it', () => {
     .filter((line) => line && !line.startsWith('#') && line.endsWith('/'));
   assert.deepEqual(dirOnly, [], 'these match directories only, so a symlink of the same name is committed: '
     + `${dirOnly.join(', ')}. Drop the trailing slash.`);
+});
+
+// ---------------------------------------------------------------------------
+// the twelfth round's rules, checked before they are tagged (PROTOCOL.md §11)
+// ---------------------------------------------------------------------------
+
+test('the freeze confirms the final round derives from the template it is tagging', () => {
+  const { fx, cfg } = fixture();
+  const lines = [];
+  const problems = [];
+  finalRoundPreflight(cfg, lines, problems);
+  assert.deepEqual(problems, []);
+  const out = lines.join('\n');
+  assert.match(out, /3 points short of each of E\/S\/W\/N/);
+  assert.match(out, /24 seatings enumerated in the pinned order/);
+  assert.match(out, /tables by rank_blocks, winds by max_completion_then_uniform/);
+  cleanup(fx.dir);
+});
+
+test('an event with no final round is frozen without one, and says so', () => {
+  const { fx, cfg } = fixture();
+  delete cfg.protocol.final_round;
+  const lines = [];
+  const problems = [];
+  finalRoundPreflight(cfg, lines, problems);
+  assert.deepEqual(problems, []);
+  assert.match(lines.join('\n'), /no final round in this freeze/);
+  cleanup(fx.dir);
+});
+
+test('a template with no single deficient wind cannot have a final round tagged over it', () => {
+  // The refusal that matters most here, because the alternative is tagging a rule that
+  // cannot be carried out — and finding that out in the ten minutes between the final
+  // beacon landing and twelve people wanting to sit down.
+  const { fx, cfg } = fixture();
+  // Seat one point twice in a round. Swapping two winds would leave every point's counts
+  // untouched; this actually changes the distribution.
+  const seats = cfg.template.rounds[0].tables[0].seats;
+  seats.E = seats.S;
+  const lines = [];
+  const problems = [];
+  finalRoundPreflight(cfg, lines, problems);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /do not derive cleanly from data\/schedule_template\.json/);
+  assert.match(problems[0], /cannot be carried out/);
+  cleanup(fx.dir);
+});
+
+test('the freeze refuses an enumeration order that is not the published one', () => {
+  // The published draw is an INDEX into this order, so a different order is a different
+  // seat plan — and nothing throws when it happens.
+  const { fx, cfg } = fixture();
+  const freeze = require('../tools/freeze');
+  const mod = require('../generate-final');
+  const real = mod.ASSIGNMENTS;
+  try {
+    // Same 24 seatings, one pair swapped: every other check still passes.
+    const shuffled = [...real];
+    [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+    Object.defineProperty(mod, 'ASSIGNMENTS', { value: shuffled, configurable: true });
+    const problems = [];
+    freeze.finalRoundPreflight(cfg, [], problems);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /enumerates the 24 seatings in a different order/);
+    assert.match(problems[0], /is an INDEX into this order/);
+  } finally {
+    Object.defineProperty(mod, 'ASSIGNMENTS', { value: real, configurable: true });
+  }
+  cleanup(fx.dir);
 });

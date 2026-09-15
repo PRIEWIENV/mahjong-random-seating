@@ -115,6 +115,69 @@ function assertNoOperationalKeys(p) {
   }
 }
 
+/**
+ * The twelfth round's rules, frozen with everything else (PROTOCOL.md §11).
+ *
+ * The whole block is optional, and that is not laxity: every protocol.json written before
+ * a final round existed lacks it, including the ones sitting inside events/rounds/*
+ * archives, and none of them is wrong. Absent means eleven rounds, which is what those
+ * files meant when they were written.
+ *
+ * When it IS present, both rules are pinned to a single permitted value each. They are
+ * also hard-coded in generate-final.js, so this is a second statement of the same thing —
+ * on purpose. protocol.json is the file that gets tagged, published and quoted at people;
+ * a reader should be able to see what was committed to without reading JavaScript, and a
+ * value that disagreed with the script would otherwise be a silent lie. Here it is fatal.
+ *
+ * What is NOT here is as deliberate. The final beacon F is chosen at lock time, weeks
+ * after the freeze, and lives in events/final/lock.json where a timestamp can reach it.
+ * The standings sort key is a league decision and lives in runtime.json. Freezing either
+ * would be claiming to have committed in advance to something nobody had decided yet.
+ */
+function validateFinalRound(p) {
+  const f = p.final_round;
+  if (f === undefined || f === null) return;
+  if (typeof f !== 'object' || Array.isArray(f)) {
+    throw new Error('protocol.json: final_round must be an object, or absent for an event with no final round');
+  }
+  if (typeof f.enabled !== 'boolean') {
+    throw new Error('protocol.json: final_round.enabled must be true or false — whether there is a twelfth round at all is a rule, not a default');
+  }
+  if (!f.enabled) return;
+
+  if (f.table_assignment !== 'rank_blocks') {
+    throw new Error(
+      `protocol.json: final_round.table_assignment must be "rank_blocks", got ${JSON.stringify(f.table_assignment)}. ` +
+      'That is the rule the field agreed to: ranks 1-4 to table one, 5-8 to table two, 9-12 to table three. ' +
+      'Any other banding is a different competition and has to be frozen as one.'
+    );
+  }
+  if (f.wind_draw !== 'max_completion_then_uniform') {
+    throw new Error(
+      `protocol.json: final_round.wind_draw must be "max_completion_then_uniform", got ${JSON.stringify(f.wind_draw)}. ` +
+      'The draw takes the seatings that complete the most players to three of every wind, and picks ' +
+      'uniformly among those (docs/seating-design.md). The alternatives are real designs with ' +
+      'different fairness properties, so which one is in force cannot be a matter of which script ran.'
+    );
+  }
+  // Ranks are banded into tables of four. A field that does not divide into fours has no
+  // banding to apply, and the failure would surface as a short final table after the
+  // round-robin had already been played.
+  if (p.total_slots % 4 !== 0) {
+    throw new Error(
+      `protocol.json: final_round is enabled but total_slots is ${p.total_slots}, which does not divide ` +
+      'into tables of four. Rank blocks need a whole number of tables.'
+    );
+  }
+  if (typeof p.generate_final_script_ref !== 'string' || p.generate_final_script_ref.trim() === '') {
+    throw new Error(
+      'protocol.json: final_round is enabled but generate_final_script_ref is missing. The final draw ' +
+      'must name the tagged script that will perform it, for the same reason generate_script_ref does: ' +
+      'the algorithm is fixed before anyone knows the standings. tools/freeze.js --tag writes it.'
+    );
+  }
+}
+
 function validateProtocol(p) {
   assertNoOperationalKeys(p);
 
@@ -226,6 +289,8 @@ function validateProtocol(p) {
     );
   }
   p.target_round_ms = roundMs;
+
+  validateFinalRound(p);
 
   const mode = p.pantheon?.wind_shuffle_mode;
   if (mode && mode !== 'WIND_SHUFFLE_MODE_PRESCRIPTED') {

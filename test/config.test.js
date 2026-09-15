@@ -501,3 +501,68 @@ test('a configuration failure is an operator refusal, not a crash', () => {
   const bad = caught(() => withProtocol((p) => { p.quorum = 2; }));
   assert.equal(bad.operator, true, 'a refused value is the operator’s to fix too');
 });
+
+// ---------------------------------------------------------------------------
+// the twelfth round's rules (PROTOCOL.md §11)
+// ---------------------------------------------------------------------------
+
+test('an event with no final_round block at all still loads', () => {
+  // Every protocol.json written before §11 existed lacks the block, including the copies
+  // inside events/rounds/*/ archives. Absent means eleven rounds, which is exactly what
+  // those files meant when they were written; refusing them would break the archives.
+  const { cfg } = withProtocol((p) => { delete p.final_round; delete p.generate_final_script_ref; });
+  assert.equal(cfg.protocol.final_round, undefined);
+});
+
+test('final_round.enabled must be said, not defaulted', () => {
+  // Whether there is a twelfth round is a rule of the competition. Defaulting it either
+  // way would mean a file that does not say could still produce, or suppress, a round.
+  failsWith((p) => { delete p.final_round.enabled; }, /final_round\.enabled must be true or false/);
+  failsWith((p) => { p.final_round.enabled = 'yes'; }, /final_round\.enabled must be true or false/);
+  failsWith((p) => { p.final_round = []; }, /final_round must be an object/);
+});
+
+test('a disabled final round needs nothing else, and is not checked for anything else', () => {
+  const { cfg } = withProtocol((p) => {
+    p.final_round = { enabled: false };
+    delete p.generate_final_script_ref;
+  });
+  assert.equal(cfg.protocol.final_round.enabled, false);
+});
+
+test('both final-round rules are pinned to one value each', () => {
+  // They are hard-coded in generate-final.js too, and that is the point: protocol.json is
+  // the file that gets tagged and quoted at people, so a value here that disagreed with
+  // the script would be a published claim the code does not honour.
+  failsWith((p) => { p.final_round.table_assignment = 'snake'; }, /table_assignment must be "rank_blocks"/);
+  failsWith((p) => { delete p.final_round.table_assignment; }, /table_assignment must be "rank_blocks"/);
+  failsWith((p) => { p.final_round.wind_draw = 'uniform'; }, /wind_draw must be "max_completion_then_uniform"/);
+  failsWith((p) => { delete p.final_round.wind_draw; }, /wind_draw must be "max_completion_then_uniform"/);
+});
+
+test('a final round names the tagged script that will draw it', () => {
+  // The same reason generate_script_ref exists: the algorithm is fixed before anybody
+  // knows the standings. A final round with no named script is a rule written afterwards.
+  failsWith((p) => { delete p.generate_final_script_ref; }, /generate_final_script_ref is missing/);
+  failsWith((p) => { p.generate_final_script_ref = '  '; }, /generate_final_script_ref is missing/);
+});
+
+test('rank blocks need a field that divides into tables of four', () => {
+  // The failure would otherwise surface as a short final table, after the round-robin had
+  // already been played and there was nothing left to do about it.
+  failsWith((p) => { p.total_slots = 10; }, /does not divide/);
+});
+
+test('the final beacon and the standings sort key are NOT frozen, and that is the point', () => {
+  // F is chosen weeks after the freeze, at lock time, and lives in events/final/lock.json
+  // where a timestamp can reach it. The sort key is a league decision. Freezing either
+  // would be claiming to have committed in advance to something nobody had decided.
+  assert.equal(DEFAULTS.pantheon.rating_order_by, 'rating');
+  assert.equal(DEFAULTS.pantheon.rating_order, 'desc');
+  failsWith((p) => { p.pantheon.rating_order_by = 'chips'; }, /operational setting and must not be frozen/);
+
+  // ...and the runtime side validates the half of it that has only two legal values.
+  const fx = makeDataDir({ runtime: { pantheon: { rating_order: 'sideways' } } });
+  assert.throws(() => load({ dataDir: fx.dataDir }), /rating_order must be "asc" or "desc"/);
+  cleanup(fx.dir);
+});

@@ -677,3 +677,102 @@ test('with nothing to close it says so instead of pretending', () => {
   assert.match(out.error, /nothing to close/);
   cleanup(c.fx.dir);
 });
+
+// ---------------------------------------------------------------------------
+// the final round's lock, which outlives the draw it belongs to (PROTOCOL.md §11)
+// ---------------------------------------------------------------------------
+
+/** A finished round-robin with a final round locked, and optionally drawn. */
+function withFinal(opts = {}) {
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'),
+    JSON.stringify({ round_used: c.cfg.protocol.target_round, seating: {} }, null, 2) + '\n');
+  c.store.set('phase', 'done');
+  const finalDir = path.join(c.fx.dir, 'events', 'final');
+  fs.mkdirSync(finalDir, { recursive: true });
+  fs.writeFileSync(path.join(finalDir, 'lock.json'), '{"final_round":9999999}\n');
+  fs.writeFileSync(path.join(finalDir, 'lock.json.ots'), Buffer.from([0x00, 0x4f, 0x54, 0x53]));
+  for (const name of opts.superseded || []) fs.writeFileSync(path.join(finalDir, name), '{"superseded":true}\n');
+  if (opts.drawn) {
+    fs.writeFileSync(path.join(c.fx.dir, 'final.json'), '{"final_round":9999999,"seating":{}}\n');
+    fs.writeFileSync(path.join(finalDir, 'sync.json'), '{"status":"ok"}\n');
+  }
+  return c;
+}
+
+test('a locked but undrawn final round is not closed out by a routine end-event', () => {
+  // The defect this exists for: results.json is on disk, so `status` is 'done' and none
+  // of the other refusals fire. end-event.js would have deleted a published, timestamped
+  // commitment — which from the outside is indistinguishable from withdrawing it.
+  const c = withFinal();
+  const refused = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /events\/final\/lock\.json/);
+  assert.match(refused.error, /--abandon/);
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'events', 'final', 'lock.json')), true,
+    'a refusal must not delete the thing it refused over');
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'results.json')), true);
+  assert.equal(c.store.listSubmissions().length, 12, 'nothing may be cleared by a refusal');
+  assert.equal(fs.existsSync(arch(c, c.cfg.protocol.target_round)), false, 'and nothing archived');
+
+  // The dry run refuses too. A preview that says "ok" and a real run that refuses would
+  // teach the operator the opposite of what the refusal is for.
+  const preview = endEvent(c.cfg, c.store, { dryRun: true, mirror: c.mirror, log: QUIET });
+  assert.equal(preview.ok, false);
+  cleanup(c.fx.dir);
+});
+
+test('abandoning an undrawn final round is allowed once it is said out loud, and archives the lock', () => {
+  const c = withFinal({ superseded: ['lock.2.json', 'lock.2.json.ots'] });
+  const out = endEvent(c.cfg, c.store, { abandon: true, mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true, out.error);
+  assert.deepEqual(out.final, { locked: true, drawn: false });
+
+  const dir = arch(c, out.targetRound);
+  // Flattened into the archive, which has no subdirectories but submissions/.
+  for (const f of ['final-lock.json', 'final-lock.json.ots', 'final-lock.2.json', 'final-lock.2.json.ots']) {
+    assert.ok(fs.existsSync(path.join(dir, f)), `the archive is missing ${f}`);
+  }
+  assert.equal(fs.existsSync(path.join(dir, 'final.json')), false, 'there was no draw to archive');
+  assert.equal(verifyArchive(c.cfg, out.targetRound).ok, true, 'every archived digest recomputes');
+  assert.ok(c.mirrored.some((p) => String(p).endsWith('/final-lock.json')),
+    'the archived lock is offered to the mirror like the rest of the evidence');
+
+  // Cleared afterwards, so the next event does not open on top of a dead commitment.
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'events', 'final', 'lock.json')), false);
+  assert.equal(fs.existsSync(path.join(c.fx.dir, 'events', 'final', 'lock.json.ots')), false);
+  cleanup(c.fx.dir);
+});
+
+test('a drawn final round closes without --abandon, and its result is archived', () => {
+  const c = withFinal({ drawn: true });
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.status, 'done');
+  assert.deepEqual(out.final, { locked: true, drawn: true });
+
+  const dir = arch(c, out.targetRound);
+  for (const f of ['results.json', 'final.json', 'final-lock.json', 'final-lock.json.ots', 'final-sync.json']) {
+    assert.ok(fs.existsSync(path.join(dir, f)), `the archive is missing ${f}`);
+  }
+  assert.equal(verifyArchive(c.cfg, out.targetRound).ok, true);
+  for (const rel of ['final.json', 'events/final/lock.json', 'events/final/sync.json']) {
+    assert.equal(fs.existsSync(path.join(c.fx.dir, rel)), false, `${rel} should have been cleared`);
+    assert.ok(out.removed.includes(rel), `${rel} should be reported as removed`);
+  }
+  cleanup(c.fx.dir);
+});
+
+test('an event with no final round at all closes exactly as it did before', () => {
+  // The whole of §11 is additive: a run that never locks a final round must behave the
+  // way it did when final.json did not exist as a concept.
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'), '{"round_used":1}\n');
+  c.store.set('phase', 'done');
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true, out.error);
+  assert.deepEqual(out.final, { locked: false, drawn: false });
+  const archived = fs.readdirSync(arch(c, out.targetRound));
+  assert.ok(!archived.some((f) => f.startsWith('final')), 'nothing final to archive');
+  cleanup(c.fx.dir);
+});
