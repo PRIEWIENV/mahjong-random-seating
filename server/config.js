@@ -439,7 +439,13 @@ function validateSubstitutes(raw, roster, protocol) {
         || typeof incoming.title !== 'string' || incoming.title.trim() === '') {
       throw new Error(`${where}.incoming.title must name the person who actually played`);
     }
-    if (incoming.person_id !== undefined && !Number.isInteger(incoming.person_id)) {
+    // null counts as absent, not as a bad value. This matters beyond the form that sends
+    // it: the normalised record below writes `incoming.person_id ?? null`, so a validator
+    // that refused null would refuse its own output -- and everything that re-reads a file
+    // this function produced (the server on restart, tools/lock-final.js, the archive)
+    // would fail on a record it had itself written.
+    if (incoming.person_id !== undefined && incoming.person_id !== null
+        && !Number.isInteger(incoming.person_id)) {
       throw new Error(`${where}.incoming.person_id must be an integer when given, or absent`);
     }
     if (typeof sub.reason !== 'string' || sub.reason.trim() === '') {

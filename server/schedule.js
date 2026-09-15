@@ -32,6 +32,7 @@
  */
 
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const JOB = path.join(__dirname, 'finalise.js');
@@ -47,6 +48,14 @@ const JOB = path.join(__dirname, 'finalise.js');
 function startScheduler(o) {
   const { cfg, log = console, spawnFn = spawn, jobPath = JOB } = o;
   const intervalMs = o.intervalMs ?? cfg.runtime.server.finalise_interval_seconds * 1000;
+  // What to run, and whether to run it at all this tick. Both exist for the final round
+  // (PROTOCOL.md 11): its job refuses outright when there is no lock yet, or when the
+  // beacon has not landed, and refusing is right -- for a person. For a timer it would be
+  // an error in the log every few seconds for the length of a tournament. The gate is a
+  // pure file check, so the child is only started when it can actually succeed.
+  const jobArgs = o.jobArgs || ['--no-wait'];
+  const gate = o.gate || (() => true);
+  const label = o.label || 'draw';
 
   let child = null;
   let stopped = false;
@@ -73,31 +82,32 @@ function startScheduler(o) {
       // A job that has not finished before the next tick is normal exactly once — the
       // run that does the draw — and a symptom if it keeps happening.
       skipped += 1;
-      log.warn?.(`[schedule] previous draw job still running; skipping this tick (${skipped} so far)`);
+      log.warn?.(`[schedule] previous ${label} job still running; skipping this tick (${skipped} so far)`);
       return;
     }
+    if (!gate()) return;
     runs += 1;
     let proc;
     try {
-      proc = spawnFn(process.execPath, [jobPath, '--no-wait'], {
+      proc = spawnFn(process.execPath, [jobPath, ...jobArgs], {
         cwd: cfg.root,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
-      log.error?.(`[schedule] could not start the draw job: ${err.message}`);
+      log.error?.(`[schedule] could not start the ${label} job: ${err.message}`);
       return;
     }
     child = proc;
     forward(proc.stdout, 'info');
     forward(proc.stderr, 'warn');
     proc.on('error', (err) => {
-      log.error?.(`[schedule] the draw job could not be run: ${err.message}`);
+      log.error?.(`[schedule] the ${label} job could not be run: ${err.message}`);
       child = null;
     });
     proc.on('exit', (code) => {
       // Non-zero is worth saying out loud. §8 treats a late beacon as a delay and the
       // job exits 0 for it, so a failure here is something else.
-      if (code !== 0) log.error?.(`[schedule] the draw job exited ${code}`);
+      if (code !== 0) log.error?.(`[schedule] the ${label} job exited ${code}`);
       child = null;
     });
   }
@@ -125,4 +135,48 @@ function startScheduler(o) {
   };
 }
 
-module.exports = { startScheduler, JOB };
+/**
+ * The final round draws itself, on the same timer and for the same reason (PROTOCOL.md 11).
+ *
+ * T2 contributes nothing of its own: the tables come from a lock published before the
+ * beacon existed, the winds from a script frozen before the tournament started, and the
+ * randomness from a drand round the lock names. There is no decision in it, so there is
+ * nobody who needs to be present for it -- and asking a tournament organiser to open a
+ * terminal between two rounds, with twelve people already sitting down, is how a draw
+ * does not happen.
+ *
+ * This is a timer, not an endpoint: no request can reach it, so 9 is as untouched here as
+ * it is for the first draw. The gate is three file checks and a clock, with no network,
+ * so the job is spawned only once it can succeed.
+ */
+const FINAL_JOB = path.join(__dirname, '..', 'tools', 'draw-final.js');
+
+function startFinalScheduler(o) {
+  const { cfg, log = console } = o;
+  const lockPath = path.join(cfg.root, 'events', 'final', 'lock.json');
+  const finalPath = path.join(cfg.root, 'final.json');
+  const nowFn = o.now || (() => Date.now());
+
+  return startScheduler({
+    ...o,
+    label: 'final-round draw',
+    jobPath: o.jobPath || FINAL_JOB,
+    jobArgs: ['--no-wait'],
+    gate() {
+      if (cfg.protocol.final_round?.enabled !== true) return false;
+      if (!fs.existsSync(lockPath)) return false;       // nothing locked yet
+      if (fs.existsSync(finalPath)) return false;       // already drawn; T2 is idempotent
+      let due;
+      try {
+        due = Date.parse(JSON.parse(fs.readFileSync(lockPath, 'utf8')).target_round_utc);
+      } catch (err) {
+        log.warn?.(`[schedule] cannot read the final lock: ${err.message}`);
+        return false;
+      }
+      // Before the beacon there is nothing to draw from, and --no-wait would exit 1.
+      return Number.isFinite(due) && nowFn() >= due;
+    },
+  });
+}
+
+module.exports = { startScheduler, startFinalScheduler, JOB, FINAL_JOB };

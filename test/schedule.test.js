@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 
-const { startScheduler, JOB } = require('../server/schedule');
+const { startScheduler, startFinalScheduler, JOB, FINAL_JOB } = require('../server/schedule');
 
 const QUIET = { info() {}, warn() {}, error() {} };
 const cfgFor = (seconds = 60) => ({ root: '/somewhere', runtime: { server: { finalise_interval_seconds: seconds } } });
@@ -302,4 +302,97 @@ ${stderr}`)));
     });
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
+});
+
+// ---------------------------------------------------------------------------
+// the twelfth round, on the same timer (PROTOCOL.md 11)
+// ---------------------------------------------------------------------------
+
+/** A checkout with whichever of the final round's files the case needs. */
+function fx({ lock = null, drawn = false, enabled = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjs-sched-'));
+  if (lock) {
+    fs.mkdirSync(path.join(dir, 'events', 'final'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'events', 'final', 'lock.json'), JSON.stringify(lock));
+  }
+  if (drawn) fs.writeFileSync(path.join(dir, 'final.json'), '{}');
+  return {
+    dir,
+    cfg: {
+      root: dir,
+      protocol: { final_round: enabled ? { enabled: true } : null },
+      runtime: { server: { finalise_interval_seconds: 60 } },
+    },
+  };
+}
+const rm = (d) => fs.rmSync(d, { recursive: true, force: true });
+const DUE = '2026-09-15T12:00:00Z';
+const AFTER = Date.parse(DUE) + 1000;
+const BEFORE = Date.parse(DUE) - 60_000;
+
+async function ran(o) {
+  const calls = [];
+  const s = startFinalScheduler({
+    ...o, log: QUIET, intervalMs: 10_000,
+    spawnFn: (...a) => { calls.push(a); return fakeChild(); },
+  });
+  await settle();
+  s.stop();
+  return calls;
+}
+
+test('the final draw runs itself once the beacon has landed', async () => {
+  // The whole point: nobody has to be at a terminal between two rounds of a tournament.
+  const c = fx({ lock: { target_round_utc: DUE } });
+  const calls = await ran({ cfg: c.cfg, now: () => AFTER });
+  assert.equal(calls.length, 1, 'it should have drawn');
+  assert.equal(calls[0][1][0], FINAL_JOB);
+  assert.deepEqual(calls[0][1].slice(1), ['--no-wait'], 'a timer must never sit and wait');
+  assert.equal(calls[0][2].cwd, c.dir);
+  rm(c.dir);
+});
+
+test('it starts nothing before the beacon, rather than failing every tick', async () => {
+  // draw-final.js exits 1 without a landed beacon, which is right for a person and would
+  // be an error in the log every few seconds for the length of a tournament for a timer.
+  const c = fx({ lock: { target_round_utc: DUE } });
+  assert.deepEqual(await ran({ cfg: c.cfg, now: () => BEFORE }), []);
+  rm(c.dir);
+});
+
+test('it starts nothing while there is no lock', async () => {
+  const c = fx({ lock: null });
+  assert.deepEqual(await ran({ cfg: c.cfg, now: () => AFTER }), []);
+  rm(c.dir);
+});
+
+test('it starts nothing once the round has been drawn', async () => {
+  // T2 is idempotent, so a second run would be harmless -- but it would re-sync Pantheon
+  // every minute forever, and external side effects are worth not repeating.
+  const c = fx({ lock: { target_round_utc: DUE }, drawn: true });
+  assert.deepEqual(await ran({ cfg: c.cfg, now: () => AFTER }), []);
+  rm(c.dir);
+});
+
+test('an event with no final round never starts the job at all', async () => {
+  const c = fx({ lock: { target_round_utc: DUE }, enabled: false });
+  assert.deepEqual(await ran({ cfg: c.cfg, now: () => AFTER }), []);
+  rm(c.dir);
+});
+
+test('an unreadable lock is reported and stops the tick, not the server', async () => {
+  const c = fx({ lock: { target_round_utc: DUE } });
+  fs.writeFileSync(path.join(c.dir, 'events', 'final', 'lock.json'), '{ not json');
+  const said = [];
+  const calls = [];
+  const s = startFinalScheduler({
+    cfg: c.cfg, now: () => AFTER, intervalMs: 10_000,
+    log: { info() {}, error() {}, warn: (m) => said.push(m) },
+    spawnFn: (...a) => { calls.push(a); return fakeChild(); },
+  });
+  await settle();
+  s.stop();
+  assert.deepEqual(calls, []);
+  assert.match(said.join(' '), /cannot read the final lock/);
+  rm(c.dir);
 });

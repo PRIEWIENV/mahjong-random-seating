@@ -21,7 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createServer } = require('../server/server');
-const { collect } = require('../server/admin');
+const { collect, render } = require('../server/admin');
 const { load } = require('../server/config');
 const { Store } = require('../server/db');
 const { KEY_TICK } = require('../server/finalise');
@@ -400,4 +400,81 @@ test('the TLS row reports how the request arrived, not what NODE_ENV says', () =
   assert.equal(plain['Session cookies are marked Secure, but this request came over plain http'], 'fail');
   assert.ok(!('Session cookies are marked Secure' in plain), 'the old row, which was green here, is gone');
   assert.equal(checksFor({ production: false, overTls: false })['This page is being served without TLS'], 'warn');
+});
+
+// ---------------------------------------------------------------------------
+// the two actions (PROTOCOL.md 11) -- the page has to actually offer them
+// ---------------------------------------------------------------------------
+
+function pageWith(over = {}) {
+  const fx = makeDataDir();
+  const cfg = load({ dataDir: fx.dataDir });
+  cfg.root = fx.dir;
+  const store = new Store(':memory:');
+  const model = collect({
+    cfg, store,
+    status: { phase: 'done', submitted_count: 12, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'none' } },
+    syncOutcome: null,
+    publicDir: path.join(ROOT, 'public'),
+    now: Date.now(), isStub: false,
+    mirror: { enabled: true, repo: 'me/repo', branch: 'main' },
+    production: true, overTls: true,
+    adminCredential: { source: 'env' },
+    csrf: 'CSRF-TOKEN-HERE',
+    ...over,
+  });
+  const html = render(model);
+  store.close();
+  cleanup(fx.dir);
+  return { html, model };
+}
+
+test('the dashboard offers the two actions, each carrying a CSRF token', () => {
+  const { html } = pageWith();
+  assert.match(html, /action="\/admin\/final\/lock"/);
+  assert.match(html, /action="\/admin\/final\/substitute"/);
+  // Two buttons on the lock form: previewing writes nothing, confirming publishes.
+  assert.match(html, /name="mode" value="preview"/);
+  assert.match(html, /name="mode" value="confirm"/);
+  // Every form must carry the token, or the POST is refused and the operator is stuck.
+  const forms = html.split('<form ').slice(1);
+  assert.equal(forms.length, 2);
+  for (const f of forms) assert.match(f, /name="csrf" value="CSRF-TOKEN-HERE"/);
+  // The default in the box is the short lead, not the old forty-five minutes.
+  assert.match(html, /name="in" value="5m"/);
+});
+
+test('the draw is not on the dashboard, and must never be', () => {
+  // 9: nothing an outsider can poke may trigger, retry or re-time a draw. It runs on a
+  // timer instead. Re-locking is absent for a different reason -- it rewrites a published
+  // commitment, and that should stay something you have to mean.
+  const { html } = pageWith();
+  assert.doesNotMatch(html, /admin\/final\/draw/);
+  assert.doesNotMatch(html, /relock/i);
+});
+
+test('once the standings are locked the forms are gone', () => {
+  // Locking is the commitment. Offering the button again would invite a second one.
+  const { html } = pageWith({
+    status: { phase: 'done', submitted_count: 12, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'locked', lock_sha256: 'a'.repeat(64), target_round: 7, anchored: true } },
+  });
+  assert.doesNotMatch(html, /action="\/admin\/final\/lock"/);
+});
+
+test('a page with no CSRF token shows no forms at all', () => {
+  // Rendering a form that cannot be submitted is worse than rendering none.
+  const { html } = pageWith({ csrf: null });
+  assert.doesNotMatch(html, /<form /);
+});
+
+test('what the last action said is shown, exit code and all', () => {
+  const { html } = pageWith({
+    lastAction: { kind: 'final-lock-preview', code: 1, at: '2026-09-15T12:00:00Z',
+                  out: 'ranks 4 and 5 are tied on rating' },
+  });
+  assert.match(html, /final-lock-preview/);
+  assert.match(html, /ranks 4 and 5 are tied on rating/);
+  assert.match(html, /action-result fail/);
 });

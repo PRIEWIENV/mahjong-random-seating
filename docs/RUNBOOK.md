@@ -53,15 +53,22 @@ The whole of this section is one rule: the standings and the beacon are publishe
 **If somebody drops out part-way through**, before step 17 and at the time it happens, not at the lock:
 
 - The substitute plays on that seat's **existing Pantheon registration** — do not register them as a thirteenth person. The seat is a `local_id`; keeping it intact is what makes the standings come out as twelve rows of eleven games, and the draw is then exactly what it would have been.
-- Write `data/substitutes.json` (copy `data/substitutes.example.json`): the seat, the round the substitute came in, who left, who took over, and **the league rule that allows it**. It will not load without the reason.
-- Nothing else to do. `lock-final.js` shows it, checks it against the frozen roster, and copies it into the lock so it falls under the same fingerprint and timestamp as the standings. PROTOCOL.md §11.6 says why this record can be written late without becoming a lever.
+- Declare it on **/admin** → 声明替补: the seat, the round they came in, who took over, and **the league rule that allows it**. It will not record without the rule. (It writes `data/substitutes.json`, which you can also edit by hand from `data/substitutes.example.json` if you would rather.)
+- Nothing else to do. The lock shows it, checks it against the frozen roster, and copies it in, so it falls under the same fingerprint and timestamp as the standings. PROTOCOL.md §11.6 says why this record can be written late without becoming a lever.
 
-17. [ ] All eleven rounds played and entered in Pantheon. `node tools/lock-final.js` — a dry run, it writes nothing — and read what it prints: twelve players, eleven games each, and the order it recomputed matching the one Mimir gave
-17a. [ ] If the dry run says the standings are **empty**, the event is hiding its results while it is played. Re-run with `--as-admin` — and read the warning it then prints: that mode also counts games that are *started but unfinished*, so nothing may still be at a table
+**This whole section is done from `/admin` in a venue, not from a terminal.** The twelfth round starts minutes after the eleventh, and nobody is at a server then. Only one step needs a person at all.
 
-18. [ ] `node tools/lock-final.js --in 45m --confirm`. It writes `events/final/lock.json`, mirrors it, and timestamps it. **Announce the sha256 it prints to all twelve now**, along with the drand round and the time it is due — after that round lands, the digest proves nothing
-19. [ ] Once the round has landed: `node tools/draw-final.js --dry-run`, then `node tools/draw-final.js`. It waits for the beacon, publishes `final.json`, and writes all twelve prescript blocks to Pantheon
-20. [ ] `events/final/sync.json` says ok. If not, paste **all twelve** blocks of `pantheon_prescript` in by hand with `next_session_index = 12` and `WIND_SHUFFLE_MODE_PRESCRIPTED` — never re-run the draw
+17. [ ] All eleven rounds played and entered in Pantheon. On **/admin** → 锁定决赛轮, press **预览（不写入）**. It fetches the standings and runs every check, and writes nothing. Read what it prints: twelve players, eleven games each, and the order confirmed against the key it was sorted on
+17a. [ ] If it says the standings are **empty**, the event hides its results while it is played. Tick 赛事隐藏成绩 and preview again — then read the warning it prints, because that mode also counts games that are *started but unfinished*. Make sure no table is still playing
+17b. [ ] If it refuses over a **tie across a table boundary**, settle it by the league's own rule, make Pantheon reflect that, then put the rank and the rule in 并列名次 / 并列裁决依据. The tool never breaks a tie itself
+18. [ ] Press **锁定并公布**. It writes `events/final/lock.json`, mirrors it, timestamps it, and reports **how much room it actually had**. The default gap is five minutes; the whole publish takes under ten seconds, so that is a wide margin and not a wait. **Announce the sha256 now**, with the drand round and the time it is due — after that round lands the digest proves nothing
+19. [ ] Nothing. The server draws it by itself when the beacon lands, on the same timer that ran the first draw. Watch `/admin`: 状态 goes 已锁定 → 已抽签 and the seats appear on the result page
+20. [ ] 决赛轮同步 says ok. If not, paste **all twelve** blocks of `pantheon_prescript` in by hand with `next_session_index = 12` and `WIND_SHUFFLE_MODE_PRESCRIPTED` — never re-run the draw
+
+> If the server is not running, or you would rather do it from a terminal, every step above
+> is still the command it always was: `node tools/lock-final.js` to preview,
+> `--in 5m --confirm` to lock, `node tools/draw-final.js` to draw. The dashboard runs those
+> same commands; it is not a second implementation of them.
 
 Two things worth knowing before you are asked:
 

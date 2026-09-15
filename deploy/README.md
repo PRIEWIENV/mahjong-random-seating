@@ -421,25 +421,55 @@ writes nothing:
 
 ```sh
 node tools/lock-final.js
-node tools/lock-final.js --in 45m --confirm
+node tools/lock-final.js --in 5m --confirm
 ```
+
+In practice the organiser does this from **`/admin`** instead, because the twelfth round
+starts minutes after the eleventh and nobody is at a terminal in a venue. The dashboard
+runs these same commands as child processes and shows what they said; it is not a second
+implementation. The commands remain the fallback for a server that is not running.
 
 Read what the dry run prints before confirming: twelve players, eleven games each, and
 the order it recomputed locally matching the one Mimir returned. If those disagree, the
 sort key was not applied and the tool writes nothing — set `pantheon.rating_order_by` in
 `runtime.json` to a column Mimir accepts and run it again.
 
-`--in 45m` is a reasonable default. It must be long enough to mirror the lock, get it
-timestamped, and let twelve people compare the digest, and it must never be shorter than
-an OpenTimestamps round trip — an anchor made after the beacon proves nothing about
-before it. The tool refuses anything under a minute.
+`--in 5m` is the default. It used to be forty-five minutes, chosen to be obviously
+enough, and measured it was some three hundred times the requirement: the whole publish
+sequence — write, mirror, drain, stamp, mirror the proof, drain — takes under ten
+seconds, of which an OpenTimestamps round trip to four calendars is about two. That was
+not free. The twelfth round follows the eleventh by minutes, so the gap was dead time
+between the last score going in and the seats going up, with everybody already seated.
+
+What the gap buys is the human cross-check: twelve people comparing a digest while nobody
+can yet know what it opens. Five minutes keeps a real window for that. It is worth being
+clear that the cross-check is the belt-and-braces — the *evidence* that the lock preceded
+the beacon is machine-made and needs nobody's attention, being the calendars' attestations
+and the mirror's commit timestamp, neither of which the organiser can backdate.
+
+The number is also no longer load-bearing, because the tool **measures** the margin
+afterwards instead of assuming it: it reports how much room it actually had, warns under
+thirty seconds, and refuses outright if the publish overran its own beacon. A generous
+lead was only ever an assumption that the publish was quick, and a calendar that hangs
+for six minutes breaks that silently. The floor is still one minute.
 
 **Then announce the digest it prints**, with the drand round and the time it is due. That
 is the whole of the evidence: the standings were fixed before the randomness that seats
 them existed, and twelve people holding the same short string is what makes it checkable.
 After that round lands, the same digest proves nothing.
 
-**Draw it**, once the round has landed:
+**The draw needs nobody.** The server runs it when the beacon lands, on the same timer
+that ran the first draw, gated on three file checks and a clock: a lock exists,
+`final.json` does not, and the beacon is due. That is a timer and not an endpoint, so the
+§9 rule that nothing an outsider can poke may trigger a draw is untouched. Watch `/admin`:
+the state goes 已锁定 → 已抽签 and the seats appear on the result page.
+
+There is no decision in it to make — the tables came from a lock published before the
+beacon existed, the winds from a script frozen before the tournament started — so there is
+nobody who needs to be present, and a tournament's twelfth round starts minutes after its
+eleventh, when nobody is at a terminal anyway.
+
+By hand, for a server that is not running or to do it in front of everybody:
 
 ```sh
 node tools/draw-final.js --dry-run
@@ -448,7 +478,8 @@ node tools/draw-final.js
 
 It waits for the beacon, publishes `final.json`, and writes all twelve prescript blocks
 to Pantheon with `next_session_index = 12`. Running it twice does not draw twice: an
-existing `final.json` is re-verified and re-published, never recomputed.
+existing `final.json` is re-verified and re-published, never recomputed — which is also
+why the timer racing a person is harmless.
 
 If the sync fails, paste **all twelve** blocks of `pantheon_prescript` in by hand with
 `next_session_index = 12` and `WIND_SHUFFLE_MODE_PRESCRIPTED`. Never re-run the draw.

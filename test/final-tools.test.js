@@ -839,3 +839,88 @@ test('substitutes.json is refused outright when the frozen protocol forbids them
   assert.throws(() => declareSub(c), /frozen one wins/);
   cleanup(c.fx.dir);
 });
+
+test('a lock reports how much room it actually had, not how much it planned for', async () => {
+  const c = played();
+  scripted(c, RANKED);
+  const { code, out } = await runLock(c, ['--in', '5m', '--confirm']);
+  assert.equal(code, 0, out);
+  assert.match(out, /published with .* to spare/);
+  cleanup(c.fx.dir);
+});
+
+test('a publish that overruns its own beacon is refused, not quietly kept', async () => {
+  // The lead used to be forty-five minutes, which is a way of not having to know whether
+  // the publish was quick. At five it has to be measured -- and measuring is better at any
+  // lead, because a calendar that hangs breaks a generous one just as silently. A lock
+  // published after its own beacon is not evidence of anything: by the time the bytes
+  // existed, the signature that opens them was public.
+  const c = played();
+  scripted(c, RANKED);
+  let t = 0;
+  const { code, out } = await runLock(c, ['--in', '5m', '--confirm'], {
+    elapsedClock: () => (t += 6 * 60_000),   // six minutes per read: past a five-minute lead
+  });
+  assert.equal(code, 1);
+  assert.match(out, /PUBLISHED TOO LATE/);
+  assert.match(out, /proves nothing/);
+  assert.match(out, /--relock/);
+  cleanup(c.fx.dir);
+});
+
+test('a publish that only just made it says so rather than calling it fine', async () => {
+  const c = played();
+  scripted(c, RANKED);
+  let t = 0;
+  const { code, out } = await runLock(c, ['--in', '5m', '--confirm'], {
+    elapsedClock: () => (t += 4.99 * 60_000),  // inside five minutes, but barely
+  });
+  assert.equal(code, 0, out);
+  assert.match(out, /to spare/);
+  assert.match(out, /not by much/);
+  cleanup(c.fx.dir);
+});
+
+test('the default lead is the short one, and the floor still holds', async () => {
+  const c = played();
+  scripted(c, RANKED);
+  // No --in at all: the default must be usable between two rounds of a tournament.
+  const { code, out } = await runLock(c, ['--confirm']);
+  assert.equal(code, 0, out);
+  const lock = JSON.parse(fs.readFileSync(lockFile(c), 'utf8'));
+  const leadSec = (Date.parse(lock.target_round_utc) - Date.parse(lock.locked_at)) / 1000;
+  assert.ok(leadSec > 60 && leadSec <= 5 * 60 + 3, `default lead was ${leadSec}s`);
+  cleanup(c.fx.dir);
+});
+
+test('a lead under the floor is still refused', async () => {
+  const c = played();
+  scripted(c, RANKED);
+  const { code, out } = await runLock(c, ['--in', '30s', '--confirm']);
+  assert.equal(code, 1);
+  assert.match(out, /proves nothing at all/);
+  assert.equal(fs.existsSync(lockFile(c)), false);
+  cleanup(c.fx.dir);
+});
+
+test('the substitutes validator accepts its own output', async () => {
+  // Not a theoretical nicety. The normalised record carries `incoming.person_id: null`
+  // where none was given, and an earlier version refused null -- so every reader of a file
+  // this function had itself written (the server on restart, lock-final.js, the archive)
+  // would have failed on it. A validator that rejects its own output is a validator that
+  // works exactly once.
+  const { validateSubstitutes } = require('../server/config');
+  const c = played();
+  const seat = c.cfg.roster.players[0];
+  const input = { substitutions: [{
+    local_id: seat.local_id, from_round: 4,
+    outgoing: { person_id: seat.person_id, title: seat.title },
+    incoming: { title: 'somebody' },          // no person_id at all
+    reason: 'league rule 9c', declared_at: '2026-01-01T00:00:00Z',
+  }] };
+  const once = validateSubstitutes(input, c.cfg.roster, c.cfg.protocol);
+  assert.equal(once.substitutions[0].incoming.person_id, null);
+  const twice = validateSubstitutes(once, c.cfg.roster, c.cfg.protocol);
+  assert.deepEqual(twice, once, 'a second pass must be a no-op, not a refusal');
+  cleanup(c.fx.dir);
+});

@@ -33,17 +33,18 @@
  * be turned back into a Pantheon credential.
  */
 
+const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { load, loadEnvFile } = require('./config');
+const { load, loadEnvFile, validateSubstitutes } = require('./config');
 const { Store } = require('./db');
 const { assertAdmissible, CiphertextError } = require('./ciphertext');
 const { Mirror, writeLocal } = require('./mirror');
 const { phaseOf, stateIsFromAnotherRound, refuseStaleState, KEY_RESULT, KEY_ROLL, KEY_SYNC, KEY_TICK } = require('./finalise');
-const { startScheduler } = require('./schedule');
+const { startScheduler, startFinalScheduler } = require('./schedule');
 const { EventHub } = require('./events');
 const { Drand } = require('./drand');
 const { createPantheon } = require('./pantheon');
@@ -834,6 +835,164 @@ function createServer(opts = {}) {
     return c ? { source: 'captured', title: c.title || null, at: c.captured_at || null } : { source: null };
   }
 
+  // ---- actions the organiser can take from the dashboard --------------------
+  //
+  // The dashboard was read-only on purpose, and the reason in 9 still stands: nothing an
+  // outsider can poke may trigger, retry or re-time a draw. What changed is the premise
+  // underneath it -- "the organiser is already on the box" -- which is false for the
+  // twelfth round. It happens minutes after the eleventh, in a venue, with twelve people
+  // already sitting down, and expecting somebody to open an SSH session there is how a
+  // final round does not happen.
+  //
+  // So these exist, and they are narrow on purpose:
+  //
+  //   - the DRAW is still not here. It needs no decision, so it runs on a timer
+  //     (server/schedule.js) and no request can reach it. 9 is untouched.
+  //   - what IS here is the one step that genuinely needs a person -- confirming the
+  //     standings before they are locked -- and declaring a substitute, which was a
+  //     hand-edited JSON file and therefore not something a tournament organiser can do.
+  //   - --relock is deliberately absent. It rewrites a published commitment, and that
+  //     should keep the friction of being a thing you have to mean.
+  //
+  // Each runs the SAME command line a person would, as a child process, so what the page
+  // shows is what the tool said, and nothing here is a second implementation of it.
+  const adminActionSecret = crypto.randomBytes(32);
+  let lastAdminAction = null;
+
+  /** Who is acting, for the CSRF token to be bound to. */
+  function adminIdentity(req, url) {
+    const sess = currentSession(req);
+    if (sess && sess.is_admin) return `s:${sess.token || sess.person_id}`;
+    const supplied = url.searchParams.get('token') || parseCookies(req.headers.cookie)[ADMIN_COOKIE];
+    return `t:${supplied || ''}`;
+  }
+
+  // Stateless, so there is no set of live tokens to expire or grow. Both admin cookies are
+  // already SameSite=Strict, which stops a cross-site POST carrying credentials at all;
+  // this is the second lock on the same door.
+  const csrfFor = (req, url) =>
+    crypto.createHmac('sha256', adminActionSecret).update(adminIdentity(req, url)).digest('hex');
+
+  function csrfOk(req, url, supplied) {
+    const want = Buffer.from(csrfFor(req, url));
+    const got = Buffer.from(String(supplied || ''));
+    return want.length === got.length && crypto.timingSafeEqual(want, got);
+  }
+
+  /** Run a tool exactly as a person would, and keep what it said. */
+  function runTool(relPath, argv, timeoutMs = 180_000) {
+    return new Promise((resolve) => {
+      let out = '';
+      let proc;
+      try {
+        proc = spawn(process.execPath, [path.join(__dirname, '..', relPath), ...argv], {
+          cwd: cfg.root, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (err) {
+        return resolve({ code: 2, out: `could not start ${relPath}: ${err.message}` });
+      }
+      const grab = (st) => { st.setEncoding('utf8'); st.on('data', (c) => { out += c; }); };
+      grab(proc.stdout); grab(proc.stderr);
+      const kill = setTimeout(() => { proc.kill('SIGKILL'); }, timeoutMs);
+      proc.on('error', (err) => { clearTimeout(kill); resolve({ code: 2, out: `${out}\n${err.message}` }); });
+      proc.on('exit', (code) => {
+        clearTimeout(kill);
+        // The tools colour their output; the page shows it as text.
+        resolve({ code: code ?? 2, out: out.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '') });
+      });
+    });
+  }
+
+  /**
+   * Write data/substitutes.json from the dashboard (PROTOCOL.md 11.6).
+   *
+   * This was a file an organiser had to hand-edit, which in practice means it does not get
+   * written. Validation is NOT repeated here: the file is handed to the same
+   * validateSubstitutes() every other reader uses, and a refusal is shown as the refusal.
+   * A second, friendlier set of rules on this path is exactly how the two drift apart.
+   */
+  async function declareSubstitute(form) {
+    const localId = Number(form.get('local_id'));
+    const fromRound = Number(form.get('from_round'));
+    const seat = cfg.byLocalId.get(localId);
+    if (!seat) return { code: 1, out: `local_id ${form.get('local_id')} is not a seat in the frozen roster.` };
+
+    const subsPath = path.join(cfg.dataDir, 'substitutes.json');
+    let doc = { substitutions: [] };
+    if (fs.existsSync(subsPath)) {
+      try { doc = JSON.parse(fs.readFileSync(subsPath, 'utf8')); }
+      catch (err) { return { code: 1, out: `data/substitutes.json is there but unreadable: ${err.message}` }; }
+    }
+    if (!Array.isArray(doc.substitutions)) doc.substitutions = [];
+    doc.substitutions.push({
+      local_id: localId,
+      from_round: fromRound,
+      // Taken from the frozen roster, never from the form: under "same_registration" the
+      // seat keeps its Pantheon registration, and letting a form set this would let the
+      // page assert a change that did not happen.
+      outgoing: { person_id: seat.person_id, title: seat.title },
+      incoming: {
+        person_id: form.get('incoming_person_id') ? Number(form.get('incoming_person_id')) : null,
+        title: String(form.get('incoming_title') || '').trim(),
+      },
+      reason: String(form.get('reason') || '').trim(),
+      declared_at: new Date(nowFn()).toISOString(),
+    });
+
+    // Validate BEFORE writing, with the real validator, so a refusal leaves no file behind.
+    try {
+      validateSubstitutes(doc, cfg.roster, cfg.protocol);
+    } catch (err) {
+      return { code: 1, out: `Refused, and nothing was written:\n\n${err.message}` };
+    }
+    writeLocal(cfg.root, 'data/substitutes.json', JSON.stringify(doc, null, 2) + '\n');
+    cfg.substitutes = validateSubstitutes(doc, cfg.roster, cfg.protocol);
+    return {
+      code: 0,
+      out: `Recorded: local_id ${localId} (${seat.title}) was played from round ${fromRound} by ` +
+        `${doc.substitutions[doc.substitutions.length - 1].incoming.title}.\n\n` +
+        'This does not reach the draw. It is copied into events/final/lock.json when you lock, ' +
+        'so it falls under the same fingerprint and timestamp as the standings.',
+    };
+  }
+
+  async function adminAction(req, res, url) {
+    if (!adminAuthorised(req, url)) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+    let form;
+    try { form = new URLSearchParams(await readBody(req)); }
+    catch { return sendJson(res, 400, { error: 'bad_body' }); }
+    if (!csrfOk(req, url, form.get('csrf'))) {
+      return sendJson(res, 403, { error: 'bad_csrf', detail: 'reload /admin and try again' });
+    }
+
+    const p = url.pathname;
+    let result;
+    if (p === '/admin/final/lock') {
+      const mode = form.get('mode') === 'confirm' ? 'confirm' : 'preview';
+      const argv = [];
+      const lead = String(form.get('in') || '').trim();
+      if (lead) argv.push('--in', lead);
+      const tb = String(form.get('tiebreak') || '').trim();
+      const why = String(form.get('tiebreak_reason') || '').trim();
+      if (tb) { argv.push('--tiebreak', tb); if (why) argv.push('--tiebreak-reason', why); }
+      if (form.get('as_admin') === 'on') argv.push('--as-admin');
+      if (mode === 'confirm') argv.push('--confirm');
+      result = await runTool(path.join('tools', 'lock-final.js'), argv);
+      result.kind = mode === 'confirm' ? 'final-lock' : 'final-lock-preview';
+    } else if (p === '/admin/final/substitute') {
+      result = await declareSubstitute(form);
+      result.kind = 'substitute';
+    } else {
+      return sendJson(res, 404, { error: 'not_found' });
+    }
+
+    lastAdminAction = { ...result, at: new Date(nowFn()).toISOString() };
+    log.info?.(`[admin] ${result.kind} -> exit ${result.code}`);
+    // See the result on the page that asked for it, and never re-run it on a refresh.
+    const back = url.searchParams.get('token') ? `/admin?token=${encodeURIComponent(url.searchParams.get('token'))}` : '/admin';
+    return send(res, 303, '', { location: back, 'content-type': 'text/plain; charset=utf-8' });
+  }
+
   function admin(req, res, url) {
     if (!adminAuthorised(req, url)) {
       // 404, not 401: an unauthenticated probe learns nothing, not even that the page
@@ -846,6 +1005,9 @@ function createServer(opts = {}) {
       production: secureCookie,
       overTls: overTls(req),
       adminCredential: adminCredentialStatus(),
+      csrf: csrfFor(req, url),
+      tokenQuery: url.searchParams.get('token') || null,
+      lastAction: lastAdminAction,
     });
     if (url.pathname === '/admin/data.json') return sendJson(res, 200, model);
 
@@ -860,7 +1022,11 @@ function createServer(opts = {}) {
       // all, so every rule on the dashboard was dropped and the page arrived as bare
       // markup. Sources both halves already allow are the only ones that survive that,
       // which is why server/admin.js now has no inline style left to permit.
-      'content-security-policy': "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+      // form-action is listed explicitly because it does NOT fall back to default-src:
+      // leaving it out would let the dashboard's own POSTs be aimed anywhere by injected
+      // markup, and 'none' above would not have stopped it.
+      'content-security-policy':
+        "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       'referrer-policy': 'no-referrer',
       'x-robots-tag': 'noindex, nofollow',
     };
@@ -961,6 +1127,7 @@ function createServer(opts = {}) {
         });
       }
 
+      if (req.method === 'POST' && p.startsWith('/admin/final/')) return await adminAction(req, res, url);
       if (req.method === 'GET' && (p === '/admin' || p === '/admin/data.json')) {
         // Rate-limited like sign-in: the token is the only thing in front of a roster
         // and a submission timeline.
@@ -1151,7 +1318,7 @@ const SHUTDOWN_GRACE_MS = 3000;
  * somebody the organiser does not control.
  */
 function shutdown(o) {
-  const { server, hub, scheduler, mirror, log = console, graceMs = SHUTDOWN_GRACE_MS, exit = process.exit } = o;
+  const { server, hub, scheduler, finalScheduler, mirror, log = console, graceMs = SHUTDOWN_GRACE_MS, exit = process.exit } = o;
   let grace = null;
   let done = false;
   let socketsClosed = false;
@@ -1167,6 +1334,7 @@ function shutdown(o) {
   const finishIfReady = () => { if (socketsClosed && queueSettled) finish(); };
 
   scheduler?.stop();
+  finalScheduler?.stop();
   hub?.close();
   server.close(() => { socketsClosed = true; finishIfReady(); });
   server.closeIdleConnections?.();
@@ -1226,6 +1394,7 @@ if (require.main === module) {
   }
   const { server, cfg, pantheon, store, hub, mirror } = boot;
   let scheduler = null;
+  let finalScheduler = null;
   let stopping = false;
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
@@ -1238,7 +1407,7 @@ if (require.main === module) {
       }
       stopping = true;
       console.info('[server] stopping');
-      shutdown({ server, hub, scheduler, mirror, log: console });
+      shutdown({ server, hub, scheduler, finalScheduler, mirror, log: console });
     });
   }
   server.on('error', (err) => {
@@ -1308,6 +1477,16 @@ if (require.main === module) {
       scheduler = startScheduler({ cfg, log: console });
       const every = cfg.runtime.server.finalise_interval_seconds;
       console.info(`[server] running server/finalise.js every ${every}s (server.run_finalise)`);
+      // The twelfth round on the same timer, for the same reason (PROTOCOL.md 11). There
+      // is no decision in T2 -- the tables were locked before the beacon existed and the
+      // script was frozen before the tournament started -- so there is nobody who needs to
+      // be present for it, and expecting an organiser to open a terminal between two
+      // rounds is how a draw does not happen. Gated on files, so it starts nothing until
+      // a lock exists and its beacon has landed.
+      if (cfg.protocol.final_round?.enabled === true) {
+        finalScheduler = startFinalScheduler({ cfg, log: console });
+        console.info(`[server] the final round will draw itself once its beacon lands (checked every ${every}s)`);
+      }
     } else if (!store.get(KEY_TICK)) {
       // Switched off and never run: something else is supposed to be doing it, and so
       // far nothing has. The key is written by every run of the job, so this clears

@@ -413,6 +413,8 @@ There is deliberately **no second git tag**. A tag binds code, and the code was 
 
 **T2 — once `F` lands.** `tools/draw-final.js` waits for the beacon, calls `generateFinal` in process, writes `final.json`, mirrors it, and syncs Pantheon. It does **not** timestamp anything: an anchor made after the beacon adds nothing to one made before it.
 
+**Nobody runs T2.** It contributes nothing of its own — the tables came from a lock published before the beacon existed, the winds from a script frozen before the tournament started, the randomness from a round the lock names — so there is no decision in it and nobody who needs to be present for it. The server runs it on the same timer that runs the first draw (`server/schedule.js`), gated on three file checks and a clock: a lock exists, `final.json` does not, and the beacon is due. That is a timer and not an endpoint, so §9 is as untouched here as it is for the first draw. Expecting an organiser to open a terminal between two rounds of a tournament is how a final round does not happen.
+
 ### 11.2 The seed
 
 ```

@@ -11,11 +11,21 @@
  *
  * Two decisions shape what this is:
  *
- * **Read-only.** §9 has it that nothing an outsider can poke may trigger, retry or
- * re-time the draw, and the finalisation job is deliberately not an HTTP endpoint. A
- * button here that ran the draw would undo that in one line. Every action an organiser
- * genuinely needs is a command with its own refusals (tools/new-round.js), run on the
- * box by someone who is already there.
+ * **The draw is not here, and never will be.** §9 has it that nothing an outsider can
+ * poke may trigger, retry or re-time a draw, and the finalisation job is deliberately not
+ * an HTTP endpoint. A button here that ran it would undo that in one line. Both draws run
+ * on a timer instead (server/schedule.js), which no request can reach.
+ *
+ * This page was read-only for a second reason as well -- "every action an organiser needs
+ * is a command run on the box by someone who is already there" -- and that half was simply
+ * false for the twelfth round. It happens minutes after the eleventh, in a venue, with
+ * twelve people sitting down, and nobody is at a terminal. So two things live here now:
+ * confirming the standings before they are locked, which genuinely needs a person, and
+ * declaring a substitute, which was a hand-edited JSON file and therefore did not happen.
+ * Both run the same command line a person would, as a child process, so the page shows
+ * what the tool said rather than reimplementing it. Re-locking is deliberately still a
+ * command: it rewrites a published commitment, and that should stay something you have to
+ * mean.
  *
  * **Server-rendered, and not part of the frozen bundle.** public/app.js is hash-pinned
  * and committed as part of the freeze, because it is the code that handles a player's
@@ -283,6 +293,16 @@ function collect(ctx) {
     // can still correct this before it is locked, so it belongs on their page while it
     // is still correctable rather than only on the player-facing result afterwards.
     substitutes: cfg.substitutes.substitutions,
+    // The dashboard can now DO two things (server/server.js adminAction), so it needs a
+    // CSRF token to put in the forms, somewhere to keep the token if that is how the
+    // operator arrived, and whatever the last action said.
+    csrf: ctx.csrf || null,
+    token_query: ctx.tokenQuery || null,
+    last_action: ctx.lastAction || null,
+    // Everyone has played every game, so the standings can be locked. Read here rather
+    // than in the template so the button's condition is one expression with a name.
+    roster_players: (cfg.roster?.players || []).map((pl) => ({ local_id: pl.local_id, title: pl.title })),
+    rounds: cfg.template.rounds.length,
     pantheon_sync: syncOutcome,
     attempts: readIndex(cfg),
     mirror_enabled: Boolean(mirror?.enabled),
@@ -380,6 +400,25 @@ footer{color:var(--dim);font-size:12px;margin-top:28px}
 .flush{margin:0}
 .chase{margin:10px 0 0}
 ${PCT_CLASSES}
+/* The two actions the organiser can take (PROTOCOL.md 11). Deliberately plain: this is
+   a form on a dashboard, not a product. */
+form{margin:.6rem 0 1rem}
+form label{display:block;margin:.35rem 0;font-size:.85rem;color:var(--dim)}
+form label.check{color:var(--ink)}
+form input[type=text],form input:not([type]),form input[type=number],form select{
+  font:inherit;font-size:.9rem;padding:.25rem .4rem;margin-left:.4rem;
+  border:1px solid var(--line);border-radius:4px;background:var(--card);color:var(--ink)}
+form button{font:inherit;font-size:.9rem;padding:.35rem .9rem;margin-right:.5rem;
+  border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--ink);cursor:pointer}
+form button:hover{border-color:var(--accent);color:var(--accent)}
+form button.danger{border-color:var(--fail);color:var(--fail)}
+form button.danger:hover{background:var(--fail);color:#fff}
+.action-result{margin:.8rem 0;padding:.6rem .8rem;border-radius:6px;border:1px solid var(--line)}
+.action-result.ok{border-color:var(--ok)}
+.action-result.fail{border-color:var(--fail)}
+.action-result pre{margin:.3rem 0 0;white-space:pre-wrap;word-break:break-word;
+  font-size:.8rem;line-height:1.45;color:var(--ink)}
+
 `;
 
 function render(m) {
@@ -492,7 +531,7 @@ function render(m) {
       名次与信标轮次都在信标出块<strong>之前</strong>锁定并公开。
     </p>
     ${m.final.state === 'none' ? `
-    <p class="chase">还没有锁定。循环赛打完之后：<code>node tools/lock-final.js --in 45m --confirm</code></p>` : `
+    <p class="chase">还没有锁定。循环赛打完之后，用下面的表单；也可以在服务器上跑 <code>node tools/lock-final.js --in 5m --confirm</code>。</p>` : `
     <dl>
       ${kv('状态', m.final.state === 'drawn'
         ? '<span class="ok">已抽签</span>'
@@ -518,11 +557,72 @@ function render(m) {
       这些席位保留了原有的 Pantheon 注册位，所以名次表仍是一人一行，桌次与没有换人时完全一致。
       记录会被抄进 lock.json，与名次同一个指纹、同一个时间戳。
     </p>` : ''}
+
     <p class="detail dim">
       ${m.final.state === 'drawn'
         ? '复算：<code>node generate-final.js --verify final.json</code>，第二实现：<code>py tools/verify_final.py</code>'
-        : '信标出块后：<code>node tools/draw-final.js</code>。在那之前，让十二个人互相核对上面那串 sha256。'}
+        : '信标落地时服务器会自己抽签，你什么都不用做。在那之前，让十二个人互相核对上面那串 sha256。'}
     </p>`}
+
+    ${m.last_action ? `
+    <div class="action-result ${m.last_action.code === 0 ? 'ok' : 'fail'}">
+      <p class="fineprint">上一次操作：${esc(m.last_action.kind)} · ${esc(m.last_action.at)} · 退出码 ${m.last_action.code}</p>
+      <pre>${esc(m.last_action.out || '')}</pre>
+    </div>` : ''}
+
+    ${m.final.state === 'none' && m.csrf ? `
+    <h3>锁定决赛轮</h3>
+    <p class="detail dim flush">
+      先按「预览」：它会拉回名次并把所有检查跑一遍，<strong>什么也不写</strong>。
+      确认无误之后再按「锁定并公布」。锁定之后你什么都不用做：信标落地时服务器会自己抽签。
+    </p>
+    <form method="post" action="/admin/final/lock${m.token_query ? `?token=${encodeURIComponent(m.token_query)}` : ''}">
+      <input type="hidden" name="csrf" value="${esc(m.csrf)}">
+      <label>信标提前量
+        <input name="in" value="5m" size="6" pattern="[0-9]+[smhd]" title="如 5m、2h">
+      </label>
+      <label class="check">
+        <input type="checkbox" name="as_admin"> 赛事隐藏成绩时勾选（会把未结束的对局一并算入，确认没有桌在打）
+      </label>
+      <label>并列名次（可空）
+        <input name="tiebreak" size="4" pattern="[0-9,]*" placeholder="4">
+      </label>
+      <label>并列裁决依据
+        <input name="tiebreak_reason" size="40" placeholder="联赛规则 6b：点棒多者优先">
+      </label>
+      <p>
+        <button name="mode" value="preview" type="submit">预览（不写入）</button>
+        <button name="mode" value="confirm" type="submit" class="danger">锁定并公布</button>
+      </p>
+    </form>` : ''}
+
+    ${m.csrf && m.final.state === 'none' ? `
+    <h3>声明替补</h3>
+    <p class="detail dim flush">
+      替补沿用该席位原有的 Pantheon 注册位，所以这不影响抽签，只是一份公开记录。
+      必须写明联赛规则，否则不予受理。
+    </p>
+    <form method="post" action="/admin/final/substitute${m.token_query ? `?token=${encodeURIComponent(m.token_query)}` : ''}">
+      <input type="hidden" name="csrf" value="${esc(m.csrf)}">
+      <label>座位
+        <select name="local_id">
+          ${m.roster_players.map((pl) => `<option value="${pl.local_id}">#${pl.local_id} ${esc(pl.title)}</option>`).join('')}
+        </select>
+      </label>
+      <label>从第几轮起
+        <input name="from_round" type="number" min="1" max="${m.rounds}" value="1" size="3">
+      </label>
+      <label>接手者姓名
+        <input name="incoming_title" size="16" required>
+      </label>
+      <label>接手者 person_id（可空，仅存档）
+        <input name="incoming_person_id" type="number" size="8">
+      </label>
+      <label>联赛规则与理由
+        <input name="reason" size="48" required placeholder="联赛规则 9c：伤病退赛，由候补名单首位递补">
+      </label>
+      <p><button type="submit">记录</button></p>
+    </form>` : ''}
   </div>` : ''}
 
   ${m.pantheon_sync ? `

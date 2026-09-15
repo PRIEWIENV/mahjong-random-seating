@@ -21,9 +21,17 @@
  * needed proving. Anchoring this file would prove only that a draw which anyone can
  * reproduce from public inputs existed at some later time, which is nothing.
  *
+ * NOBODY NORMALLY RUNS THIS. The server does, on the same timer that runs the first draw
+ * (server/schedule.js), because there is no decision in it: the tables came from a lock
+ * published before the beacon existed and the winds from a script frozen before the
+ * tournament started. A tournament's twelfth round begins minutes after its eleventh, and
+ * expecting an organiser to be at a terminal then is how a final round does not happen.
+ * What follows is the same command, for a server that is not running, for a rehearsal, or
+ * for doing it by hand in front of everybody.
+ *
  *   node tools/draw-final.js --dry-run     say what will happen, touch nothing
  *   node tools/draw-final.js               wait for the round, draw, publish, sync
- *   node tools/draw-final.js --no-wait     refuse rather than wait, for a cron
+ *   node tools/draw-final.js --no-wait     refuse rather than wait -- what the timer runs
  *   node tools/draw-final.js --no-sync     draw and publish, leave Pantheon alone
  */
 
@@ -205,7 +213,8 @@ async function main(argv, deps = {}) {
   if (!fs.existsSync(lockPath)) {
     bad(`there is no ${LOCK_REL}. The standings and the beacon have to be locked and published ` +
       'first, or the draw would be seated from numbers chosen after the randomness existed.');
-    note('  node tools/lock-final.js --in 45m --confirm');
+    note('  node tools/lock-final.js --in 5m --confirm');
+    note('  ...or the lock panel on /admin, which runs that same command.');
     return 1;
   }
   const lockBytes = fs.readFileSync(lockPath);

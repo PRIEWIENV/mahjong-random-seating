@@ -1150,3 +1150,129 @@ test('the result before any final round is exactly what it always was', async ()
   assert.equal(body.stats.totals.wind_complete_players.length, 0);
   await s.close();
 });
+
+// ---------------------------------------------------------------------------
+// the two things the dashboard can now DO (PROTOCOL.md 11, server.js adminAction)
+// ---------------------------------------------------------------------------
+
+/** POST a form the way the dashboard's own <form> does. */
+async function post(base, p, fields, cookie) {
+  const res = await fetch(base + p, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      ...(cookie ? { cookie } : {}),
+    },
+    body: new URLSearchParams(fields).toString(),
+  });
+  return { status: res.status, location: res.headers.get('location'), body: await res.text() };
+}
+
+/**
+ * boot(), run a case, and close even when it throws.
+ *
+ * Without the finally, an assertion failure leaves the listening socket open, the test
+ * runner waits for the handle, and the run hangs -- so the diagnostic that would have
+ * said what actually failed never gets flushed. That cost more time than the bug did.
+ */
+async function withAdmin(opts, fn) {
+  const s = await boot({ adminPersonIds: [1001], ...opts });
+  try {
+    const admin = await s.signIn(1001);
+    const csrf = (await s.get('/admin/data.json', admin.cookie)).body.csrf;
+    return await fn(s, admin, csrf);
+  } finally {
+    await s.close();
+  }
+}
+
+test('an action endpoint 404s for anyone who is not an admin', async () => {
+  // 404 rather than 401, like the dashboard itself: an unauthenticated probe should not
+  // learn that there is anything here to aim at.
+  await withAdmin({}, async (s) => {
+    const player = await s.signIn(1003);
+    assert.equal((await post(s.base, '/admin/final/substitute', { csrf: 'x' })).status, 404);
+    assert.equal((await post(s.base, '/admin/final/substitute', { csrf: 'x' }, player.cookie)).status, 404);
+  });
+});
+
+test('an admin action without the right CSRF token is refused', async () => {
+  // Both admin cookies are SameSite=Strict, so a cross-site POST cannot carry credentials
+  // at all. This is the second lock on the same door, and it is worth having because the
+  // page can also be reached with ?token=, which a cookie policy says nothing about.
+  await withAdmin({}, async (s, admin) => {
+    const r = await post(s.base, '/admin/final/substitute',
+      { csrf: 'not-the-token', local_id: '1', from_round: '2', incoming_title: 'x', reason: 'y' },
+      admin.cookie);
+    assert.equal(r.status, 403);
+    assert.match(r.body, /bad_csrf/);
+  });
+});
+
+test('a substitute can be declared from the dashboard, and the real validator vets it', async () => {
+  await withAdmin({}, async (s, admin, csrf) => {
+    assert.ok(csrf, 'the page must hand the form a token');
+    const seat = s.cfg.roster.players[2];
+    const r = await post(s.base, '/admin/final/substitute', {
+      csrf,
+      local_id: String(seat.local_id),
+      from_round: '6',
+      incoming_title: 'The Substitute',
+      reason: 'league rule 9c: withdrawal through injury',
+    }, admin.cookie);
+    // A redirect, so a refresh cannot re-run it.
+    assert.equal(r.status, 303, r.body);
+    assert.equal(r.location, '/admin');
+
+    const onDisk = JSON.parse(fs.readFileSync(path.join(s.cfg.dataDir, 'substitutes.json'), 'utf8'));
+    assert.equal(onDisk.substitutions.length, 1);
+    assert.equal(onDisk.substitutions[0].local_id, seat.local_id);
+    assert.equal(onDisk.substitutions[0].incoming.title, 'The Substitute');
+    // Taken from the frozen roster, never from the form: letting a page assert that the
+    // Pantheon registration changed hands is exactly what must not be possible.
+    assert.equal(onDisk.substitutions[0].outgoing.person_id, seat.person_id);
+
+    const data = (await s.get('/admin/data.json', admin.cookie)).body;
+    assert.equal(data.last_action.code, 0, data.last_action && data.last_action.out);
+  });
+});
+
+test('a substitute with no league rule behind it is refused, and writes nothing', async () => {
+  await withAdmin({}, async (s, admin, csrf) => {
+    const seat = s.cfg.roster.players[0];
+    const r = await post(s.base, '/admin/final/substitute', {
+      csrf, local_id: String(seat.local_id), from_round: '3',
+      incoming_title: 'Nobody', reason: '   ',
+    }, admin.cookie);
+    assert.equal(r.status, 303);
+    assert.equal(fs.existsSync(path.join(s.cfg.dataDir, 'substitutes.json')), false,
+      'a refusal must leave no file behind');
+    const data = (await s.get('/admin/data.json', admin.cookie)).body;
+    assert.equal(data.last_action.code, 1);
+    assert.match(data.last_action.out, /naming the league rule/);
+  });
+});
+
+test('a seat that is not in the frozen roster is refused', async () => {
+  await withAdmin({}, async (s, admin, csrf) => {
+    const r = await post(s.base, '/admin/final/substitute', {
+      csrf, local_id: '99', from_round: '3', incoming_title: 'x', reason: 'league rule 9c',
+    }, admin.cookie);
+    assert.equal(r.status, 303);
+    const data = (await s.get('/admin/data.json', admin.cookie)).body;
+    assert.equal(data.last_action.code, 1);
+    assert.match(data.last_action.out, /not a seat in the frozen roster/);
+  });
+});
+
+test('the dashboard permits its own forms in its CSP, and still frames nothing', async () => {
+  // form-action does NOT fall back to default-src, so leaving it out would have let
+  // injected markup aim the dashboard's POSTs anywhere.
+  await withAdmin({}, async (s, admin) => {
+    const res = await fetch(s.base + '/admin', { headers: { cookie: admin.cookie } });
+    const csp = res.headers.get('content-security-policy');
+    assert.match(csp, /form-action 'self'/);
+    assert.match(csp, /frame-ancestors 'none'/);
+  });
+});

@@ -30,10 +30,10 @@
  * thing it was ever there to prove.
  *
  *   node tools/lock-final.js                               dry run: fetch, check, print
- *   node tools/lock-final.js --in 45m --confirm            write it
+ *   node tools/lock-final.js --in 5m --confirm             write it
  *   node tools/lock-final.js --at 2026-09-20T12:00:00Z --confirm
  *   node tools/lock-final.js --round 32200000 --confirm
- *   node tools/lock-final.js --relock --reason "..." --in 45m --confirm
+ *   node tools/lock-final.js --relock --reason "..." --in 5m --confirm
  *   node tools/lock-final.js --tiebreak 4 --tiebreak-reason "league rule 6b: chips" --confirm
  *   node tools/lock-final.js --standings some.json         offline: skip Mimir
  */
@@ -54,6 +54,29 @@ const OTS_REL = `${LOCK_REL}.ots`;
 const FINAL_REL = 'final.json';
 /** Below this there is no room to mirror the lock, let alone anchor it. */
 const MIN_LEAD_SECONDS = 60;
+
+/**
+ * How far ahead of the beacon to put the lock, by default.
+ *
+ * This was 45 minutes, chosen to be obviously enough. Measured, the whole publish
+ * sequence -- write, mirror, drain, stamp, mirror the proof, drain again -- takes under
+ * ten seconds, of which an OpenTimestamps round trip to four calendars is about two.
+ * Forty-five minutes was therefore some three hundred times the technical requirement,
+ * and it was not free: the twelfth round follows the eleventh by minutes, so the gap was
+ * dead time between the last score going in and the seats going up, with everybody
+ * already sitting down.
+ *
+ * What the gap actually buys is the human cross-check -- twelve people comparing a digest
+ * while nobody can yet know what it opens. That is worth keeping a window for, so this is
+ * not the 60-second floor. But it is worth being clear that the cross-check is the
+ * belt-and-braces: the EVIDENCE that the lock preceded the beacon is machine-made and
+ * needs no attention at all, being the calendars' attestations and the mirror's commit
+ * timestamp, neither of which the organiser can backdate.
+ *
+ * And the number is no longer load-bearing either way, because the margin is now measured
+ * after the fact rather than assumed in advance -- see `marginMs` below.
+ */
+const DEFAULT_LEAD = '5m';
 
 /**
  * Where this tool talks.
@@ -469,7 +492,7 @@ async function main(argv, deps = {}) {
         `        sha256 ${existingSha}\n` +
         '        If the beacon has landed, draw: node tools/draw-final.js\n' +
         '        If this really has to be replaced, say why, and say it before that beacon:\n' +
-        '          node tools/lock-final.js --relock --reason "…" --in 45m --confirm');
+        '          node tools/lock-final.js --relock --reason "…" --in 5m --confirm');
       return 1;
     }
     if (fs.existsSync(finalPath)) {
@@ -628,7 +651,7 @@ async function main(argv, deps = {}) {
       targetRound = Number(args.round);
       if (!Number.isInteger(targetRound) || targetRound < 1) throw new Error('--round must be a positive integer');
     } else {
-      const wantMs = args.at ? Date.parse(String(args.at)) : now + parseDuration(args.in || '45m');
+      const wantMs = args.at ? Date.parse(String(args.at)) : now + parseDuration(args.in || DEFAULT_LEAD);
       if (Number.isNaN(wantMs)) throw new Error(`cannot parse --at "${args.at}"`);
       targetRound = Math.floor((Math.ceil(wantMs / 1000) - genesis) / period) + 2;
     }
@@ -644,7 +667,7 @@ async function main(argv, deps = {}) {
       `round ${targetRound} is ${leadSec < 0 ? 'already past' : `only ${Math.round(leadSec)}s away`}. ` +
       'The lock has to be written, mirrored, timestamped and read out before its beacon exists; ' +
       `under ${MIN_LEAD_SECONDS}s there is no room for any of that, and a timestamp made after the ` +
-      'beacon proves nothing at all. Try --in 45m.');
+      `beacon proves nothing at all. Try --in ${DEFAULT_LEAD}.`);
   }
   if (targetRound <= results.round_used) {
     check.problems.push(
@@ -694,7 +717,7 @@ async function main(argv, deps = {}) {
   if (!confirm) {
     raw('\n');
     note('This was a dry run: nothing was written, mirrored or timestamped.');
-    note('  node tools/lock-final.js --in 45m --confirm');
+    note('  node tools/lock-final.js --in 5m --confirm');
     return 0;
   }
 
@@ -714,6 +737,14 @@ async function main(argv, deps = {}) {
     }
     ok(`the superseded lock is kept at ${relockOf.archived_as}`);
   }
+
+  // Wall-clock, so the margin below is what actually happened rather than what was
+  // planned. Kept as a delta and added to the injected `now`, so a test with a frozen
+  // clock measures a real elapsed time against its own baseline instead of drifting.
+  // Injectable for the same reason stampFn is: the case worth testing is the one where
+  // this takes minutes, and a test cannot wait minutes to find out what happens.
+  const elapsedClock = deps.elapsedClock || (() => Date.now());
+  const publishStartedAt = elapsedClock();
 
   writeLocal(cfg.root, LOCK_REL, body);
   mirror.enqueue?.(LOCK_REL, body, `final round locked: standings + drand round ${targetRound}`);
@@ -748,6 +779,35 @@ async function main(argv, deps = {}) {
     note(`after round ${targetRound} says nothing about before it.`);
   }
 
+  // ---- did we actually beat the beacon? --------------------------------------
+  //
+  // The lead used to be forty-five minutes because that is obviously enough, which is a
+  // way of not having to know. Now that it is five, knowing matters -- and it is better
+  // anyway: a generous lead is still only an assumption that the publish was quick, and
+  // a calendar that hangs for six minutes breaks it silently. This measures instead.
+  const elapsedMs = elapsedClock() - publishStartedAt;
+  const marginMs = targetRoundMs - (now + elapsedMs);
+  const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+  if (marginMs <= 0) {
+    bad(`PUBLISHED TOO LATE: the sequence took ${secs(elapsedMs)} and round ${targetRound} was ` +
+      `due ${secs(-marginMs)} ago.`);
+    note('A lock published after its own beacon proves nothing: by the time these bytes');
+    note('existed, the signature that opens them was already public. The standings in this');
+    note('file are still the right standings, but this file is no longer evidence of when');
+    note('they were fixed.');
+    note('');
+    note('Re-lock against a later round, and say so on the record:');
+    note(`  node tools/lock-final.js --relock --reason "first lock missed its beacon" --in ${DEFAULT_LEAD} --confirm`);
+    return 1;
+  }
+  if (marginMs < 30_000) {
+    warn(`only ${secs(marginMs)} to spare: the publish took ${secs(elapsedMs)} and round ` +
+      `${targetRound} is due imminently. It landed in time, but not by much -- use a longer ` +
+      '--in next time.');
+  } else {
+    ok(`published with ${secs(marginMs)} to spare (the sequence took ${secs(elapsedMs)})`);
+  }
+
   raw('\n');
   note('Announce this now, to all twelve, before the beacon:');
   note('');
@@ -755,7 +815,10 @@ async function main(argv, deps = {}) {
   note(`  drand ${cfg.protocol.drand_chain} round ${targetRound}, emitted ${isoSec(targetRoundMs)}, draws the winds.`);
   note(`  ${LOCK_REL} sha256 ${digest}`);
   note('');
-  note('Then, once that round has landed:');
+  note('');
+  note(`The server draws it by itself once round ${targetRound} lands -- the same timer that`);
+  note('ran the first draw. Nothing further to do. To watch, or to run it by hand if the');
+  note('timer is not running:');
   note('  node tools/draw-final.js --dry-run');
   note('  node tools/draw-final.js');
   return 0;
