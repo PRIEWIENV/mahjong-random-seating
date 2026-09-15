@@ -263,6 +263,21 @@ function finalRoundPreflight(cfg, lines, problems) {
     return;
   }
 
+  // A substitution declared before a single game has been played is a contradiction, and
+  // the likely cause is the file surviving from the previous event -- in which case it
+  // would attribute last season's substitute to a seat in a tournament they never played.
+  // end-event.js archives and clears it, so reaching here means that step was skipped.
+  const subsPath = path.join(cfg.dataDir, 'substitutes.json');
+  if (fs.existsSync(subsPath) && cfg.substitutes.substitutions.length) {
+    problems.push(
+      `data/substitutes.json declares ${cfg.substitutes.substitutions.length} substitution(s), but this ` +
+      'freeze happens before anyone has played a game, so there is nothing yet to substitute into. ' +
+      'It is almost certainly left over from the last event: close that one with tools/end-event.js, ' +
+      'which archives the file and clears it, or delete it if this event is starting fresh.');
+    return;
+  }
+  lines.push(ok('no substitutions declared, which is the only correct state at freeze time'));
+
   let mod;
   try {
     mod = require(path.join(ROOT, 'generate-final.js'));

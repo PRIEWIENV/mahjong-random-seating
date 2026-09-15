@@ -18,7 +18,8 @@
   "final_round": {
     "enabled": true,
     "table_assignment": "rank_blocks",
-    "wind_draw": "max_completion_then_uniform"
+    "wind_draw": "max_completion_then_uniform",
+    "substitutes": "same_registration"
   },
   "pantheon": {
     "wind_shuffle_mode": "WIND_SHUFFLE_MODE_PRESCRIPTED"

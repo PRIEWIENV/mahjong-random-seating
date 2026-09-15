@@ -15,6 +15,9 @@
  *       and again in Python — the test that catches a loose byte encoding
  *   A6  read the prescript back and confirm the seating matches, winds included
  *   A7  results.json alone is enough to recompute the same plan offline
+ *   A8  the final round end to end: lock the standings and a second beacon, wait for it,
+ *       draw, and write TWELVE prescript blocks to an event that already has eleven
+ *   A9  GetRatingTable: the order is the ranking, and there is no rank field
  *
  * All scenarios share one target round so the suite waits once rather than three times.
  *
@@ -34,6 +37,9 @@ const { Drand } = require('../server/drand');
 const { run: finalise } = require('../server/finalise');
 const { encryptPayload } = require('../server/tlock');
 const { StubPantheon } = require('../server/pantheon');
+const lockFinal = require('../tools/lock-final');
+const drawFinal = require('../tools/draw-final');
+const { generateFinal, serialise: serialiseFinal } = require('../generate-final');
 const { makeRoster, QUICKNET_HASH, QUICKNET_PK, ROOT } = require('./helpers');
 
 const QUIET = { info() {}, warn() {}, error() {} };
@@ -279,6 +285,134 @@ async function main() {
     log('  re-running finalise is idempotent');
   }
 
+
+  // ---- A8/A9: the final round -------------------------------------------
+  //
+  // Everything here is real except Pantheon: a real future drand round, a real wait for
+  // it, the real tools, the real twelve-block prescript written and read back. What the
+  // stub CANNOT tell us is the one thing PANTHEON-INTEGRATION.md §5.2 names as the
+  // highest risk — whether a live Mimir accepts a twelfth block on an event created for
+  // eleven sessions. Run this against a real instance before freezing a real event.
+  step('A8: the final round — lock the standings and a beacon, wait, draw, write twelve blocks');
+  {
+    const sc = cases.find((c) => c.expect === 'done').sc;
+    const results = JSON.parse(fs.readFileSync(path.join(sc.dir, 'results.json'), 'utf8'));
+
+    // Stand in for eleven played sessions: the plan as published, and Mimir's own pointer
+    // sitting at the round that has not happened. This is the simulated half.
+    sc.pantheon.nextSessionIndex = 12;
+    const byLocal = new Map(sc.cfg.roster.players.map((pl) => [pl.local_id, pl]));
+    const standingsOrder = [...byLocal.keys()].sort((a, b) => b - a);
+    sc.pantheon.setStandings(standingsOrder.map((id, i) => ({
+      person_id: byLocal.get(id).person_id,
+      title: byLocal.get(id).title,
+      rating: 1500 - i * 10,
+      chips: 24 - i * 2,
+      avg_place: 2 + i * 0.05,
+      avg_score: 5000 - i * 400,
+      games_played: 11,
+    })));
+
+    // A9, before anything is locked: the order IS the ranking, and nothing in the row
+    // says so. A client that re-sorted this would invent the final round's tables.
+    const table = await sc.pantheon.getRatingTable(sc.cfg.roster.pantheon_event_id, 'rating', 'desc');
+    assert.equal(table.length, sc.cfg.protocol.total_slots, 'A9: the standings must hold every player');
+    assert.deepEqual(table.map((r) => r.rank), table.map((_, i) => i + 1), 'A9: rank is list position');
+    assert.ok(table.every((r) => r.games_played === 11), 'A9: every player must have played every round');
+    for (let i = 1; i < table.length; i++) {
+      assert.ok(table[i - 1].rating >= table[i].rating, 'A9: the list is not in the order it claims');
+    }
+    log(`  A9: ${table.length} rows, ranked by position, no rank field on the wire`);
+
+    const say = [];
+    const sink = (t) => { say.push(String(t)); return true; };
+    const deps = { cfg: sc.cfg, log: QUIET, mirror: sc.mirror, pantheon: sc.pantheon,
+                   drand, env: {}, stdout: sink, stderr: sink };
+
+    // Ninety seconds: past lock-final's sixty-second floor, with room to mirror and to
+    // reach the real OpenTimestamps calendars — no stampFn is injected here, so those
+    // are dialled for real, which is what an end-to-end run is for.
+    const locked = await lockFinal.main(['--in', '90s', '--confirm'], deps);
+    assert.equal(locked, 0, `A8: lock-final refused\n${say.join('')}`);
+    const lockPath = path.join(sc.dir, 'events', 'final', 'lock.json');
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    assert.deepEqual(lock.standings, standingsOrder, 'A8: the lock must hold the order Mimir gave');
+    assert.ok(lock.target_round > results.round_used, 'A8: the final beacon must come after the first');
+
+    // Anchoring is best-effort — a calendar can be unreachable — but it is never silent.
+    // Either it anchored and the proof is on disk, or the tool said so loudly. Passing
+    // over it would leave an operator believing in an anchor that cannot be added later:
+    // a stamp made after the beacon proves nothing about before it.
+    const anchored = fs.existsSync(`${lockPath}.ots`);
+    assert.match(say.join(''), anchored ? /anchored with \d+ calendar/ : /NOT anchored/,
+      'A8: the lock must state whether it was anchored');
+    log(`  A8: locked — standings + drand round ${lock.target_round}, due ${lock.target_round_utc}`);
+    log(`  A8: ${anchored ? 'anchored into Bitcoin, .ots on disk' : 'NOT anchored — and the tool said so'}`);
+
+    // Now wait for that round and draw. draw-final does the waiting itself.
+    const drawn = await drawFinal.main([], { ...deps, sync: { baseDelayMs: 200 } });
+    assert.equal(drawn, 0, `A8: draw-final failed\n${say.join('')}`);
+    const finalPath = path.join(sc.dir, 'final.json');
+    const final = JSON.parse(fs.readFileSync(finalPath, 'utf8'));
+
+    // It reproduces from the published files alone, which is the whole claim.
+    const lockBytes = fs.readFileSync(lockPath);
+    const rebuilt = serialiseFinal(generateFinal({
+      results, signature: final.drand_signature,
+      lock: { ...lock, lock_sha256: require('node:crypto').createHash('sha256').update(lockBytes).digest('hex') },
+      roster: sc.cfg.roster, protocol: sc.cfg.protocol, template: sc.cfg.template,
+    }));
+    assert.equal(fs.readFileSync(finalPath, 'utf8'), rebuilt, 'A8: final.json does not reproduce');
+
+    // Twelve blocks in Pantheon, the first eleven byte-identical to what was played.
+    const back = await sc.pantheon.getPrescript(sc.cfg.roster.pantheon_event_id);
+    const blocks = drawFinal.blocksOf(back.prescript);
+    assert.equal(blocks.length, 12, 'A8: Pantheon must hold twelve blocks');
+    assert.equal(blocks.slice(0, 11).join('\n\n'), results.pantheon_prescript,
+      'A8: the eleven played sessions must come back unchanged');
+    assert.equal(back.next_session_index, 12, 'A8: next_session_index must be the final round');
+    const sync = JSON.parse(fs.readFileSync(path.join(sc.dir, 'events', 'final', 'sync.json'), 'utf8'));
+    assert.equal(sync.status, 'ok', 'A8: the final sync must succeed');
+
+    // Twelve rounds leave a player on 3-3-3-3 or 4-3-3-2 and nothing else.
+    const counts = new Map(sc.cfg.roster.players.map((pl) => [pl.local_id, { E: 0, S: 0, W: 0, N: 0 }]));
+    for (const rd of [...results.seating.rounds, ...final.seating.rounds]) {
+      for (const t of rd.tables) for (const w of ['E', 'S', 'W', 'N']) counts.get(t.seats[w].local_id)[w] += 1;
+    }
+    for (const [id, c] of counts) {
+      const split = [c.E, c.S, c.W, c.N].sort((a, b) => b - a).join('');
+      assert.ok(split === '3333' || split === '4332', `A8: local_id ${id} finished ${split}`);
+    }
+    log(`  A8: drawn from round ${final.round_used}, ${final.completed_count}/12 on three of every wind`);
+    log('  A8: twelve prescript blocks written and read back; sessions 1-11 byte-identical');
+
+    // The second implementation, on the real files.
+    for (const py of ['py', 'python3']) {
+      try {
+        const out = execFileSync(py, [path.join(ROOT, 'tools', 'verify_final.py'),
+          '--final', finalPath, '--lock', lockPath,
+          '--results', path.join(sc.dir, 'results.json'),
+          '--roster', path.join(sc.dir, 'data', 'roster.json'),
+          '--template', path.join(sc.dir, 'data', 'schedule_template.json')], { encoding: 'utf8' });
+        assert.match(out, /re-derives independently/);
+        log(`  A8: ${out.trim().split('\n')[0].trim()}`);
+        break;
+      } catch (err) {
+        if (err.status === 1) throw err; // it ran and disagreed
+      }
+    }
+
+    log('  \x1b[33mPantheon here is the STUB:\x1b[0m everything above is real -- a real second drand');
+    log('  round, a real wait, a real OpenTimestamps anchor -- but the twelve blocks went to a');
+    log('  stub, and a stub agrees with whatever it was taught. A live Mimir has since been');
+    log('  asked the same questions directly and answered yes to every one of them:');
+    log('  it takes a twelfth block on an event created for eleven sessions, leaves blocks');
+    log('  1-11 byte-identical, round-trips next_session_index, and serves the twelfth block');
+    log('  in order (PANTHEON-INTEGRATION.md 5.2 records the run and what it changed here).');
+    log('  Ask YOUR instance the same before freezing a real event:');
+    log('    node tools/verify-pantheon-final.js --event <id>');
+  }
+
   // ---- the result is served ---------------------------------------------
   step('The finished result is served with its statistics');
   const res = await fetch(cases[0].sc.base + '/api/result').then((r) => r.json());
@@ -304,7 +438,7 @@ async function main() {
   log(`  a finished results.json kept at var/e2e-results.json`);
 
   for (const c of cases) { await c.sc.close(); c.sc.store.close(); fs.rmSync(c.dir, { recursive: true, force: true }); }
-  step('\x1b[32mAll end-to-end scenarios passed (RUNBOOK A2-A7).\x1b[0m');
+  step('\x1b[32mAll end-to-end scenarios passed (RUNBOOK A2-A9).\x1b[0m');
 }
 
 main().catch((err) => {

@@ -152,6 +152,11 @@ function archiveAttempt(cfg, store, outcome, mirror, log = console) {
     ['final-lock.json', path.join(cfg.root, 'events', 'final', 'lock.json')],
     ['final-lock.json.ots', path.join(cfg.root, 'events', 'final', 'lock.json.ots')],
     ['final-sync.json', path.join(cfg.root, 'events', 'final', 'sync.json')],
+    // Who actually sat in a seat during this event (11.6). It lives under data/ rather
+    // than beside the other live files, but it belongs in the archive for the same reason
+    // they do: it is the only record that the name in roster.json is not the person who
+    // played those games, and the roster archived above says nothing about it.
+    ['substitutes.json', path.join(cfg.dataDir, 'substitutes.json')],
   ]) {
     if (fs.existsSync(abs)) put(rel, fs.readFileSync(abs));
   }
@@ -365,6 +370,14 @@ const LIVE_FILES = [
   'events/final/lock.json',
   'events/final/lock.json.ots',
   'events/final/sync.json',
+  // Who actually sat in a seat during THIS event (11.6). It lives under data/ with the
+  // frozen files but is not one of them -- it cannot be, since a player drops out weeks
+  // after the tag is made. It is listed here because the next freeze does not rewrite it:
+  // roster.json and protocol.json are replaced wholesale by tools/freeze.js, and this file
+  // would simply still be there, quietly attributing last season's substitute to a seat in
+  // a tournament they never played. Archived first, like everything else here, so closing
+  // the event preserves the record rather than discarding it.
+  'data/substitutes.json',
 ];
 
 /** Where the final round's lock lives, before anything has opened it. */

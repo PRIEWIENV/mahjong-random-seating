@@ -779,6 +779,12 @@ function createServer(opts = {}) {
       // trace back to a file they can hash.
       final_lock: f.lock,
       final: f.final,
+      // Who actually sat in a seat, where that is not who the frozen roster names (11.6).
+      // Taken from the LOCK once one exists: that copy is the published, timestamped one,
+      // and a page that showed the live file could show a different record from the one
+      // under the digest people were asked to compare. Before the lock there is nothing
+      // to disagree with, so the live file is the only copy there is.
+      substitutes: f.lock ? (f.lock.substitutes || []) : cfg.substitutes.substitutions,
     };
   }
 

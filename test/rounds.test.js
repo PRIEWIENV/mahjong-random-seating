@@ -559,6 +559,43 @@ test('the attempt after a reset publishes its own roll, not the previous one', a
 // ending an event, as opposed to retrying a round
 // ---------------------------------------------------------------------------
 
+test('closing an event archives the substitution record and clears it', async () => {
+  // data/substitutes.json sits with the frozen files but is not one of them, and the next
+  // freeze rewrites roster.json and protocol.json without touching it. Left in place it
+  // would follow the checkout into the next tournament and attribute a substitute to a
+  // seat they never played. So it is archived like evidence and cleared like live state.
+  const c = attempt(12);
+  fs.writeFileSync(path.join(c.fx.dir, 'results.json'),
+    JSON.stringify({ round_used: c.cfg.protocol.target_round, seating: {} }, null, 2) + '\n');
+  fs.mkdirSync(path.join(c.fx.dir, 'events'), { recursive: true });
+  fs.writeFileSync(path.join(c.fx.dir, 'events', 'sync.json'), '{"status":"ok"}\n');
+  const seat = c.cfg.roster.players[0];
+  const subsPath = path.join(c.fx.dir, 'data', 'substitutes.json');
+  fs.writeFileSync(subsPath, JSON.stringify({
+    substitutions: [{
+      local_id: seat.local_id,
+      from_round: 6,
+      outgoing: { person_id: seat.person_id, title: seat.title },
+      incoming: { title: 'the substitute' },
+      reason: 'league rule 9c',
+      declared_at: '2026-09-01T00:00:00Z',
+    }],
+  }, null, 2));
+  c.store.set('phase', 'done');
+
+  const out = endEvent(c.cfg, c.store, { mirror: c.mirror, log: QUIET });
+  assert.equal(out.ok, true, out.error);
+  assert.ok(out.removed.includes('data/substitutes.json'), 'it must be cleared');
+  assert.equal(fs.existsSync(subsPath), false, 'it must not survive into the next event');
+
+  // Flattened: the archive has no subdirectories but submissions/.
+  const archived = path.join(arch(c, c.cfg.protocol.target_round), 'substitutes.json');
+  assert.ok(fs.existsSync(archived), 'but the record itself must be kept');
+  assert.equal(JSON.parse(fs.readFileSync(archived, 'utf8')).substitutions[0].incoming.title,
+    'the substitute');
+  cleanup(c.fx.dir);
+});
+
 test('a finished event is archived and then cleared', async () => {
   const c = attempt(12);
   // Stand in for a completed draw: the artefacts a finished round leaves live.

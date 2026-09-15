@@ -104,6 +104,9 @@ The split is not tidiness. Freezing something that fails the test makes the run 
   "seed_domain_separation": "mahjong-seating-v1",
   "schedule_template_ref": "data/schedule_template.json@<git tag>",
   "generate_script_ref": "generate.js@<git tag>",
+  "generate_final_script_ref": "generate-final.js@<git tag>",
+  "final_round": { "enabled": true, "table_assignment": "rank_blocks",
+                   "wind_draw": "max_completion_then_uniform" },
   "pantheon": { "wind_shuffle_mode": "WIND_SHUFFLE_MODE_PRESCRIPTED" }
 }
 ```
@@ -118,7 +121,8 @@ The split is not tidiness. Freezing something that fails the test makes the run 
 | `quorum`, `total_slots` | The rule of §8, fixed before anyone can see who is missing. |
 | `user_input_max` | The domain each player draws from, and a byte inside the contribution hash. |
 | `seed_domain_separation` | `DOMAIN` in §7. Change it and every hash in the draw changes. |
-| `schedule_template_ref`, `generate_script_ref` | Name the tag the other two artefacts come from, so the four files commit to each other. |
+| `schedule_template_ref`, `generate_script_ref`, `generate_final_script_ref` | Name the tag the other artefacts come from, so the five files commit to each other. |
+| `final_round` | Whether there is a twelfth round, and the two rules it is drawn by (§11). Frozen because they are the rules of the competition, and because tagging them before the first game is what stops anybody designing them around standings they have already seen. Absent means an eleven-round event. |
 | `pantheon.wind_shuffle_mode` | Any mode but `WIND_SHUFFLE_MODE_PRESCRIPTED` re-randomises winds at the table and throws away most of what the template guarantees (hard rule 5). |
 
 **`chain_public_key` is required, and it is required *in addition to* `chain_hash`, not instead of it.** `drand-client` decides whether it is talking to the right chain in `isValidInfo`, which compares the hash **and** the public key and demands both. Pin only the hash and `publicKey` is `undefined`, the comparison fails against every real chain, and the path of least resistance becomes switching chain verification off — leaving the client trusting whatever the endpoint says it is. Read the key once at freeze time from `<drand api>/<chain_hash>/info` (`runtime.json` → `drand.api`) and record it alongside the hash. It is frozen because it is half of the answer to "which randomness source is this draw bound to".
@@ -180,6 +184,8 @@ would be useful, and it is published, which is what lets a verifier check that
 `results.json` accounts for every submission rather than only for the ones it chose to
 list. It is mirrored **before** `results.json`, so a result is never readable without
 the file needed to audit it.
+
+**`events/final/lock.json`** and **`final.json`** — the twelfth round's commitment and its result. Both are described in §11, which is where the ordering argument that makes them evidence lives. Neither exists for an eleven-round event.
 
 **`results.json`** (written automatically after the draw, exactly once)
 ```
@@ -249,6 +255,7 @@ for the UI; the files are what a verifier uses.
 3. **Waiting.** The app shows a live view: countdown to the target round, drand chain health, and how many of the twelve have submitted. Nothing is required of the player here.
 4. **Finalisation.** At `submission_cutoff_utc` the server snapshots the submissions received. With ≥ 8 it waits for drand to publish the signature for `target_round`, decrypts, computes the result and publishes it. With < 8 the round is declared void.
 5. **Sync.** The resulting seat plan is written into the Pantheon event as its prescripted seating, and shown to players with next-step instructions.
+6. **The final round**, for an event that has one (§11). After the eleven rounds are played, the standings and a second drand round are locked and published together — before that round exists — and once it lands the twelfth round's winds are drawn from them. Players are asked to compare one more digest, during the interval, for the same reason as the first time.
 
 ## 6. Backend API
 
@@ -373,3 +380,163 @@ That leaves the transport as the whole of the protection, for the password on it
 The app and Pantheon run on the same host, so backend-to-Pantheon calls go over localhost. A small backend process (Node or Python), SQLite for state, a mirroring script holding a GitHub PAT, and a reverse proxy in front terminating TLS — nginx where the host already runs one, which it does when Pantheon shares the box, and Caddy otherwise. Write access to `main` is narrowed to the PAT used by the backend.
 
 One address does not follow that rule. The browser reaches Frey itself, so the URL it is given has to resolve from the player's device rather than from the host; `runtime.json` keeps the two apart as `pantheon.frey_base_url` and `pantheon.frey_public_url`.
+
+## 11. The final round
+
+After the eleven template rounds a twelfth is played. Its **tables are earned** — ranks 1-4 at table one, 5-8 at table two, 9-12 at table three — and only its **winds are drawn**. The fairness argument for drawing them the way this does, including why "everybody gets three of every wind" is the exact target and what the design costs, is in [`docs/seating-design.md`](seating-design.md) and is not repeated here. This section is the mechanism.
+
+The final round is **optional**: an event whose `protocol.json` has no `final_round` block is an eleven-round event, and every file and endpoint below simply does not exist for it.
+
+### 11.1 Three commitments, in this order
+
+The whole of the argument is that each input was fixed before the thing that uses it existed.
+
+**T0 — at the freeze, before anyone plays.** `generate-final.js` is frozen and git-tagged with `generate.js`, `schedule_template.json`, `roster.json` and `protocol.json` (§4.1). `protocol.json` gains `generate_final_script_ref` and a `final_round` block naming the two rules in words:
+
+```
+"final_round": {
+  "enabled": true,
+  "table_assignment": "rank_blocks",
+  "wind_draw": "max_completion_then_uniform"
+}
+```
+
+Both values are pinned to exactly one legal value each, and both are also hard-coded in the script. That duplication is deliberate: `protocol.json` is the file that gets tagged, published and quoted at people, so a reader must be able to see what was committed to without reading JavaScript — and a value that disagreed with the script is fatal at startup rather than silently decorative.
+
+**Timing is the point.** The rules for a round that will not be played for weeks are tagged before the first game, so nobody can design them around standings they have already seen.
+
+**T1 — after the round-robin, before the beacon.** `tools/lock-final.js` fetches the standings, checks them, chooses a future drand round `F`, and writes both into **one** file, `events/final/lock.json`. One file because one file is one digest, one timestamp, and one short string for twelve people to read to each other; two files would be two digests and an argument about which was published first.
+
+Order of operations, and it matters: write locally → offer to the mirror → wait for the push → OpenTimestamp the bytes → mirror the `.ots`. The anchor is best-effort but its failure is **loud**, because it cannot be repaired afterwards: a timestamp made after `F` has been emitted proves nothing about before it, which is the only thing it was ever for.
+
+There is deliberately **no second git tag**. A tag binds code, and the code was bound at T0; the lock binds data that did not exist then. What binds the lock is the mirror's commit history — whose timestamps the organiser does not control — and the OpenTimestamps anchor, which needs no trust in the mirror or in us. This is the same reasoning under which the roll (§9) is mirrored and anchored but not tagged.
+
+**T2 — once `F` lands.** `tools/draw-final.js` waits for the beacon, calls `generateFinal` in process, writes `final.json`, mirrors it, and syncs Pantheon. It does **not** timestamp anything: an anchor made after the beacon adds nothing to one made before it.
+
+### 11.2 The seed
+
+```
+SEP = 0x1F
+
+seed_final = SHA256(
+      DOMAIN            utf8, validated to contain no SEP
+    ‖ SEP ‖ "final"     ascii — the third label, beside "contrib" and "seed"
+    ‖ SEP ‖ R           32 raw bytes, from results.json
+    ‖ SEP ‖ signature   raw bytes, hex-decoded, for round F
+    ‖ SEP ‖ standings   1 byte each, local_ids in FINISHING order, rank 1 first
+    ‖ SEP ‖ local_ids   1 byte each, ascending — who contributed to R
+)
+```
+
+`R` is reused rather than re-collected. It is already the joint contribution of all twelve, already public, and re-running a submission round for the final would ask twelve people to do work that adds nothing: `F`'s signature is randomness none of them could predict, and folding it into the same `R` gives a value no participant and no organiser can steer.
+
+§7's injectivity argument does **not** carry over as written. There it holds because every field is fixed-width or validated SEP-free, with the single variable-count field last; here two fields may legitimately contain `0x1f` — the signature and the standings. It is restored, at no cost, by pinning both lengths instead:
+
+- `standings` is exactly `total_slots` bytes and is a permutation of the roster's `local_id`s;
+- `local_ids` equals `sort(results.participating_local_ids)`, whose length `results.json` already fixes;
+- the signature decodes to exactly as many bytes as `results.drand_signature` does — same chain, same curve, same length.
+
+With those three checks every field is fixed-width, so no two distinct inputs produce the same byte string. The separators remain as belt and braces.
+
+### 11.3 The draw
+
+Each template position is short of exactly one wind after eleven rounds; the deficits are **derived from the frozen template** every time and never written down, and the derivation asserts its own shape (each position at `k, k, k, k-1`; each wind short for equally many positions).
+
+For a table, a *seating* is the map from the four players in rank order to the four seat indices `0=E, 1=S, 2=W, 3=N`. The 24 are enumerated in lexicographic order; `optima` is the sub-list completing the most players, in that same order; and the draw is `optima[rng.below(optima.length)]`.
+
+**Exactly one `below()` call per table, tables 1 → 3, off one `Sha256CounterStream(seed_final)`, and nothing else reads that stream.** Per-table optimisation is globally optimal and per-table uniformity is globally uniform: the three tables partition the twelve players with no constraint crossing a table, so the global optima are the Cartesian product of the per-table optima, and drawing independently and uniformly from each factor is exactly the uniform distribution on the product.
+
+The enumeration order is part of the result, because what is published is an *index* into it. A reimplementation that enumerated differently would agree on the seed and disagree on the seats — which throws nothing anywhere. It is pinned in `test/final-vectors.json`, printed in `seating-design.md`, and checked by `tools/freeze.js` before the tag is made.
+
+### 11.4 Files
+
+**`events/final/lock.json`** (T1, mirrored and anchored, `.ots` beside it)
+```
+{ "event": "final", "locked_at": "...",
+  "target_round": 32200000, "target_round_utc": "...",
+  "chain_hash": "...", "chain_public_key": "...",
+  "results_sha256": "...", "results_round_used": 123456, "R": "...",
+  "standings": [7,2,11,4,9,1,12,5,3,10,8,6],
+  "standings_detail": [ { "rank": 1, "local_id": 7, "person_id": 41, "table": 1,
+                          "rating": 1500, "chips": 8, "avg_place": 2.1,
+                          "avg_score": 4200, "games_played": 11 }, ... ],
+  "order_by": "rating", "order": "desc", "ties": [ ... ],
+  "generate_final_script_ref": "generate-final.js@<tag>" }
+```
+`standings` is the load-bearing field: local ids in finishing order, and the only thing that decides who sits at which table. `standings_detail` is what a reader checks it against.
+
+**`final.json`** (T2, beside `results.json`, never inside it)
+```
+{ "final_round": 12, "round_used": 32200000, "drand_signature": "...",
+  "results_sha256": "...", "lock_sha256": "...",
+  "standings": [ ... ], "R": "...", "seed": "<sha256 hex>",
+  "deficient_winds": { "1": "E", ... },
+  "tables": [ { "table": 1, "players": [7,2,11,4], "deficiencies": ["W","N","N","W"],
+                "completed": 2, "optima_count": 8, "optimum_index": 5,
+                "assignment": [2,1,3,0] }, ... ],
+  "completed_local_ids": [ ... ], "completed_count": 8,
+  "seating": { ... one round, seats carry `rank`, not `point` ... },
+  "pantheon_prescript": "... all twelve blocks ...",
+  "pantheon_prescript_final": "... the twelfth block alone ...",
+  "pantheon_next_session_index": 12 }
+```
+
+**`events/final/sync.json`** (T2) — the Pantheon outcome, in the shape `events/sync.json` uses.
+
+`results.json` is never rewritten. It is the published artefact of the first draw and it reproduces byte for byte (§4.3); appending a round to it would break that for the sake of tidiness. The twelfth round lives beside it, and `/api/result` serves them as `seating` and `final` respectively for the same reason.
+
+### 11.5 Standings, ties and refusals
+
+The standings come from Mimir's `GetRatingTable`, which has **no rank field** — the rank is the position in the list (PANTHEON-INTEGRATION.md §5). Which column the league ranks on is operational and lives in `runtime.json`; the *rule* — ranks 1-4 at table one — is frozen.
+
+`tools/lock-final.js` refuses to write anything unless:
+
+1. `results.json` exists and reproduces from its own payloads;
+2. the twelve in the standings are exactly the twelve in the frozen roster;
+3. every one of them has played all eleven games;
+4. the order the server returned is the order re-deriving it locally on the same key produces — which is what makes an `order_by` this project has never verified safe to depend on: if Mimir ignored it, the two orders differ and nothing is written;
+5. `F` is at least 60 seconds away and after `results.round_used`;
+6. no tie crosses a band boundary without a human naming the rule that settles it.
+
+**Ties.** Inside a band a tie changes nobody's table — the same four people sit together either way, and all that moves is a byte of the seed, which is fixed before the beacon and so cannot be polished against a result. It is recorded and allowed. **Across** a band boundary it decides a table, and the tool refuses: it never breaks a tie and never breaks one silently. Settling it means applying the league's own rule at the source and then recording that rule in the published lock:
+
+```sh
+node tools/lock-final.js --tiebreak 4 --tiebreak-reason "league rule 6b: more chips" --confirm
+```
+
+Either rank on the boundary names it. Acknowledging a tie does not reorder anybody; if the order shown is not what the league's rule gives, the standings are wrong at the source and that is where it is fixed.
+
+### 11.6 Substitutes
+
+A seat in this event is a `local_id`, not a person. The schedule template, the deficient wind, the opponents and the Pantheon prescript are all written in local ids, and Mimir resolves a local id to whoever holds it. That is what makes a substitute possible at all, and it decides the shape of the rule.
+
+`final_round.substitutes` is **frozen**, because a league that decides how substitutes are handled *after* somebody has dropped out is deciding it with the standings in view. Two values:
+
+- **`"same_registration"`** — the substitute plays on the seat's existing Pantheon registration. Mimir still reports twelve players with eleven games each, so the standings, the bands, the seed bytes and the prescript are all exactly what they would have been. Nothing about the draw changes.
+- **`"forbidden"`** — no substitutes. A seat that loses its player has no final round, and the league has to say in advance what happens instead.
+
+**Why only these two.** Every alternative registers the substitute as a thirteenth person. Mimir builds the rating table from *played games* (verified against a live instance), so the departed player and the substitute then appear as two rows, each with a partial record — thirteen rows for twelve seats. Ranking the seat from those means inventing an arithmetic for merging two partial records, and that arithmetic would decide a table. `same_registration` needs none. That is also why the declaration may be written late without becoming a lever: **it is a record, not an input.**
+
+**The record.** `data/substitutes.json` names, for each substitution, the seat, the round from which the substitute played, who left, who took over, the league rule that allows it, and when it was declared. It is not frozen — it cannot be, since a player drops out weeks after the tag is made — and it is validated on load:
+
+- the seat is one in the frozen roster;
+- `outgoing.person_id` **equals** the roster's `person_id` for that seat. If it does not, the registration really did change hands, the standings now hold two partial rows for one seat, and every count in `tools/lock-final.js` would be wrong *silently*, because both rows look like ordinary rows;
+- `from_round` is a round that exists;
+- a reason is given, naming the rule. A substitution with no stated rule behind it is the thing this file exists to make impossible;
+- the frozen policy allows them at all. If `protocol.json` says `"forbidden"`, the frozen rule wins and nothing loads.
+
+`tools/lock-final.js` prints the substitutions before it writes anything, marks the affected seats in the standings it shows, and copies the record into `events/final/lock.json` — so it falls under the same digest and the same OpenTimestamps anchor as the standings, and cannot be revised afterwards. `/api/result` serves the **lock's** copy once a lock exists rather than the live file, so the page can never show a record that differs from the one under the fingerprint people were asked to compare.
+
+`tools/freeze.js` refuses to tag an event whose `substitutes.json` already declares something: at freeze time nobody has played a game, so there is nothing yet to substitute into. The likely cause is the file surviving from the previous event, and `tools/end-event.js` is what prevents that — it archives the record with the round and clears it, so it cannot follow the checkout into the next tournament.
+
+### 11.7 Re-locking, and what may never be redone
+
+`--relock --reason "…"` replaces a published lock, and only while `final.json` does not exist. The superseded lock is moved to `events/final/lock.<n>.json` rather than overwritten — it was published too — and the new lock names where its predecessor went.
+
+`tools/draw-final.js` is idempotent in the strong sense: an existing `final.json` is re-verified, re-mirrored and re-synced, and never recomputed. "Recompute" and "redraw" are indistinguishable from outside, and the second is the one thing nobody should be able to do. A `final.json` that does not reproduce from the lock and `results.json` is **kept**, not overwritten, and the tool stops.
+
+Closing an event (`tools/end-event.js`) refuses while a lock exists without a `final.json` beside it. Everything else about that state looks finished — `results.json` is on disk, the phase is `done` — so without this refusal one routine command would delete a published, timestamped commitment, which from the outside is indistinguishable from withdrawing it. `--abandon` is the way past, and it says on the record that the final round was given up on.
+
+### 11.8 Phase
+
+`phase` stays `done` through all three states of the final round. It is not a fourth phase and must not become one: everything that branches on it — the submission gate, the finalisation job's refusals, `resetForNewRound`, `endEvent` — is about the **first** draw and has to go on answering exactly as it did. `/api/status` carries `final.state` (`none` | `locked` | `drawn`) instead, and that is what the page watches.

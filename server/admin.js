@@ -279,6 +279,10 @@ function collect(ctx) {
     final_round_enabled: Boolean(cfg.protocol.final_round?.enabled),
     final: status.final || { state: 'none' },
     final_digest: digestOf(path.join(cfg.root, 'final.json')),
+    // Seats that changed hands (PROTOCOL.md 11.6). The organiser is the one person who
+    // can still correct this before it is locked, so it belongs on their page while it
+    // is still correctable rather than only on the player-facing result afterwards.
+    substitutes: cfg.substitutes.substitutions,
     pantheon_sync: syncOutcome,
     attempts: readIndex(cfg),
     mirror_enabled: Boolean(mirror?.enabled),
@@ -504,7 +508,16 @@ function render(m) {
       }</span>`) : ''}
       ${m.final.state === 'drawn' ? kv('十二轮后风位补齐', `${m.final.completed_count} / ${(m.final.standings || []).length}`) : ''}
       ${m.final.state === 'drawn' ? kv('final.json sha256', `<span class="mono">${esc(m.final_digest || '')}</span>`) : ''}
+      ${m.substitutes.length ? kv('中途换人', m.substitutes.map((sub) =>
+        `<span class="mono">#${sub.local_id}</span> 第 ${sub.from_round} 轮起 ` +
+        `${esc(sub.outgoing.title || '')} &rarr; ${esc(sub.incoming.title)}` +
+        `<br><span class="dim">${esc(sub.reason)}</span>`).join('<br>')) : ''}
     </dl>
+    ${m.substitutes.length ? `
+    <p class="detail dim flush">
+      这些席位保留了原有的 Pantheon 注册位，所以名次表仍是一人一行，桌次与没有换人时完全一致。
+      记录会被抄进 lock.json，与名次同一个指纹、同一个时间戳。
+    </p>` : ''}
     <p class="detail dim">
       ${m.final.state === 'drawn'
         ? '复算：<code>node generate-final.js --verify final.json</code>，第二实现：<code>py tools/verify_final.py</code>'

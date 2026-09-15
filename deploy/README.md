@@ -407,6 +407,58 @@ python3 tools/verify_template.py data/schedule_template.json
 > off, `results.json` and `events/` exist only on the server, and nobody can check
 > anything — which is why `/admin` refuses to call such a deployment ready.
 
+### 13a. The final round
+
+Only if this event has one — `protocol.json` with a `final_round` block (PROTOCOL.md §11). It happens
+weeks after §12, once all eleven rounds have been played and entered in Pantheon, and
+**before** §14: closing the event refuses while a lock exists without a result beside it.
+
+Run both from the server, the same box the draw ran on. That is where the mirror token
+and the captured Pantheon admin credential already are.
+
+**Lock the standings and the beacon.** Dry run first; it fetches, checks and prints, and
+writes nothing:
+
+```sh
+node tools/lock-final.js
+node tools/lock-final.js --in 45m --confirm
+```
+
+Read what the dry run prints before confirming: twelve players, eleven games each, and
+the order it recomputed locally matching the one Mimir returned. If those disagree, the
+sort key was not applied and the tool writes nothing — set `pantheon.rating_order_by` in
+`runtime.json` to a column Mimir accepts and run it again.
+
+`--in 45m` is a reasonable default. It must be long enough to mirror the lock, get it
+timestamped, and let twelve people compare the digest, and it must never be shorter than
+an OpenTimestamps round trip — an anchor made after the beacon proves nothing about
+before it. The tool refuses anything under a minute.
+
+**Then announce the digest it prints**, with the drand round and the time it is due. That
+is the whole of the evidence: the standings were fixed before the randomness that seats
+them existed, and twelve people holding the same short string is what makes it checkable.
+After that round lands, the same digest proves nothing.
+
+**Draw it**, once the round has landed:
+
+```sh
+node tools/draw-final.js --dry-run
+node tools/draw-final.js
+```
+
+It waits for the beacon, publishes `final.json`, and writes all twelve prescript blocks
+to Pantheon with `next_session_index = 12`. Running it twice does not draw twice: an
+existing `final.json` is re-verified and re-published, never recomputed.
+
+If the sync fails, paste **all twelve** blocks of `pantheon_prescript` in by hand with
+`next_session_index = 12` and `WIND_SHUFFLE_MODE_PRESCRIPTED`. Never re-run the draw.
+
+> [!WARNING]
+> If the standings need correcting after the lock is published, `--relock --reason "…"`
+> replaces it — but only before the beacon lands, and the superseded lock is kept and
+> published beside the new one. Once `final.json` exists there is no re-lock and no
+> re-draw.
+
 ### 14. Close the event
 
 **Before** the next freeze, not after:

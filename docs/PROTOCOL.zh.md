@@ -104,6 +104,9 @@ R = contribution_1 XOR … XOR contribution_n      // 256 位
   "seed_domain_separation": "mahjong-seating-v1",
   "schedule_template_ref": "data/schedule_template.json@<git tag>",
   "generate_script_ref": "generate.js@<git tag>",
+  "generate_final_script_ref": "generate-final.js@<git tag>",
+  "final_round": { "enabled": true, "table_assignment": "rank_blocks",
+                   "wind_draw": "max_completion_then_uniform" },
   "pantheon": { "wind_shuffle_mode": "WIND_SHUFFLE_MODE_PRESCRIPTED" }
 }
 ```
@@ -118,7 +121,8 @@ R = contribution_1 XOR … XOR contribution_n      // 256 位
 | `quorum`、`total_slots` | §8 的规则，在任何人能看出谁没交之前就定下。 |
 | `user_input_max` | 每位选手取值的域，也是贡献哈希里的一个字节。 |
 | `seed_domain_separation` | §7 里的 `DOMAIN`。改它，抽签里每一个哈希都变。 |
-| `schedule_template_ref`、`generate_script_ref` | 指明另外两份产物来自哪个 tag，让四个文件互相承诺。 |
+| `schedule_template_ref`、`generate_script_ref`、`generate_final_script_ref` | 指明另外几份产物来自哪个 tag，让五个文件互相承诺。 |
+| `final_round` | 有没有第十二轮，以及它按哪两条规则抽（§11）。之所以冻结：它们是这场比赛的规则，而在第一局开打之前就把它们打上 tag，正是为了让任何人都无法照着自己已经看到的名次去设计规则。没有这个块就是十一轮赛事。 |
 | `pantheon.wind_shuffle_mode` | 除 `WIND_SHUFFLE_MODE_PRESCRIPTED` 之外的任何模式都会在桌上重新随机风位，把模板保证的东西丢掉大半（硬性规则 5）。 |
 
 **`chain_public_key` 是必需的，而且是在 `chain_hash` 之外**另外**必需，不是取而代之。** `drand-client` 在 `isValidInfo` 里判断自己是否在跟正确的链说话，它同时比对哈希**和**公钥，两个都要。只钉哈希的话 `publicKey` 就是 `undefined`，比对对任何一条真实的链都失败，于是最省力的路径就变成了关掉链验证——让客户端相信端点自称的任何身份。冻结时从 `<drand api>/<chain_hash>/info`（`runtime.json` → `drand.api`）读一次这个公钥，和哈希记在一起。它之所以冻结，是因为它是「这场抽签绑定在哪个随机源上」这个问题的另一半答案。
@@ -177,6 +181,8 @@ R = contribution_1 XOR … XOR contribution_n      // 256 位
 ```
 按时提交的那份名单。它在任何人能知道漏掉谁有用之前就被固定下来，而且是公开的，这正是验证者据以检查 `results.json` 是否对每一份提交都有交代、而不只是对它挑出来列的那些有交代的依据。它在 `results.json` **之前**被镜像，所以永远不会出现「结果可读但审计它所需的文件还没有」的情况。
 
+**`events/final/lock.json`** 与 **`final.json`** —— 第十二轮的承诺和它的结果。两者都在 §11 里描述，因为使它们成为证据的那条顺序论证写在那里。十一轮赛事不会有这两个文件。
+
 **`results.json`**（开奖之后自动写出，恰好一次）
 ```
 {
@@ -227,6 +233,7 @@ submissions/<local_id>.json
 3. **等待。** 应用展示一个实时视图：到目标轮次的倒计时、drand 链的健康状况、十二人里已提交了多少。这里不需要选手做任何事。
 4. **开奖。** 到 `submission_cutoff_utc` 时服务器对已收到的提交做快照。≥ 8 份时它等待 drand 发布 `target_round` 的签名，解密、计算结果并发布。< 8 份时本轮被判作废。
 5. **同步。** 生成的座位表作为活动的 prescripted seating 写进 Pantheon，并带着后续说明展示给选手。
+6. **决赛轮**，如果这场赛事有的话（§11）。十一轮打完之后，名次和第二个 drand 轮次会被一起锁定并公开——在那一轮存在之前——等它落地，第十二轮的风位就从中抽出。选手要在这段间隔里再核对一次摘要，理由和第一次完全相同。
 
 ## 6. 后端 API
 
@@ -350,3 +357,163 @@ submissions/<local_id>.json
 应用和 Pantheon 跑在同一台主机上，所以后端到 Pantheon 的调用走 localhost。一个小的后端进程（Node 或 Python）、用 SQLite 存状态、一个持有 GitHub PAT 的镜像脚本，前面一个反向代理终结 TLS——主机上已经有 nginx 的用 nginx（Pantheon 共用这台机器时就是这种情况），否则用 Caddy。对 `main` 的写权限收窄到后端使用的那个 PAT。
 
 有一个地址不遵守这条规则。浏览器自己要访问 Frey，所以给它的 URL 必须能从选手的设备上解析，而不是从主机上；`runtime.json` 用 `pantheon.frey_base_url` 和 `pantheon.frey_public_url` 把两者分开。
+
+## 11. 决赛轮
+
+十一轮模板赛程之后还要打第十二轮。它的**桌次是打出来的**——名次 1-4 坐一桌、5-8 坐二桌、9-12 坐三桌——只有**风位是抽的**。为什么这样抽才是公平的、为什么「每人每门风各三次」是精确的靶心、这个设计要付出什么代价，都写在 [`docs/seating-design.zh.md`](seating-design.zh.md) 里，这里不重复。本节讲的是机制。
+
+决赛轮是**可选的**：`protocol.json` 里没有 `final_round` 块的赛事就是十一轮赛事，下面所有的文件和接口对它来说根本不存在。
+
+### 11.1 三次承诺，顺序不可颠倒
+
+整个论证就是一句话：每一项输入，都在用到它的那个东西存在之前就已经固定了。
+
+**T0 —— 冻结时，任何人开打之前。** `generate-final.js` 与 `generate.js`、`schedule_template.json`、`roster.json`、`protocol.json` 一起冻结并打 git tag（§4.1）。`protocol.json` 增加 `generate_final_script_ref`，以及一个用文字写明两条规则的 `final_round` 块：
+
+```
+"final_round": {
+  "enabled": true,
+  "table_assignment": "rank_blocks",
+  "wind_draw": "max_completion_then_uniform"
+}
+```
+
+两个值各自只有唯一一个合法取值，而且它们在脚本里也是写死的。这种重复是刻意的：`protocol.json` 是那个会被打 tag、被公布、被拿出来给人看的文件，所以读者必须能不读 JavaScript 就看到当初承诺了什么——而一旦这里的值和脚本不一致，服务器会在启动时直接拒绝，而不是变成一句好看的废话。
+
+**时机就是要害。** 一轮要过好几周才打的比赛，它的规则在第一局开打之前就打上了 tag，所以没有人能照着自己已经看到的名次去设计规则。
+
+**T1 —— 循环赛打完之后，信标出块之前。** `tools/lock-final.js` 拉取名次、逐条校验、选定一个未来的 drand 轮次 `F`，然后把两者写进**同一个**文件 `events/final/lock.json`。之所以是同一个文件：一个文件就是一个摘要、一个时间戳、一串给十二个人互相念的字符；两个文件就是两个摘要，外加一场「哪个先公布」的争论。
+
+操作顺序，而且顺序有讲究：写到本地 → 交给镜像 → 等推送完成 → 对这些字节打 OpenTimestamps → 再镜像 `.ots`。时间戳是尽力而为，但它失败时必须**吵**，因为它事后无法补救：在 `F` 出块之后打的时间戳，证明不了任何关于出块之前的事，而那正是它唯一的用处。
+
+这里刻意**不打第二个 git tag**。tag 绑的是代码，而代码在 T0 就绑好了；锁定文件绑的是那时还不存在的数据。绑住锁定文件的是镜像仓库的提交历史——它的时间戳组织者控制不了——以及 OpenTimestamps 锚点，后者不需要信任镜像，也不需要信任我们。这和 §9 里「开奖名单只镜像、只盖时间戳、不打 tag」是同一个理由。
+
+**T2 —— `F` 落地之后。** `tools/draw-final.js` 等待信标，在进程内调用 `generateFinal`，写出 `final.json`，镜像它，并同步 Pantheon。它**不**盖时间戳：在信标之后打的锚点，相对于信标之前打的那个，什么也没增加。
+
+### 11.2 种子
+
+```
+SEP = 0x1F
+
+seed_final = SHA256(
+      DOMAIN            utf8，已校验不含 SEP
+    ‖ SEP ‖ "final"     ascii —— 第三个标签，与 "contrib"、"seed" 并列
+    ‖ SEP ‖ R           32 原始字节，来自 results.json
+    ‖ SEP ‖ signature   原始字节，hex 解码，轮次 F 的签名
+    ‖ SEP ‖ standings   每个 1 字节，local_id 按**名次顺序**，第 1 名在前
+    ‖ SEP ‖ local_ids   每个 1 字节，升序 —— 谁贡献了 R
+)
+```
+
+`R` 是复用的，不是重新征集的。它已经是十二个人共同的贡献，已经公开，而为决赛再跑一次提交轮只会让十二个人做一件不增加任何东西的事：`F` 的签名本身就是他们谁也预测不了的随机性，把它折进同一个 `R`，得到的值既没有哪个选手能操纵，也没有组织者能操纵。
+
+§7 的无歧义性论证在这里**不能照搬**。那边成立是因为每个字段要么定长、要么校验过不含 SEP，且唯一的变长字段在最后；而这里有两个字段可能合法地含有 `0x1f`——签名和名次。改成把两者的长度都钉死，就免费地恢复了等价的保证：
+
+- `standings` 恰好是 `total_slots` 字节，且是花名册 `local_id` 的一个排列；
+- `local_ids` 等于 `sort(results.participating_local_ids)`，其长度 `results.json` 本身已经固定；
+- 签名解码出的字节数恰好等于 `results.drand_signature` 解码出的字节数——同一条链、同一条曲线、同样的长度。
+
+有了这三条校验，每个字段都是定长的，于是不存在两组不同的输入产生同一串字节。分隔符照旧保留，作为双保险。
+
+### 11.3 抽签
+
+十一轮之后每个模板位置恰好缺一门风；这些缺口每次都是**从冻结的模板现算出来的**，从不写死，而且推导过程会断言它自己的形状（每个位置是 `k, k, k, k-1`；每门风缺口的位置数相等）。
+
+对一桌来说，一种*坐法*就是从按名次排序的四个人到四个座位下标 `0=东, 1=南, 2=西, 3=北` 的映射。24 种按字典序枚举；`optima` 是其中补齐人数最多的那些，保持同一顺序；抽签结果是 `optima[rng.below(optima.length)]`。
+
+**每桌恰好一次 `below()` 调用，桌 1 → 3，共用一条 `Sha256CounterStream(seed_final)`，并且不存在任何其他读这条流的操作。** 逐桌最优即全局最优，逐桌均匀即全局均匀：三张桌子划分了十二个人且没有跨桌约束，所以全局最优集就是各桌最优集的笛卡尔积，而在每个因子上独立均匀抽取，恰好就是积上的均匀分布。
+
+枚举顺序是结果的一部分，因为公布出来的是它的一个*下标*。一份按别的顺序枚举的实现会在种子上一致、在座位上不一致——而这不会在任何地方报错。它被钉在 `test/final-vectors.json` 里，印在 `seating-design.zh.md` 里，并且由 `tools/freeze.js` 在打 tag 之前核对。
+
+### 11.4 文件
+
+**`events/final/lock.json`**（T1，镜像并盖时间戳，`.ots` 放在旁边）
+```
+{ "event": "final", "locked_at": "...",
+  "target_round": 32200000, "target_round_utc": "...",
+  "chain_hash": "...", "chain_public_key": "...",
+  "results_sha256": "...", "results_round_used": 123456, "R": "...",
+  "standings": [7,2,11,4,9,1,12,5,3,10,8,6],
+  "standings_detail": [ { "rank": 1, "local_id": 7, "person_id": 41, "table": 1,
+                          "rating": 1500, "chips": 8, "avg_place": 2.1,
+                          "avg_score": 4200, "games_played": 11 }, ... ],
+  "order_by": "rating", "order": "desc", "ties": [ ... ],
+  "generate_final_script_ref": "generate-final.js@<tag>" }
+```
+`standings` 是承重字段：按名次顺序排列的 local_id，也是决定谁坐哪张桌的唯一依据。`standings_detail` 是读者用来核对它的那份材料。
+
+**`final.json`**（T2，与 `results.json` 并列，绝不写进它里面）
+```
+{ "final_round": 12, "round_used": 32200000, "drand_signature": "...",
+  "results_sha256": "...", "lock_sha256": "...",
+  "standings": [ ... ], "R": "...", "seed": "<sha256 hex>",
+  "deficient_winds": { "1": "E", ... },
+  "tables": [ { "table": 1, "players": [7,2,11,4], "deficiencies": ["W","N","N","W"],
+                "completed": 2, "optima_count": 8, "optimum_index": 5,
+                "assignment": [2,1,3,0] }, ... ],
+  "completed_local_ids": [ ... ], "completed_count": 8,
+  "seating": { ... 一轮，座位带的是 `rank`，不是 `point` ... },
+  "pantheon_prescript": "... 全部十二块 ...",
+  "pantheon_prescript_final": "... 单独的第十二块 ...",
+  "pantheon_next_session_index": 12 }
+```
+
+**`events/final/sync.json`**（T2）—— Pantheon 的同步结果，形状与 `events/sync.json` 一致。
+
+`results.json` 永远不被改写。它是第一次抽签公布出去的物件，而且要逐字节复现（§4.3）；为了整齐而往里面追加一轮，会毁掉这一点。第十二轮放在它旁边，`/api/result` 也出于同样的理由把两者分别作为 `seating` 和 `final` 返回。
+
+### 11.5 名次、并列与拒绝
+
+名次来自 Mimir 的 `GetRatingTable`，它**没有名次字段**——名次就是列表里的位置（PANTHEON-INTEGRATION.zh.md §5）。联赛按哪一列排名属于运营配置，放在 `runtime.json`；而那条*规则*——名次 1-4 坐一桌——是冻结的。
+
+`tools/lock-final.js` 在下列条件全部满足之前不写任何东西：
+
+1. `results.json` 存在，且能从它自身的载荷复现；
+2. 名次表里的十二个人正是冻结花名册里的那十二个；
+3. 他们每个人都打满了十一场；
+4. 服务器返回的顺序，等于本地按同一个 key 重排出来的顺序——这正是「一个本项目从未验证过的 `order_by` 可以安全依赖」的原因：如果 Mimir 忽略了它，两个顺序就会不同，于是什么也不会被写下；
+5. `F` 距今至少 60 秒，且在 `results.round_used` 之后；
+6. 没有跨名次段的并列，除非有人指明了裁决它的规则。
+
+**并列。** 段内并列不改变任何人的桌次——同样的四个人无论如何都坐在一起，变的只是种子里的一个字节，而它在信标之前就已固定，无法对着结果打磨。这种并列被记录下来并放行。**跨**名次段的并列决定了桌次，工具会拒绝：它从不自行破并列，也从不静默破并列。裁决的办法是在源头按联赛自己的规则处理，然后把那条规则记进公开的锁定文件：
+
+```sh
+node tools/lock-final.js --tiebreak 4 --tiebreak-reason "联赛规则 6b：点棒多者优先" --confirm
+```
+
+边界两侧任一个名次都能指代它。确认一个并列不会给任何人重新排序；如果显示出来的顺序不是联赛规则给出的顺序，那就是源头的名次错了，应该在那里改。
+
+### 11.6 替补
+
+本赛事里的一个「座位」是一个 `local_id`，不是一个人。赛程模板、所缺的那门风、对手、以及 Pantheon 的 prescript，全都是用 local id 写的，而 Mimir 会把一个 local id 解析成当前占着它的那个人。这既是替补之所以可能的原因，也决定了规则应有的形状。
+
+`final_round.substitutes` 是**冻结**的，因为一个联赛如果等到有人退赛*之后*才决定替补怎么算，它是在看得见名次的情况下做这个决定。两个取值：
+
+- **`"same_registration"`** —— 替补沿用该座位原有的 Pantheon 注册位。Mimir 仍然报出十二个人、每人十一场，因此名次表、名次段、种子字节和 prescript 全都与没有换人时完全一致。抽签没有任何一处改变。
+- **`"forbidden"`** —— 不设替补。失去选手的座位不打决赛轮，联赛必须事前说明改为如何处理。
+
+**为什么只有这两个。** 其余方案都要把替补注册成第十三个人。而 Mimir 的名次表是按**打过的场次**生成的（已对真实实例实测），于是退赛者和替补会各占一行、各自只有部分场次——十二个座位出现十三行。要从这两行里排出这个座位的名次，就必须发明一套「合并两份残缺成绩」的算术，而这套算术会决定桌次。`same_registration` 不需要任何这样的算术。这同时也是这份声明可以写得晚而不会变成杠杆的原因：**它是一份记录，不是一个输入。**
+
+**这份记录。** `data/substitutes.json` 对每一次替补写明：哪个座位、替补从第几轮开始上场、谁离开、谁接替、允许此事的联赛规则、以及声明的时间。它不是冻结文件——也不可能是，因为退赛发生在打 tag 之后好几周——它在加载时被校验：
+
+- 这个座位在冻结花名册里；
+- `outgoing.person_id` **等于**花名册中该座位的 `person_id`。若不相等，说明注册位真的换了手，名次表里这一个座位现在有两行残缺记录，而 `tools/lock-final.js` 里每一项计数都会*静默*出错——因为那两行看上去都很正常；
+- `from_round` 是一个真实存在的轮次；
+- 给出了理由，并指明规则。一次没有写明依据的替补，正是这个文件存在的目的所要杜绝的；
+- 冻结的策略允许替补。若 `protocol.json` 写的是 `"forbidden"`，以冻结的那条为准，整个文件不予加载。
+
+`tools/lock-final.js` 在写任何东西之前先把这些替补打印出来，并在它展示的名次表里标出受影响的座位，然后把这份记录一并抄进 `events/final/lock.json`——于是它与名次落在同一个指纹、同一个 OpenTimestamps 锚点之下，事后无法再改。一旦锁定文件存在，`/api/result` 就只提供**锁定文件里的那一份**，而不是当前的活文件，这样页面绝不会显示出一份与「请大家核对的那个指纹」之下不一致的记录。
+
+`tools/freeze.js` 会拒绝为一个 `substitutes.json` 已有声明的赛事打 tag：冻结的时刻还没有人打过一场球，也就还没有任何可供替补的东西。最可能的原因是这个文件是上一届赛事留下来的，而 `tools/end-event.js` 正是防住这一点的东西——它把这份记录随本轮一起归档并清除，使它无法跟着这个 checkout 进入下一届比赛。
+
+### 11.7 重新锁定，以及什么绝不可以重来
+
+`--relock --reason "…"` 可以替换一份已公布的锁定文件，而且仅限于 `final.json` 尚不存在的时候。被取代的那一份会被移到 `events/final/lock.<n>.json`，而不是被覆盖——它也是公布过的——并且新的锁定文件会写明它的前身去了哪里。
+
+`tools/draw-final.js` 在强意义上是幂等的：已经存在的 `final.json` 只会被重新核验、重新镜像、重新同步，绝不重算。从外面看，「重算」和「重抽」是分不清的，而后者恰恰是谁都不应该做得到的那一件事。一份无法从锁定文件和 `results.json` 复现出来的 `final.json` 会被**保留**，不会被覆盖，工具就地停下。
+
+关闭赛事（`tools/end-event.js`）在「锁定文件存在而旁边没有 `final.json`」时会拒绝。这个状态的其他一切看起来都像已经结束了——`results.json` 在磁盘上、阶段是 `done`——所以若没有这条拒绝，一条例行命令就会删掉一份已公开、已盖时间戳的承诺，而从外面看，这和撤回它是分不清的。`--abandon` 是唯一的出口，而它会把「决赛轮被放弃了」这件事记录在案。
+
+### 11.8 阶段
+
+在决赛轮的三种状态下，`phase` 始终是 `done`。它不是第四个阶段，也不许变成第四个阶段：所有依据它分支的东西——提交开关、开奖任务的各种拒绝、`resetForNewRound`、`endEvent`——讲的都是**第一次**抽签，必须继续给出和以前完全一样的回答。改为由 `/api/status` 携带 `final.state`（`none` | `locked` | `drawn`），页面看的是这个。

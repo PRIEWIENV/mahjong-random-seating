@@ -135,6 +135,8 @@ data/
   protocol.example.json      # 冻结参数：链、目标轮次、人数门槛、输入范围
   roster.example.json        # 形状参考；真正的那份由 tools/freeze.js 写出
   runtime.example.json       # 运营配置 —— 不冻结、不打 tag、可选
+  substitutes.example.json   # PROTOCOL.zh.md 11.6 —— 座位中途换人时，实际是谁在坐；
+                             # 只在真的发生时才复制，且不冻结（也不可能冻结）
                              # protocol.json 和 roster.json 在这里被 gitignore：
                              # 它们是某一场活动的数据，冻结在办那场活动的那棵树里
 server/
@@ -163,6 +165,10 @@ tools/
   check-signin.js            # 把一个账号的 Pantheon 登录逐步走一遍
   setup-mirror.js            # 镜像用的 GitHub token：取得、验证可写、写入配置
   new-round.js  end-event.js # 作废之后；活动之后
+  lock-final.js              # 11 章 T1：在信标之前锁定名次与信标轮次
+  draw-final.js              # 11 章 T2：等它落地、抽风位、写入十二块 prescript
+  verify_final.py            # 用另一份独立实现重算一遍决赛轮
+  verify-pantheon-final.js   # 向真实的 Mimir 问 PANTHEON-INTEGRATION.zh.md 5.2 里的那些问题
   build-client.js  md-to-page.js  verify-template.js  verify_template.py
   verify_contribution.py  decrypt-submissions.js  pantheon-fixture.js
 test/                        # 单元测试，以及对着真实 drand 的 e2e.js

@@ -148,6 +148,20 @@ Stub 模式只替换输入框，别的都不换：同一张卡片、同一套外
 
 把这个文件叫成它本来的样子——大家提交的密文——而不是「名单」。`snapshot.json` 是它在磁盘上和归档里的名字；那个名字不必是选手读到的措辞。
 
+
+### 决赛轮
+
+带第十二轮的赛事（PROTOCOL.zh.md §11）会在结果页上放三样东西，其中第一样在那一轮抽出来的**好几周之前**就出现了。
+
+**封存卡片**，它是存证卡片的兄弟，而且刻意做成它的孪生兄弟，连 class 都一样。两者提出的是同一个请求——这里有一串短字符串，趁着还没有人知道它会打开什么，跟另外十一个人核对一下——而两张长得像不同机制的卡片，会让读者以为它们真是不同的机制。它显示封存文件的指纹、将要抽风位的那一轮 drand 及其预计出块时间，以及**三张桌子**，桌次已经定了，因为是名次定的。还没有人知道的是谁坐东家。「核对指纹」这个请求只在已锁定、未抽签时显示：抽完之后，同一串摘要就只是组织者念给你听的一个数字。
+
+**大标题会移动。** 在第 1 轮还是下一件要去做的事时显示第 1 轮；决赛轮一旦存在就显示决赛轮。一个几周之后还在宣布第 1 轮的页面，会恰好有一句话——而且是最大的那句——讲的是过去。
+
+**第二个验算区块**，放在第一个旁边而不是并进去。现在有两次抽签要核验，核验方式相同，而且各自都指向一份第二实现。
+
+逐人统计里有三句话，对十一轮是真的，对十二轮是假的，而这一节的存在就是为了标出这个坑。风位按**打过的全部轮次**统计，因为那正是决赛轮要纠正的那个量。桌次和配对仍然限定在**前十一轮**，因为 `{4,4,3}` 和「66 对里 11 对」是模板的性质，由 `tools/verify_template.py` 证明，而且是邀请选手自己去跑的；一个悄悄改变了含义的数字，会和页面自己指向的那个验证器相矛盾。
+
+最后是 4-3-3-2 而不是 3-3-3-3 的人，会被告知他当时真实的概率——*m* 分之一，*m* 是他那桌有多少人缺同一门风——以及规则为什么这么设计。不是「你运气不好」。这个设计把「每门风各三次」的人数最大化，代价就是缺同一门风的人要分享同一个座位。把这个数字说出来，才让公平性的说法是可核验的，而不是安慰性的。
 ## 8. 客户端需要的数据
 
 ```
@@ -161,12 +175,24 @@ GET /api/status   → phase, submitted_count, quorum, total_slots, submitted_loc
                     //   此时结果页不指名任何仓库
                     draw{round_due_utc, seconds_late, grace_seconds, overdue},
                     drand{latest_round, healthy, last_seen_utc},
+                    final{state, lock_sha256, anchored, target_round,
+                    //     target_round_utc, standings, round, completed_count},
+                    //   第十二轮（PROTOCOL.zh.md §11）。有锁定文件之前是
+                    //   {state: "none"}；三种状态下 phase 都保持 "done"，所以
+                    //   只有这个字段会动，客户端据此重新拉取 /api/result
                     server_time_utc
 GET /api/me       → local_id, title, submitted
 GET /api/result   → seating（11 轮 × 3 桌 × 4 座，带名字），
                     contributions, r, permutation, drand_signature,
                     excluded_local_ids,
-                    stats: 逐人 {winds, tables, opponents[], perfect_pairs},
+                    stats: 逐人 {winds, tables, opponents[], perfect_pairs,
+                    //     winds_template, deficient_wind, wind_complete,
+                    //     table_split_template} —— 风位按打过的全部轮次统计，
+                    //     配对类数字只按模板的那十一轮统计
+                    final,            // final.json，或 null。`seating` 仍然是 11
+                    //   轮：它指的是一个所有验证器都在用的已公布文件
+                    final_lock,       // events/final/lock.json，或 null
+                    final_state,      // "none" | "locked" | "drawn"
                     pantheon_sync
                     // 一个组合视图：results.json + 计算出的统计 +
                     // events/sync.json。验证者用的是那些文件，

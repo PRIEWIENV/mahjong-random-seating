@@ -231,7 +231,8 @@ export default function Result({ status, me, result }) {
           weeks before it is opened, and is the only moment at which comparing its
           digest with eleven other people proves anything (PROTOCOL.md §11). */}
       {status?.final && status.final.state !== 'none' && (
-        <FinalCard final={status.final} result={result} players={status.players} />
+        <FinalCard final={status.final} result={result} players={status.players}
+          substitutes={result?.substitutes || []} />
       )}
 
       {status?.roll && <RollCard roll={status.roll} sealed={false} />}

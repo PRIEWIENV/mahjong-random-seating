@@ -142,6 +142,20 @@ Calls that modify event configuration require an administrator account, so the s
 
 This is a deliberate, narrow crossing of the wall that once read "never mixed with the player sign-in path". The wall was there so the fairness-critical sign-in could not depend on the admin write, and it still does not: the capture is a side-effect-free lookup wrapped so any failure reads as "not an admin" and never blocks a player, the token captured is the admin's own, and the write itself still happens only in the finalise job, after the draw is final and published. `GetOwnedEventIds` is also what decides whether the page offers the organiser dashboard (`/admin`) — an event admin reaches it with their own session, so `ADMIN_TOKEN` is now optional. The non-secret half of the Pantheon configuration (base URLs, the Twirp path template, service names) lives in `runtime.json` and is deliberately outside the freeze: where Pantheon sits on the host cannot affect the draw. What the sync is allowed to write does affect it, so `wind_shuffle_mode` stays in the frozen `protocol.json` (`PROTOCOL.md` §4.1).
 
+
+### 3.1 Adding the final round, mid-event
+
+An event with a twelfth round (PROTOCOL.md §11) writes the prescript **twice**: eleven blocks at the first draw, then all twelve once the final round is drawn — weeks later, with eleven sessions already played and scored.
+
+All twelve, not just the new one. Writing the twelfth block alone with `next_session_index = 1` would tell Pantheon to re-seat session **one** from the final round's tables. Writing all twelve also means the read-back proves the eleven played sessions were handed back unchanged, which is the part nothing else checks.
+
+The sequence `tools/draw-final.js` uses:
+
+1. `GetPrescriptedEventConfig` — and refuse unless the stored prescript is **byte-for-byte** what `results.json` published, it is exactly eleven blocks, and `next_session_index` is already `12`. That last one is doing real work: it is Mimir's own statement that all eleven sessions have been played, and it is the only check here that does not depend on somebody's word.
+2. `UpdatePrescriptedEventConfig({event_id, next_session_index: 12, prescript: <twelve blocks>})`.
+3. `GetPrescriptedEventConfig` again — and compare byte for byte, including the index.
+
+Re-running the tool after the final session has been **played** is an ordinary thing to do, and it must not rewind anything: by then Mimir has moved `next_session_index` past 12. So when the stored prescript already equals what would be written, the tool returns without writing at all rather than pointing Pantheon back at a session that is already in the books.
 ## 4. Sync failure handling
 
 The sync happens after the draw is already final and published, so a failure there is an operational nuisance, not a fairness problem — the seat plan in `results.json` is authoritative and reproducible from public data whatever Pantheon says.
@@ -163,6 +177,7 @@ Methods named here, verified against `Common/proto/*.proto` **and called against
 | Apply a session's seating | Mimir | `MakePrescriptedSeating` |
 | Preview next session's seating | Mimir | `GetNextPrescriptedSeating` |
 | The event's name, for the page title | Mimir | `GetEventsById` |
+| Standings, for the final round (§11) | Mimir | `GetRatingTable` |
 
 ### 5.1 What the wire actually looks like
 
@@ -187,6 +202,8 @@ is right by accident; code that treats an absent field as "the server did not sa
 wrong. A bool that is `true` is always present, which is what makes
 `authSuccess === true` a complete test for a successful sign-in.
 
+**`GetRatingTable` has no rank field.** `EventsGetRatingTablePayload{event_id_list, order_by, order}` returns `EventsGetRatingTableResponse{list}` of `PlayerInRating{id, title, tenhou_id, rating, chips, winner_zone, avg_place, avg_score, games_played}` — and nothing that says "3rd". **The rank is the position in the list.** So the order is the payload, and a client that re-sorted it, however sensibly, would be inventing the one number the final round's tables are read from.
+
 **A bad credential pair is an error, not a false.** Frey's `quickAuthorize` either
 returns `{authSuccess: true}` or throws: 400 `invalid_argument` for a wrong token, 404
 `not_found` for an unknown person. A client that lets those propagate reports a mistyped
@@ -198,6 +215,46 @@ keeps throwing on 5xx and 429, so an outage still reads as an outage.
 and `X-Current-Event-Id` (`Mimir/src/Meta.php`), and event admin and referee rights are
 scoped by the third. Without it the prescript write is refused — after the draw, when
 nothing can be changed.
+
+
+### 5.2 Verified against a live instance, and not
+
+Worth separating, because this document reads with equal confidence throughout and the two halves do not deserve it.
+
+`tools/verify-pantheon-final.js --event <id>` is what closes the gap. It asks a running Mimir every question below by doing it, prints one verdict a line, and puts the prescript it found back on the way out. Run it against a development instance while building, and against the real instance **before an event is frozen** — the remedy for the first row has to happen before anybody plays.
+
+**Verified by calling a running instance:** everything in 5.1, the sign-in path end to end, the roster read, writing an eleven-block prescript to a fresh event, and `MakePrescriptedSeating` with `wind_shuffle_mode = 3` seating all twelve as drawn. And, as of the run recorded below:
+
+| Question | Answer |
+|---|---|
+| Does an event created for **eleven** sessions accept a **twelve**-block prescript? | **Yes.** Twelve blocks written, twelve read back byte-identical, `check_errors` empty. `EventPrescript::unpackScript` splits on blank lines and caps nothing, and `getCheckErrors` validates only duplicate and unknown local ids |
+| Is a mid-event update accepted, and does it disturb recorded results? | **Accepted, and no.** Blocks 1-11 came back byte-identical after the rewrite, and every recorded rating row was unchanged across it. The prescript and the played sessions are separate state |
+| Can `next_session_index` be set to 12 explicitly rather than clamped? | **Yes, and it round-trips.** The controller stores `nextSessionIndex - 1` and the reader returns stored `+ 1`, so what you write is what you read. Do not be misled by the model layer alone, where only one half of that is visible |
+| Is the twelfth block reachable, with its seat order intact? | **Yes.** With the pointer at 12, `GetNextPrescriptedSeating` returned the twelfth block's three tables in exactly the written order — and seat order *is* wind order, E-S-W-N |
+| Which values does `GetRatingTable`'s `order_by` accept? | `name`, `rating`, `games_and_rating`, `avg_place`, `avg_score`, `chips`. **Not `games_played`** |
+| Does `GetRatingTable` need the admin headers? | **No** — but see the two rows below, because the answer it gives with them is a different table |
+
+**What the live run changed in this repository**, rather than merely confirmed:
+
+| Finding | Consequence |
+|---|---|
+| `games_played` is **not** a valid `order_by` | It was in `lock-final.js`'s `SORTABLE` list. An operator who configured it would have got a 500 from Mimir at the moment they were locking the standings. Removed; `name` and `games_and_rating` are now refused *by name*, with the reason, rather than as "unknown" |
+| A refused `order_by` returns **500**, not a 4xx | Indistinguishable from an outage, so "try again later" would have been exactly the wrong advice. The failure path now prints the accepted set |
+| Mimir compares float keys with `abs(a - b) < 0.0001` and orders any pair inside that epsilon by a **second** key | Exact equality had both halves wrong at once: such a pair was not reported as a tie, *and* the local recomputation disagreed with Mimir's order and refused a good table. The order check is now monotonicity in the requested direction — immune to a secondary key it was never told about — and ties use Mimir's epsilon. A near-tie across the 4\|5 boundary is now caught, where before it would have seated somebody at the wrong table |
+| An event with **hide results** on returns *nothing* to a non-admin caller | `EventRatingTable.php`: `if (!$event->getHideResults() || $isAdmin)`. A tournament that hides its standings while it is being played — which is normal — made the default call return zero rows, and the failure read as "Pantheon returned 0 players", which sends an operator to check the event id. Now named, with `--as-admin` as the remedy |
+| The admin header makes Mimir include **prefinished** (started but unfinished) games | So `--as-admin` is not free: standings counting an unfinished game can still change, and a lock is a promise that they cannot. The flag now warns every time, and the per-player games check is what actually catches it |
+| The rating table is built from **played history**, not from registrations | A registered player with no finished game is absent entirely. This is what rules out every substitute policy except `same_registration` (PROTOCOL.md §11.6): a substitute registered separately appears as a *second, partial* row for one seat |
+| `chips` and `avg_place` are **absent** from a row when they are zero | Protobuf omits a field holding its default. The `?? 0` defaults in `getRatingTable` are load-bearing, not defensive |
+| A `local_id` **can** be reassigned to another registered person mid-event | Which is what makes a substitute possible at all, and confirms the prescript needs no change: it names local ids, not people |
+
+**Still not verified:**
+
+| Unverified | Why it matters | How it is handled |
+|---|---|---|
+| Whether a *fully played* eleven-session event behaves the same as one with games added through `AddPenaltyGame` | The rewrite-disturbs-nothing check above used penalty games, because finishing a real hanchan over the API needs a full round of scored hands | The read-back in step 3 compares the bytes of blocks 1-11 either way, so a disturbance is a loud failure |
+| Whether a live instance's `GetRatingTable` orders identically once real ratings differ by less than the epsilon | Two players inside 0.0001 decide a table if they straddle a band boundary | `lock-final.js` refuses a band-crossing tie outright, using Mimir's own epsilon |
+
+The rule the list follows: anything unverified that could change **who sits where** is caught by a check that recomputes rather than trusts, and anything unverified that could only fail loudly is left to fail loudly.
 
 ## 6. A local Pantheon to test against
 
@@ -256,3 +313,27 @@ Five things cost an hour between them and are invisible from the documentation:
 ruleset from the instance (`CreateEvent` refuses without a full one), creates the
 tournament, registers twelve players and assigns their local ids, then reads them back
 the way `tools/freeze.js` will.
+
+Two more that cost time and are invisible from the documentation:
+
+- **Frey's dev server dies with the shell that started it.** `make container_dev` runs in
+  the foreground, so starting it from a one-shot `wsl.exe -e bash -lc '...'` leaves nginx
+  up and nothing behind it — every call becomes `502`, which looks like Frey is broken
+  rather than absent. Start it detached *inside* the container:
+  `docker exec -d pantheon-frey.pantheon.internal-1 sh -c 'cd /var/www/html/Frey && HOME=/home/user su-exec user make dev'`.
+- **On WSL, the containers stop when the last client detaches.** The VM shuts down a few
+  seconds after `wsl.exe` returns, taking Docker with it, and the next call fails with
+  `fetch failed` against services that were healthy a moment ago. Hold one session open
+  for as long as you need them (`wsl.exe -e sleep 2400` in another terminal). Starting a
+  container with `docker start` rather than `docker compose up` is the other half of this:
+  it comes up without its compose network aliases, and Frey then cannot resolve
+  `hugin.pantheon.internal` — which presents as the 500 `fetch failed` two items above.
+
+`tools/verify-pantheon-final.js --event <id>` is the reason to bother with any of this. It
+asks a live Mimir the whole of §5.2 by doing it: writes an eleven-block prescript and then
+a twelve-block one, reads both back, checks blocks 1-11 survived byte-identical, walks
+`next_session_index` to the twelfth block and asks `GetNextPrescriptedSeating` for it,
+probes every candidate `order_by`, compares the admin and non-admin rating tables, and
+reassigns a `local_id` to a different person to confirm a seat can change hands. It puts
+the prescript it found back on the way out. It **writes** to the event it is given, so
+point it at a development instance — or at a real event before it opens.

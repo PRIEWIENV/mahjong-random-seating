@@ -121,8 +121,38 @@ const SORTABLE = {
   chips: (r) => r.chips,
   avg_place: (r) => r.avg_place,
   avg_score: (r) => r.avg_score,
-  games_played: (r) => r.games_played,
 };
+
+/**
+ * Keys Mimir accepts that this tool refuses anyway, and why.
+ *
+ * Measured against a live instance (tools/verify-pantheon-final.js), Mimir takes exactly
+ * `name`, `rating`, `games_and_rating`, `avg_place`, `avg_score` and `chips`. It does NOT
+ * take `games_played`, which this list used to offer -- an operator who configured it got
+ * a 500 from Mimir at the moment they were trying to lock the standings. Worse, a refused
+ * order_by comes back as a 500 rather than a 4xx, so it cannot be told apart from Mimir
+ * being down, and the advice on screen would have been to wait and try again.
+ *
+ * The two it takes and we do not are refused on purpose rather than for want of code.
+ */
+const REFUSED_BUT_VALID = {
+  name: 'orders the table alphabetically, which is not a ranking',
+  games_and_rating:
+    'ranks by games played first, and the final round is locked only once every player has ' +
+    'played all of them -- so it either equals "rating" or the round-robin is not finished',
+};
+
+/**
+ * Mimir's own epsilon for calling two float keys equal (models/EventRatingTable.php).
+ *
+ * It matters here for a reason that is easy to miss: Mimir compares ratings with
+ * `abs($a - $b) < 0.0001` and, when that holds, orders the pair by a SECOND key instead.
+ * Two players 0.00005 apart are therefore a tie to Mimir and not to an exact `===`. Using
+ * exact equality had both halves of that wrong at once -- the pair was not reported as a
+ * tie, and the recomputation disagreed with Mimir's order and refused a good table.
+ */
+const MIMIR_EPSILON = 0.0001;
+const near = (a, b) => Math.abs(Number(a) - Number(b)) < MIMIR_EPSILON;
 
 /** The table a rank sits at: 1-4 → 1, 5-8 → 2, 9-12 → 3. */
 const bandOf = (rank, blockSize) => Math.floor((rank - 1) / blockSize) + 1;
@@ -184,25 +214,36 @@ function checkStandings(rows, { roster, expectedGames, blockSize, orderBy, order
   const keyOf = SORTABLE[orderBy];
   if (!keyOf) {
     problems.push(
-      `cannot confirm an order sorted by "${orderBy}": the standings rows carry only ` +
-      `${Object.keys(SORTABLE).join(', ')}. An order this tool cannot recompute is an order it ` +
+      (REFUSED_BUT_VALID[orderBy]
+        ? `Mimir does accept "${orderBy}", but this tool refuses it: it ` +
+          `${REFUSED_BUT_VALID[orderBy]}. Instead, ` : '') +
+      `cannot confirm an order sorted by "${orderBy}": this tool can recompute only ` +
+      `${Object.keys(SORTABLE).join(', ')}. An order it cannot recompute is an order it ` +
       'cannot confirm, and confirming it is what makes an order_by nobody has verified safe to ' +
       'rely on. Set runtime.json → pantheon.rating_order_by to one of those, or pass --order-by.');
   } else {
     const dir = order === 'asc' ? 1 : -1;
-    // A STABLE sort on the same key: where the key ties, the server's own order is kept,
-    // so this compares what the key explains and stays silent about what it does not.
-    // Ties are the next check's business, not this one's.
-    const local = rows.map((r, i) => ({ r, i }))
-      .sort((a, b) => (keyOf(a.r) === keyOf(b.r) ? a.i - b.i : (keyOf(a.r) < keyOf(b.r) ? -dir : dir)))
-      .map((x) => x.r.person_id);
-    const given = rows.map((r) => r.person_id);
-    if (local.join(',') !== given.join(',')) {
+    // "Was order_by applied?" is exactly "is the key monotonic in the direction we asked
+    // for?", and asking it that way is immune to Mimir's secondary keys: where the primary
+    // key ties, Mimir orders that pair by something else, and any answer it gives there is
+    // a correct answer to the question we asked. Re-sorting and comparing person ids would
+    // instead demand that this tool reproduce a tiebreak nobody ever told it about.
+    const offenders = [];
+    for (let i = 1; i < rows.length; i++) {
+      const a = keyOf(rows[i - 1]);
+      const b = keyOf(rows[i]);
+      if (near(a, b)) continue;                 // a tie to Mimir, so it ordered them elsewise
+      if (dir * (Number(b) - Number(a)) < 0) {  // moved AGAINST the direction we asked for
+        offenders.push(
+          `rank ${i} (${rows[i - 1].title}, ${orderBy} ${a}) sits above ` +
+          `rank ${i + 1} (${rows[i].title}, ${orderBy} ${b})`);
+      }
+    }
+    if (offenders.length) {
       problems.push(
-        `Mimir's order is not the order "${orderBy}" ${order} produces, so order_by was not applied ` +
-        'and the ranking is something else.\n' +
-        `        Mimir:      ${given.join(', ')}\n` +
-        `        ${orderBy} ${order}:  ${local.join(', ')}`);
+        `Mimir's order does not run ${order} by "${orderBy}", so order_by was not applied and ` +
+        'the ranking is something else:\n' +
+        offenders.map((o) => `        ${o}`).join('\n'));
     }
   }
 
@@ -216,7 +257,9 @@ function checkStandings(rows, { roster, expectedGames, blockSize, orderBy, order
   const accepted = new Set(tiebreak);
   if (keyOf) {
     for (let i = 1; i < rows.length; i++) {
-      if (keyOf(rows[i - 1]) !== keyOf(rows[i])) continue;
+      // Mimir's epsilon, not exact equality: see MIMIR_EPSILON. A pair inside it is a pair
+      // Mimir itself ordered by a different key, which is exactly what a tie is here.
+      if (!near(keyOf(rows[i - 1]), keyOf(rows[i]))) continue;
       const crossesBand = bandOf(i, blockSize) !== bandOf(i + 1, blockSize);
       const tie = {
         ranks: [i, i + 1],
@@ -337,6 +380,13 @@ function buildLock(o) {
 
     standings: o.standings,
     standings_detail: o.detail,
+    // Who actually sat in a seat, where that is not who the frozen roster names (§11.6).
+    // Under final_round.substitutes = "same_registration" a substitute plays on the seat's
+    // own Pantheon registration, so none of this reaches the draw: the standings still hold
+    // one row per seat, the bands are what they would have been, and the seed bytes are
+    // unchanged. It is carried here because a record that is not published with the thing
+    // it qualifies is not a record -- this way one digest and one timestamp cover both.
+    substitutes: o.substitutes,
     standings_source: o.source,
     order_by: o.orderBy,
     order: o.order,
@@ -456,16 +506,55 @@ async function main(argv, deps = {}) {
     source = { from: 'file', path: args.standings, sha256: sha256(fs.readFileSync(args.standings)) };
   } else {
     const pantheon = deps.pantheon || createPantheon(cfg, env);
+    const asAdmin = args['as-admin'] === true;
     try {
       rows = await pantheon.getRatingTable(cfg.roster.pantheon_event_id, orderBy, order,
-        { admin: args['as-admin'] === true });
+        { admin: asAdmin });
     } catch (err) {
       bad(`could not read the standings from Mimir: ${err.message}`);
+      // Measured, not guessed: Mimir answers an order_by it does not know with a 500, the
+      // same status it gives when it is genuinely broken. "Try again later" is the wrong
+      // advice for the first and the right advice for the second, so say both.
+      note(`Mimir accepts order_by: ${Object.keys(SORTABLE).concat(Object.keys(REFUSED_BUT_VALID)).join(', ')}.`);
+      note(`This run asked for "${orderBy}". An order_by Mimir does not know comes back as a`);
+      note('500, exactly like an outage, so check the spelling before waiting on the server.');
       note('If Mimir is unreachable and the standings are settled, export them and pass');
       note('--standings <file>; the file is published inside the lock.');
       return 1;
     }
-    source = { from: 'mimir', event_id: cfg.roster.pantheon_event_id, fetched_at: new Date(now).toISOString() };
+    source = {
+      from: 'mimir',
+      event_id: cfg.roster.pantheon_event_id,
+      fetched_at: new Date(now).toISOString(),
+      // Which of Mimir's two answers this is. They are not the same table, and the lock
+      // should say which one it holds.
+      as_admin: asAdmin,
+    };
+
+    // An event with "hide results" on - normal for a tournament that does not want a live
+    // leaderboard - returns NOTHING to a caller without the admin header, because Mimir
+    // gates the whole table on `!$event->getHideResults() || $isAdmin`. Without this the
+    // failure arrived as "Pantheon returned 0 players, the frozen roster has 12", which
+    // reads like a wrong event id and sends the operator to look in the wrong place.
+    if (!rows.length && !asAdmin) {
+      bad('Mimir returned an EMPTY standings table.');
+      note('The usual cause is that this event hides its results while it is being played:');
+      note('Mimir then serves the rating table to event admins only. Re-run with --as-admin.');
+      note('');
+      note('Read the warning that prints under --as-admin before you do. That mode also');
+      note('folds in PREFINISHED games, so it can only be trusted once every session of the');
+      note('round-robin is actually finished.');
+      return 1;
+    }
+    if (asAdmin) {
+      // Said every time, because it is the one way this tool can be pointed at standings
+      // that are still moving. The games_played check below is what actually catches it:
+      // a session still in progress makes somebody's count differ from the template's.
+      warn('--as-admin: Mimir includes PREFINISHED (started but unfinished) games for an');
+      note('event admin. Standings that count an unfinished game can still change, and a');
+      note('lock is a promise that they cannot. The per-player games check below is the');
+      note('guard; do not lock while any table is still playing.');
+    }
   }
 
   const blockSize = cfg.template.n_players / cfg.template.n_tables;
@@ -479,18 +568,53 @@ async function main(argv, deps = {}) {
     tiebreakReason: typeof args['tiebreak-reason'] === 'string' ? args['tiebreak-reason'] : null,
   });
 
+  // Seats that changed hands, so the operator reads the standings knowing which name on
+  // the screen is not the person who played those games.
+  const subsBySeat = new Map();
+  for (const sub of cfg.substitutes.substitutions) {
+    if (!subsBySeat.has(sub.local_id)) subsBySeat.set(sub.local_id, []);
+    subsBySeat.get(sub.local_id).push(sub);
+  }
+
   raw(`\n  standings from ${source.from}, ordered by ${orderBy} ${order}\n\n`);
   for (const d of check.detail) {
     raw(
       `   ${String(d.rank).padStart(2)}.  table ${d.table}  ` +
       `${String(d.local_id ?? '??').padStart(2)}  ${String(d.title ?? '').padEnd(22)}` +
-      `${orderBy} ${String(d[orderBy] ?? '?').padStart(8)}   ${d.games_played} games\n`);
+      `${orderBy} ${String(d[orderBy] ?? '?').padStart(8)}   ${d.games_played} games` +
+      `${subsBySeat.has(d.local_id) ? '  <- substituted' : ''}\n`);
     if (d.rank % blockSize === 0 && d.rank < check.detail.length) raw('        —\n');
   }
   raw('\n');
   for (const t of check.ties.filter((x) => !x.crosses_band)) {
     warn(`ranks ${t.ranks.join(' and ')} are tied on ${orderBy} (${t.value}), inside one table. ` +
       'That changes nobody\'s table — only a byte of the seed, which is fixed here, before the beacon.');
+  }
+
+  // ---- who actually played (PROTOCOL.md 11.6) ---------------------------------
+  if (subsBySeat.size) {
+    if (cfg.protocol.final_round?.substitutes === 'forbidden') {
+      bad('protocol.json sets final_round.substitutes to "forbidden", yet substitutes.json');
+      note('declares some. The frozen rule wins; nothing is written.');
+      return 1;
+    }
+    raw(`\n  seats that changed hands during the round-robin\n\n`);
+    for (const [localId, subs] of [...subsBySeat.entries()].sort((a, b) => a[0] - b[0])) {
+      const rank = check.detail.find((d) => d.local_id === localId)?.rank ?? '??';
+      for (const sub of subs) {
+        raw(`   local_id ${String(localId).padStart(2)}  rank ${String(rank).padStart(2)}  ` +
+          `from round ${sub.from_round}:  ${sub.outgoing.title} -> ${sub.incoming.title}\n`);
+        raw(`                              ${sub.reason}\n`);
+      }
+    }
+    raw(`\n`);
+    // Stated outright rather than left to be inferred, because "the substitution did not
+    // affect the draw" is the whole reason this record is allowed to be written late.
+    note('These seats kept their Pantheon registration, so the standings above hold one row');
+    note('per seat and the bands are exactly what they would have been without them. None of');
+    note('it reaches the seed. It is published inside the lock, under the same digest and the');
+    note('same timestamp as the standings, so the record cannot be revised afterwards.');
+    raw(`\n`);
   }
 
   // ---- the beacon -------------------------------------------------------------
@@ -546,6 +670,7 @@ async function main(argv, deps = {}) {
     results,
     standings: check.standings,
     detail: check.detail,
+    substitutes: cfg.substitutes.substitutions,
     source,
     orderBy,
     order,
@@ -642,4 +767,5 @@ if (require.main === module) {
     .catch((err) => { bad(err.message); process.exitCode = 2; });
 }
 
-module.exports = { main, checkStandings, buildLock, bandOf, parseDuration, SORTABLE, LOCK_REL, OTS_REL };
+module.exports = { main, checkStandings, buildLock, bandOf, parseDuration, SORTABLE,
+  REFUSED_BUT_VALID, MIMIR_EPSILON, LOCK_REL, OTS_REL };

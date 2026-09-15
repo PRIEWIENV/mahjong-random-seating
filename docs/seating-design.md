@@ -311,6 +311,126 @@ Everything above is in the repository, and deliberately in two independent imple
 
 - `generate.js` computes the chart, and `node generate.js --verify results.json` recomputes it from the file's own revealed payloads and diffs it byte for byte.
 - `tools/verify_contribution.py` re-derives `R` and the seed in Python, written from this specification rather than from the JavaScript. If the encoding above were ambiguous, the two would disagree.
+- `generate-final.js` draws the twelfth round, and `node generate-final.js --verify final.json` reproduces it byte for byte from the published standings lock and the second beacon.
+- `tools/verify_final.py` is that draw's second implementation, again written from the specification. It rebuilds the counter-mode stream and its rejection sampling from scratch, because that is the one place two honest implementations quietly diverge: a version using `value % bound` reproduces most draws and not all of them.
+
+## The twelfth round
+
+After the eleven round-robin rounds, a final round is played. Its **tables are earned**: the top four of the standings sit at table one, the next four at table two, the last four at table three. Only its **winds are drawn**.
+
+That makes it a different problem from the first draw, and it needs its own argument. The first draw had 479,001,600 outcomes and the fairest thing to do with them was to pick one uniformly. Here there are 24 outcomes per table, the tables are already decided, and picking uniformly turns out to be the *worst* of the available options rather than the most even-handed. The rest of this section is why.
+
+### Why the winds are the only thing left to be fair about
+
+A seat plan can affect a player's result through exactly two channels: which winds they get, and which opponents they face. The second one is settled. Over the eleven rounds the template pushes it to the proved optimum — every pair meets three times, every pair sits opposite once, 55 of the 66 pairs are perfectly balanced — and in the twelfth round it is decided by the standings, not by any draw. So the only thing the final draw can still move is the winds.
+
+And for the winds there is an exact target, which comes from mahjong itself rather than from a model of it.
+
+At a table, the four players finish first, second, third and fourth. Raw points are zero-sum, and the uma is zero-sum too — whatever the placement bonuses are, they add to nothing. So if four players of equal strength differ only in where they sit, the four seats' expected contributions must add to exactly zero:
+
+```
+v(E) + v(S) + v(W) + v(N) = 0
+```
+
+`v(w)` is what starting in seat `w` is worth over one game. **This is an identity, not an estimate.** It holds without anyone knowing what `v(E)` actually is.
+
+Now take a player's accumulated seat handicap over the whole tournament, `H = Σ n_w · v(w)`, where `n_w` is how many times they started in wind `w`:
+
+- **3-3-3-3** gives `H = 3·(v(E) + v(S) + v(W) + v(N)) = 3 × 0 = 0`. Exactly zero, whatever the values of `v` are. Such a player carries no systematic seat advantage or disadvantage into the final standings at all.
+- **4-3-3-2** — one extra `a`, one missing `b` — gives `H = v(a) − v(b)`. Small, but non-zero, and *systematic*: it does not average out with more games, because it is not noise. It is a constant tilt.
+
+After eleven rounds **every** player is on 3-3-3-2 (condition 3, which the template satisfies exactly). So every one of the twelve is carrying `H₁₁ = −v(x)`, where `x` is the wind they are short of. The twelfth round is the only remaining chance to cancel it.
+
+This is why "everybody gets three of each wind" is not an aesthetic preference. It is the point at which a player's seat handicap is provably zero.
+
+### What the draw is choosing between
+
+The eleven-round template gives each of its twelve positions a 3-3-3-2 wind split, so each position is short of exactly one wind. Computed from the template itself, those twelve deficits are:
+
+| Position | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Short of | N | W | N | W | W | S | N | E | E | S | S | E |
+
+Three positions short of each wind — which is the best the template could have done, and is checked rather than assumed every time the final round is drawn.
+
+At one table of four, a seating is a bijection from the four players (in rank order) to the four winds, so there are 24 of them. Write each as the seat index given to the 1st, 2nd, 3rd and 4th-placed player of that table, with seats indexed `0=E, 1=S, 2=W, 3=N`, and enumerate them in lexicographic order:
+
+```
+ 0: 0123   1: 0132   2: 0213   3: 0231   4: 0312   5: 0321
+ 6: 1023   7: 1032   8: 1203   9: 1230  10: 1302  11: 1320
+12: 2013  13: 2031  14: 2103  15: 2130  16: 2301  17: 2310
+18: 3012  19: 3021  20: 3102  21: 3120  22: 3201  23: 3210
+```
+
+That order is part of the result, not a presentation detail: the published draw records an *index* into the optimal ones, so a second implementation that enumerated differently would agree on the seed and disagree on the seats — the worst kind of disagreement, because nothing fails.
+
+Two facts about one table, both checkable by hand over all 256 possible tables:
+
+- The most players that can be completed is the number of **distinct** winds the four are short of. Give one representative of each distinct wind the wind they need; whoever is left takes a seat nobody wanted.
+- If `m` players at a table are short of the **same** wind, only one of them can have it. Under a draw that is uniform among the best seatings, each of those `m` has probability `1/m` of finishing on 3-3-3-3, and the others do not.
+
+That `1/m` is the cost of this design, and it is shown to each player on the result page rather than left to be inferred.
+
+### Maximising completion and equalising the odds are incompatible
+
+The obvious alternative is to draw all 24 seatings uniformly. It is perfectly even-handed, and it achieves nothing:
+
+```
+E[players completed] = Σ over players of P(that player gets the wind they are short of)
+```
+
+If every player's wind is uniform, every term is 1/4 and the sum is exactly 12 × 1/4 = **3**. So *any* design that completes more than three players on average must give some players a better than 1-in-4 chance at some wind — which means the probabilities depend on the standings, which is exactly the lever that a uniform draw does not have. **The two properties cannot both be had.** This is not an artefact of the implementation; it follows from the identity above.
+
+Four designs on that frontier, all computed exhaustively over the 34,650 ways the twelve deficits can fall into three tables of four:
+
+| Design | E[completed] | P(East), across players | Residual seat bias |
+|---|---|---|---|
+| **A — best seatings, then uniform among them** | **8.95** | 0.085–0.745 | **0.339** |
+| C — draw East first, then optimise the rest | 6.31 | flat 0.250 | depends on `v` |
+| D — draw East and North first, then optimise | 4.23 | flat 0.250 | depends on `v` |
+| B — uniform over all 24 | 3.00 | flat 0.250 | **1.000** |
+
+C and D buy the lever back by spending completions on it: fixing East uniformly means nobody's chance of dealing first can depend on the standings, and D does the same for North. Their residual bias has no single value, because the four deficiency classes fare differently under them and the comparison then turns on what `v` actually is. A and B are the two ends where it does not.
+
+**Design A is the one in use.** The last column is what the argument above turns the first column into. Under A, a player short of wind `x` gets `x` with probability `P = 0.7455` and each of the other three winds with probability `0.0848` — exactly symmetric across all four deficiency classes, which is asserted in the tests rather than assumed. From that:
+
+```
+E[H₁₂] / H₁₁ = (4/3)·(1 − P)
+```
+
+which is `0.339` for design A and exactly `1.000` for a uniform draw. Read plainly: **design A leaves each player with 34% of the systematic seat bias the round-robin gave them; drawing uniformly leaves 100% of it, untouched.** `E[completed] = 8.95` is not a beauty contest score. It is literally the number of players who walk into the final standings carrying a provably zero seat handicap.
+
+And the uma makes this argument stronger, not weaker. Placement bonuses convert a small points edge into a placement-probability edge, and a placement is a large fixed jump. Measured in the currency that decides the final standings, `v(E) − v(N)` is *bigger* with uma than without. The bias design A corrects matters more under uma, not less.
+
+The full distribution, over all 34,650 cases:
+
+| Players completed | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|
+| Cases | 792 | 1,944 | 11,178 | 7,776 | 11,664 | 0 | 1,296 |
+| Share | 2.29% | 5.61% | 32.26% | 22.44% | 33.66% | **0%** | 3.74% |
+
+The mean is exactly 309,960 / 34,650 = 4428/495 ≈ 8.9455.
+
+**Exactly eleven is impossible**, and the reason is short enough to check here. A table completes everyone precisely when its four deficits are all different, so exactly one player left short would mean one table with three distinct deficits and two with four. But two tables of four distinct winds use up one of each wind twice over, and the twelve deficits are three of each — so the four left for the third table are exactly one of each, which is four distinct winds, not three. The case cannot arise.
+
+So the first question anyone asks — *is there always an arrangement that puts everyone on 3-3-3-3, whatever the standings?* — has the answer **no**. The best any design can do is what the table above shows, and 3.74% of the time the standings happen to allow all twelve anyway.
+
+### What this costs, stated rather than buried
+
+Three consequences follow, and none of them is hidden:
+
+**There is a lever, and it is small and measurable.** Because the eleven-round permutation is public from the first draw, every player knows from day one who else is short of the same wind. A player short of East does better if the other two East-deficient players end up in *different* rank bands (`P` rises from 0.745 to 1.000); a player short of North does better beside them (`P` falls to 0.333). Only the band matters — 1-4, 5-8, 9-12 — never the rank within it. A perfect manipulation moves `E[H₁₂]` from `−0.34·v(x)` to `0`, so **the entire prize is 0.34 × what one seat is worth in one game**, and the price is moving a rank band: three different opponents in a zero-sum final, and a different finishing position. It is a bad trade — but now it is a bad trade with a number attached, rather than an assurance that it probably is not worth it.
+
+**Sometimes the beacon decides nothing.** When all three tables happen to hold four distinct deficits, each table has exactly one optimal seating and the entire final round is settled before the signature exists. That is the 3.74% column above. The draw still runs, still publishes, and still verifies — it simply had no choice to make.
+
+**The 8.95 and the 3.74% assume the standings are independent of the template positions.** The permutation is drawn uniformly, but a template position affects the schedule, which affects results. So these are figures under a stated model, not theorems. The `1/m`, the zero-sum identity and the impossibility of exactly eleven are not modelled; they hold outright.
+
+Two limits on the zero-sum argument itself, for completeness:
+
+1. `v` is independent of the table only when the four players are of comparable strength. A final-round table is by construction *not* four random players — table one is the top four. So the correction is right in direction but not exactly value-neutral. Doing better would require modelling how strong each player is, which is the last thing that should ever enter a seating draw.
+2. `H = 0` is an expectation. Over twelve games the variance is far larger than `v`. The claim is about systematic tilt, not about who wins.
+
+One last thing worth saying plainly, because it is easy to misread: the final round's tables come from the standings after **eleven** rounds. If all twelve games carry equal weight, the standings after twelve may differ — the four players at table one are not necessarily the final top four. That is normal for this format, and it is the intended behaviour, not a defect.
 
 ## Appendix: the template
 

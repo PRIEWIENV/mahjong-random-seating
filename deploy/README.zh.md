@@ -308,6 +308,52 @@ python3 tools/verify_template.py data/schedule_template.json
 > [!NOTE]
 > 第三行取的是开奖通过镜像（§6）发布出去的文件。镜像关着的话，`results.json` 和 `events/` 只存在于服务器上，谁也核验不了——这正是 `/admin` 拒绝把这样的部署称为「就绪」的原因。
 
+### 13a. 决赛轮
+
+仅当这场赛事有决赛轮时——`protocol.json` 里带 `final_round` 块（PROTOCOL.zh.md §11）。它发生在
+§12 的好几周之后，等十一轮全部打完并录进 Pantheon，并且在 §14 **之前**：只要锁定文件存在而
+旁边没有结果，关闭赛事就会被拒绝。
+
+两条命令都在服务器上跑，就是跑开奖的那台机器。镜像 token 和捕获到的 Pantheon 管理员凭据本来
+就在那里。
+
+**锁定名次和信标。** 先干跑；它会拉取、校验、打印，什么也不写：
+
+```sh
+node tools/lock-final.js
+node tools/lock-final.js --in 45m --confirm
+```
+
+确认之前先读干跑打印的内容：十二个人、每人十一场、它本地重排出来的顺序和 Mimir 返回的一致。
+如果两者不一致，说明排序 key 没有被采纳，工具什么也不写——把 `runtime.json` 里的
+`pantheon.rating_order_by` 改成 Mimir 确实接受的列，然后重跑。
+
+`--in 45m` 是一个合理的默认值。这段时间要够镜像锁定文件、盖上时间戳、让十二个人核对摘要，
+而且绝不能短于一次 OpenTimestamps 往返——在信标之后打的锚点，证明不了任何关于信标之前的事。
+少于一分钟工具会直接拒绝。
+
+**然后把它打印的摘要通告出去**，连同 drand 轮次和预计出块时间。这就是全部证据：名次在给它们
+排座位的那份随机性存在之前就已固定，而十二个人手里握着同一串短字符串，正是这件事可被核验的
+原因。那一轮落地之后，同一串摘要就什么也证明不了了。
+
+**开抽**，等那一轮落地之后：
+
+```sh
+node tools/draw-final.js --dry-run
+node tools/draw-final.js
+```
+
+它会等信标、公布 `final.json`，并把全部十二块 prescript 连同 `next_session_index = 12` 写进
+Pantheon。跑两次不会抽两次：已经存在的 `final.json` 只会被重新核验、重新公布，绝不重算。
+
+如果同步失败，手工把 `pantheon_prescript` 的**全部十二块**粘贴进去，`next_session_index = 12`，
+`WIND_SHUFFLE_MODE_PRESCRIPTED`。绝不重跑抽签。
+
+> [!WARNING]
+> 如果锁定文件公布之后发现名次需要更正，`--relock --reason "…"` 可以替换它——但只能在信标
+> 落地之前，而且被取代的那一份会被保留，和新的一起公布。一旦 `final.json` 存在，就既不能
+> 重新锁定，也不能重抽。
+
 ### 14. 收尾
 
 在下一次冻结**之前**，不是之后：

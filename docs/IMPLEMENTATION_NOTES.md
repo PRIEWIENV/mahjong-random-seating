@@ -1795,6 +1795,50 @@ this is the one file in the tree that must never be archived or mirrored anywher
 rule runs the other way round. Everything else is deleted because the archive safely
 holds it; this is deleted precisely because the archive does not and must not.
 
+## 6ac. A round that is not drawn, and three things it broke
+
+The twelfth round's tables come from the standings, not from a draw, and that one
+difference reached further into the tree than the feature itself did.
+
+**Three sentences on the result page stopped being true.** The per-player panel said
+"everybody's winds fall in this same split", and after twelve rounds they do not: some
+players finish 3-3-3-3 and the rest 4-3-3-2. It also stated 4-4-3 and "11 of the 66
+pairs" without qualification, and those are properties of the eleven-round template that
+`tools/verify_template.py` proves — a page that went on asserting them about twelve
+rounds would have contradicted the verifier it invites players to run. Nothing about any
+of this looks broken, which is why the fix is a source invariant in
+`test/final-client.test.js` rather than a careful reading.
+
+**The statistics needed two scopes, not one.** Winds and tables are counted over every
+round played, because the twelfth round exists to correct the wind count. Pair figures
+are counted over the template rounds only, for the reason above. `computeStats` takes
+`extraRounds` and keeps them apart; with `extraRounds = []` every key holds exactly the
+value it held before the final round existed, so no existing assertion had to move.
+
+**`phase` had to stay `done`.** The obvious modelling is a fourth phase, and it is
+wrong. Everything that branches on `phase` — the submission gate, the finalisation job's
+refusals, `resetForNewRound`, `endEvent` — is about the first draw and has to go on
+answering exactly as it did; a fourth phase would have made each of them learn a new word
+for a state that changes nothing they do, and the one that forgot would have been the one
+that let submissions reopen. The final round is a *state* on `/api/status`, not a phase.
+
+Three defects fell out of the same reading, before any of them could happen:
+
+- `tools/end-event.js` would have deleted the published, timestamped standings lock. In
+  that window `results.json` exists and the phase is `done`, so every existing safeguard
+  passes and the routine close looks correct. From outside, deleting a commitment before
+  it is kept is indistinguishable from withdrawing it. It now refuses, and `--abandon`
+  records that giving up on the final round was a decision somebody took.
+- `server/stats.js` set `points` from every round. Folded into one loop, a final-round
+  seat — which carries `rank` and no template `point` — would have overwritten every
+  player's `point` with `undefined`, which JSON then drops. Nothing throws; the explorer
+  quietly loses a column.
+- `client/app.jsx` fetched the result once and never again, guarded only by `!result`.
+  Since `phase` is `done` from the first draw onwards, a page left open between the lock
+  and the draw would have gone on showing a result from before the final round existed —
+  telling the player the draw was complete while the round they were about to sit down
+  for was missing from it.
+
 ## 10. What was verified, and how
 
 | Check | Status |

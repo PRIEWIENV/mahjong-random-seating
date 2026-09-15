@@ -169,6 +169,30 @@ function validateFinalRound(p) {
       'into tables of four. Rank blocks need a whole number of tables.'
     );
   }
+  // Who may sit in a seat that its original occupant has vacated. A rule, so it is frozen
+  // with everything else: a league that decides how substitutes are handled AFTER somebody
+  // has dropped out is deciding it with the standings in view.
+  //
+  // Only one policy is offered, and the reason is worth stating. A seat in this event is a
+  // local_id, not a person: the schedule template, the deficient wind, the opponents and
+  // the prescript are all written in local ids, and Mimir resolves a local id to whoever
+  // holds it. Under `same_registration` the substitute plays on the seat's existing
+  // Pantheon registration, so Mimir still reports twelve players with eleven games each
+  // and NOTHING about the draw changes. The alternatives — registering the substitute as a
+  // thirteenth person and then either combining the two rows or ranking the seat by one of
+  // them — all require the tool to invent an arithmetic for merging two partial records,
+  // and that arithmetic would decide a table. This one does not, which is also why a
+  // substitution may be declared late without becoming a lever: it is a record, not an
+  // input. docs/PROTOCOL.md §11.6.
+  const SUB_POLICIES = ['same_registration', 'forbidden'];
+  if (f.substitutes !== undefined && !SUB_POLICIES.includes(f.substitutes)) {
+    throw new Error(
+      `protocol.json: final_round.substitutes must be one of ${SUB_POLICIES.map((x) => JSON.stringify(x)).join(', ')}, ` +
+      `got ${JSON.stringify(f.substitutes)}. "same_registration" means a substitute plays on the seat's ` +
+      'existing Pantheon registration, so the standings still hold one row per seat; "forbidden" means a ' +
+      'seat that loses its player has no final round. Both are league rules and must be fixed in advance.'
+    );
+  }
   if (typeof p.generate_final_script_ref !== 'string' || p.generate_final_script_ref.trim() === '') {
     throw new Error(
       'protocol.json: final_round is enabled but generate_final_script_ref is missing. The final draw ' +
@@ -336,6 +360,119 @@ function validateTemplate(t, totalSlots) {
  * no freeze in it got the one paragraph telling them to check out the tag delivered in
  * the middle of a ten-frame stack trace.
  */
+/**
+ * data/substitutes.json — who actually sat in a seat, when it changed hands (§11.6).
+ *
+ * NOT frozen, and it cannot be: a player drops out weeks after the tag is made. It is
+ * safe for it to be unfrozen because under `same_registration` nothing in it reaches the
+ * draw. The seat is a local_id; the local_id's Pantheon registration does not change; the
+ * standings, the bands, the seed and the prescript are all exactly what they would have
+ * been. This file is the honest record that the name on the seat is not the person who
+ * played it — a transparency obligation, not an input.
+ *
+ * It is still published and still covered by the lock's digest and its timestamp, because
+ * a record nobody can check later is not a record.
+ *
+ * @param {object|null} raw      parsed data/substitutes.json, or null when absent
+ * @param {object|null} roster   the frozen roster, for cross-checking
+ * @param {object} protocol
+ * @returns {{substitutions: Array}}
+ */
+function validateSubstitutes(raw, roster, protocol) {
+  if (raw === null || raw === undefined) return { substitutions: [] };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('substitutes.json: must be an object with a "substitutions" array');
+  }
+  const list = raw.substitutions;
+  if (list === undefined) return { substitutions: [] };
+  if (!Array.isArray(list)) throw new Error('substitutes.json: "substitutions" must be an array');
+
+  const policy = protocol.final_round?.substitutes ?? 'same_registration';
+  if (list.length && policy === 'forbidden') {
+    throw new Error(
+      `substitutes.json declares ${list.length} substitution(s), but protocol.json says ` +
+      'final_round.substitutes is "forbidden". One of the two is wrong, and the frozen one wins: ' +
+      'if the league does allow substitutes, that had to be decided before the tournament started.'
+    );
+  }
+
+  const byLocalId = new Map((roster?.players || []).map((p) => [p.local_id, p]));
+  const rounds = protocol.total_slots - 1; // a round-robin of n players is n-1 rounds
+  const seen = new Set();
+  const out = [];
+
+  for (const [i, sub] of list.entries()) {
+    const where = `substitutes.json: substitutions[${i}]`;
+    if (typeof sub !== 'object' || sub === null || Array.isArray(sub)) {
+      throw new Error(`${where} must be an object`);
+    }
+    if (!Number.isInteger(sub.local_id)) throw new Error(`${where}.local_id must be an integer`);
+    const seat = byLocalId.get(sub.local_id);
+    if (roster && !seat) {
+      throw new Error(`${where}.local_id ${sub.local_id} is not a seat in the frozen roster`);
+    }
+    if (!Number.isInteger(sub.from_round) || sub.from_round < 1 || sub.from_round > rounds) {
+      throw new Error(
+        `${where}.from_round must be an integer in 1..${rounds} — the round from which the ` +
+        'substitute played, so that the record says which games belong to whom'
+      );
+    }
+    // Under same_registration the Pantheon account does NOT change hands. If it did, the
+    // standings would carry two partial rows for one seat and every count in
+    // tools/lock-final.js would be wrong — silently, because both rows look ordinary.
+    // Checking it here turns that into a refusal at the moment the file is written.
+    const outgoing = sub.outgoing;
+    if (typeof outgoing !== 'object' || outgoing === null) {
+      throw new Error(`${where}.outgoing must name the player who left: { person_id, title }`);
+    }
+    if (roster && outgoing.person_id !== seat.person_id) {
+      throw new Error(
+        `${where}.outgoing.person_id is ${outgoing.person_id}, but the frozen roster has ` +
+        `${seat.person_id} at local_id ${sub.local_id}. Under "same_registration" the seat keeps its ` +
+        'Pantheon registration, so these must agree. If the registration really was reassigned in ' +
+        'Pantheon, the standings now hold two partial rows for one seat and the final round cannot ' +
+        'be locked from them — put the registration back before locking.'
+      );
+    }
+    const incoming = sub.incoming;
+    if (typeof incoming !== 'object' || incoming === null
+        || typeof incoming.title !== 'string' || incoming.title.trim() === '') {
+      throw new Error(`${where}.incoming.title must name the person who actually played`);
+    }
+    if (incoming.person_id !== undefined && !Number.isInteger(incoming.person_id)) {
+      throw new Error(`${where}.incoming.person_id must be an integer when given, or absent`);
+    }
+    if (typeof sub.reason !== 'string' || sub.reason.trim() === '') {
+      throw new Error(
+        `${where}.reason must say why, naming the league rule that allows it. A substitution ` +
+        'with no stated rule behind it is the thing this file exists to make impossible.'
+      );
+    }
+    if (typeof sub.declared_at !== 'string' || Number.isNaN(Date.parse(sub.declared_at))) {
+      throw new Error(`${where}.declared_at must be an ISO 8601 timestamp`);
+    }
+    const key = `${sub.local_id}@${sub.from_round}`;
+    if (seen.has(key)) {
+      throw new Error(`${where} repeats local_id ${sub.local_id} from round ${sub.from_round}`);
+    }
+    seen.add(key);
+    out.push({
+      local_id: sub.local_id,
+      from_round: sub.from_round,
+      outgoing: { person_id: outgoing.person_id ?? null, title: outgoing.title ?? null },
+      // Recorded so the field knows who played; deliberately NOT used anywhere, because
+      // the games were recorded against the seat's own registration.
+      incoming: { person_id: incoming.person_id ?? null, title: incoming.title.trim() },
+      reason: sub.reason.trim(),
+      declared_at: sub.declared_at,
+    });
+  }
+  // A seat can change hands more than once; reading them in order is the only way the
+  // record makes sense, so store them that way rather than trusting the file's order.
+  out.sort((a, b) => (a.local_id - b.local_id) || (a.from_round - b.from_round));
+  return { substitutions: out };
+}
+
 function load(opts = {}) {
   try {
     return loadFrozen(opts);
@@ -368,6 +505,11 @@ function loadFrozen(opts) {
   }
   const template = validateTemplate(readJson(path.join(dataDir, 'schedule_template.json')), protocol.total_slots);
 
+  // Optional and usually absent: most events run without anybody dropping out.
+  const subsPath = path.join(dataDir, 'substitutes.json');
+  const substitutes = validateSubstitutes(
+    fs.existsSync(subsPath) ? readJson(subsPath) : null, roster, protocol);
+
   const byPersonId = new Map((roster?.players || []).map((p) => [p.person_id, p]));
   const byLocalId = new Map((roster?.players || []).map((p) => [p.local_id, p]));
 
@@ -382,6 +524,8 @@ function loadFrozen(opts) {
     template,
     byPersonId,
     byLocalId,
+    // Always an object with an array, so callers never branch on "was there a file".
+    substitutes,
     // Required and validated above, so no fallback here: an absent value is a startup
     // failure, not a silent 255 that may disagree with what the tag actually says.
     userInputMax: protocol.user_input_max,
@@ -421,4 +565,4 @@ function loadEnvFile(root = ROOT, log = console) {
   }
 }
 
-module.exports = { MIN_REVEAL_GAP_SECONDS, load, readJson, loadEnvFile, ROOT, ENCODING_LIMITS };
+module.exports = { MIN_REVEAL_GAP_SECONDS, load, readJson, loadEnvFile, validateSubstitutes, ROOT, ENCODING_LIMITS };

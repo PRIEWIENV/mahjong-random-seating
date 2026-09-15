@@ -230,9 +230,59 @@ test('an order Mimir did not actually apply is caught by recomputing it', async 
   c.pantheon.setStandings(shuffled);
   const { code, out } = await runLock(c, ['--in', '45m', '--confirm']);
   assert.equal(code, 1);
-  assert.match(out, /Mimir's order is not the order "rating" desc produces/);
+  assert.match(out, /Mimir's order does not run desc by "rating"/);
+  // It must say WHICH pair is out of order. "the ranking is something else" with no
+  // offender named leaves an operator diffing two lists of twelve names by eye.
+  assert.match(out, /sits above/);
   assert.equal(fs.existsSync(lockFile(c)), false);
   cleanup(c.fx.dir);
+});
+
+test("Mimir's own epsilon decides what counts as a tie, not exact equality", async () => {
+  // Measured against a live instance: Mimir compares float keys with abs(a-b) < 0.0001 and
+  // orders any pair inside that by a SECOND key. Exact equality got both halves wrong at
+  // once -- such a pair was not reported as a tie, AND the order check called Mimir's
+  // perfectly good answer a violation. A pair 0.00005 apart straddling the 4|5 boundary is
+  // the case that matters: it decides a table.
+  const c = played();
+  const near = rows(c.cfg, RANKED);
+  near[4].rating = near[3].rating - 0.00005;   // ranks 4 and 5: a tie to Mimir
+  c.pantheon.setStandings(near);
+  const { code, out } = await runLock(c, ['--in', '45m', '--confirm']);
+  assert.equal(code, 1, 'a tie across the band boundary must still be refused');
+  assert.doesNotMatch(out, /order_by was not applied/,
+    'a pair inside the epsilon is not an ordering violation');
+  assert.match(out, /decides whether they sit at table 1 or 2/);
+  assert.equal(fs.existsSync(lockFile(c)), false);
+  cleanup(c.fx.dir);
+});
+
+test('a near-tie inside one table is recorded and does not block the lock', async () => {
+  const c = played();
+  const near = rows(c.cfg, RANKED);
+  near[2].rating = near[1].rating - 0.00005;   // ranks 2 and 3: same table either way
+  c.pantheon.setStandings(near);
+  const { code, out } = await runLock(c, ['--in', '45m', '--confirm']);
+  assert.equal(code, 0, out);
+  assert.match(out, /inside one table/);
+  const lock = JSON.parse(fs.readFileSync(lockFile(c), 'utf8'));
+  assert.equal(lock.ties.length, 1, 'the tie belongs in the published lock');
+  assert.equal(lock.ties[0].crosses_band, false);
+  cleanup(c.fx.dir);
+});
+
+test('order_by keys Mimir accepts but this tool will not are refused by name', async () => {
+  // Both are real Mimir keys (verified live). Refusing them silently as "unknown" would
+  // send an operator to check their spelling against a list they had spelled correctly.
+  for (const [key, why] of [['name', /alphabetically/], ['games_and_rating', /games played first/]]) {
+    const c = played();
+    scripted(c, RANKED);
+    const { code, out } = await runLock(c, ['--in', '45m', '--order-by', key, '--confirm']);
+    assert.equal(code, 1);
+    assert.match(out, /Mimir does accept/);
+    assert.match(out, why);
+    cleanup(c.fx.dir);
+  }
 });
 
 test('an order this tool cannot recompute is refused rather than trusted', async () => {
@@ -696,5 +746,96 @@ test('the Python implementation notices a seat that was moved after the draw', a
     failed = err.message;
   }
   assert.match(failed, /FAIL\s+the recomputed seat plan differs from the published one/);
+  cleanup(c.fx.dir);
+});
+
+// ---------------------------------------------------------------------------
+// substitutes (PROTOCOL.md 11.6)
+// ---------------------------------------------------------------------------
+
+/** Declare a substitution in the fixture, the way an organiser would write the file. */
+function declareSub(c, over = {}) {
+  const seat = c.cfg.roster.players.find((p) => p.local_id === (over.local_id ?? 7));
+  const body = {
+    substitutions: [{
+      local_id: seat.local_id,
+      from_round: 8,
+      outgoing: { person_id: seat.person_id, title: seat.title },
+      incoming: { person_id: 90001, title: 'Substitute Song' },
+      reason: 'league rule 9c: withdrawal through injury, seat filled from the reserve list',
+      declared_at: '2026-09-10T09:00:00Z',
+      ...over,
+    }],
+  };
+  fs.writeFileSync(path.join(c.fx.dataDir, 'substitutes.json'), JSON.stringify(body, null, 2));
+  // The tool reads config at call time, so reload to pick the file up.
+  const fresh = load({ dataDir: c.fx.dataDir });
+  fresh.root = c.fx.dir;
+  c.cfg = fresh;
+  return body.substitutions[0];
+}
+
+test('a substitution is published inside the lock, under its digest and its timestamp', async () => {
+  const c = played();
+  scripted(c, RANKED);
+  const sub = declareSub(c);
+  const { code, out } = await runLock(c, ['--in', '45m', '--confirm']);
+  assert.equal(code, 0, out);
+
+  const lock = JSON.parse(fs.readFileSync(lockFile(c), 'utf8'));
+  assert.equal(lock.substitutes.length, 1);
+  assert.equal(lock.substitutes[0].local_id, sub.local_id);
+  assert.equal(lock.substitutes[0].incoming.title, 'Substitute Song');
+  assert.match(lock.substitutes[0].reason, /league rule 9c/);
+  // The operator has to SEE it before confirming, or publishing it is a formality.
+  assert.match(out, /seats that changed hands/);
+  assert.match(out, /Substitute Song/);
+  cleanup(c.fx.dir);
+});
+
+test('a substitution changes nothing about the draw', async () => {
+  // This is the property that lets the record be written late without becoming a lever.
+  // The seat keeps its Pantheon registration, so the standings, the bands and every byte
+  // of the seed are what they would have been. Compared by drawing both and diffing.
+  const plain = played();
+  scripted(plain, RANKED);
+  assert.equal(await runLock(plain, ['--in', '45m', '--confirm']).then((r) => r.code), 0);
+  const plainLock = JSON.parse(fs.readFileSync(lockFile(plain), 'utf8'));
+
+  const withSub = played();
+  scripted(withSub, RANKED);
+  declareSub(withSub);
+  assert.equal(await runLock(withSub, ['--in', '45m', '--confirm']).then((r) => r.code), 0);
+  const subLock = JSON.parse(fs.readFileSync(lockFile(withSub), 'utf8'));
+
+  assert.deepEqual(subLock.standings, plainLock.standings, 'the bands must be identical');
+  assert.deepEqual(subLock.standings_detail.map((d) => d.table),
+    plainLock.standings_detail.map((d) => d.table));
+  cleanup(plain.fx.dir);
+  cleanup(withSub.fx.dir);
+});
+
+test('a substitution that moved the Pantheon registration is refused', async () => {
+  // Under "same_registration" the account does not change hands. If it did, the standings
+  // would carry two partial rows for one seat and every count would be wrong -- silently,
+  // because both rows look like ordinary rows.
+  const c = played();
+  assert.throws(
+    () => declareSub(c, { outgoing: { person_id: 424242, title: 'somebody else' } }),
+    /the frozen roster has .* at local_id/);
+  cleanup(c.fx.dir);
+});
+
+test('a substitution with no league rule behind it is refused', async () => {
+  const c = played();
+  assert.throws(() => declareSub(c, { reason: '   ' }), /must say why, naming the league rule/);
+  cleanup(c.fx.dir);
+});
+
+test('substitutes.json is refused outright when the frozen protocol forbids them', async () => {
+  const c = played({ protocol: { final_round: { enabled: true,
+    table_assignment: 'rank_blocks', wind_draw: 'max_completion_then_uniform',
+    substitutes: 'forbidden' } } });
+  assert.throws(() => declareSub(c), /frozen one wins/);
   cleanup(c.fx.dir);
 });

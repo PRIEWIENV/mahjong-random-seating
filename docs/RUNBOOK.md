@@ -44,6 +44,29 @@ marked 🔒 enter the frozen state: after them nothing frozen may change.
 
 - [ ] `node tools/end-event.js --dry-run`, then `node tools/end-event.js` — **before** the next freeze — [guide §14](../deploy/README.md#14-close-the-event)
 
+## F. The final round
+
+Only for an event whose `protocol.json` has a `final_round` block (PROTOCOL.md §11). Weeks after section E would otherwise have run — so **do not close the event first**; `end-event.js` refuses once a lock exists anyway.
+
+The whole of this section is one rule: the standings and the beacon are published together, before that beacon exists. Everything else follows.
+
+**If somebody drops out part-way through**, before step 17 and at the time it happens, not at the lock:
+
+- The substitute plays on that seat's **existing Pantheon registration** — do not register them as a thirteenth person. The seat is a `local_id`; keeping it intact is what makes the standings come out as twelve rows of eleven games, and the draw is then exactly what it would have been.
+- Write `data/substitutes.json` (copy `data/substitutes.example.json`): the seat, the round the substitute came in, who left, who took over, and **the league rule that allows it**. It will not load without the reason.
+- Nothing else to do. `lock-final.js` shows it, checks it against the frozen roster, and copies it into the lock so it falls under the same fingerprint and timestamp as the standings. PROTOCOL.md §11.6 says why this record can be written late without becoming a lever.
+
+17. [ ] All eleven rounds played and entered in Pantheon. `node tools/lock-final.js` — a dry run, it writes nothing — and read what it prints: twelve players, eleven games each, and the order it recomputed matching the one Mimir gave
+17a. [ ] If the dry run says the standings are **empty**, the event is hiding its results while it is played. Re-run with `--as-admin` — and read the warning it then prints: that mode also counts games that are *started but unfinished*, so nothing may still be at a table
+
+18. [ ] `node tools/lock-final.js --in 45m --confirm`. It writes `events/final/lock.json`, mirrors it, and timestamps it. **Announce the sha256 it prints to all twelve now**, along with the drand round and the time it is due — after that round lands, the digest proves nothing
+19. [ ] Once the round has landed: `node tools/draw-final.js --dry-run`, then `node tools/draw-final.js`. It waits for the beacon, publishes `final.json`, and writes all twelve prescript blocks to Pantheon
+20. [ ] `events/final/sync.json` says ok. If not, paste **all twelve** blocks of `pantheon_prescript` in by hand with `next_session_index = 12` and `WIND_SHUFFLE_MODE_PRESCRIPTED` — never re-run the draw
+
+Two things worth knowing before you are asked:
+
+- The tables come from the standings after **eleven** rounds. If all twelve games weigh the same, the final standings may differ — the four at table one are not necessarily the final top four. That is the format, not a fault.
+- Some players finish 4-3-3-2 rather than 3-3-3-3, and the result page tells each of them the odds they actually had (1 in *m*, where *m* is how many at their table needed the same wind). Roughly nine of the twelve complete on average; all twelve only about 3.7% of the time. [seating-design.md](seating-design.md) has the argument in full.
 ## When things go wrong
 
 | Symptom | Do | Guide |
@@ -54,5 +77,7 @@ marked 🔒 enter the frozen state: after them nothing frozen may change.
 | Pantheon moved | Same: `runtime.json`, restart | [§15](../deploy/README.md#15-when-something-goes-wrong) |
 | The sync failed | Paste the prescript by hand. Do not re-run the draw | [§12](../deploy/README.md#12-the-draw) |
 | The server died mid-draw, or `var/` is gone | Start it again. It finishes what was left and never re-draws | [§15](../deploy/README.md#15-when-something-goes-wrong) |
+| The standings tool refuses: "not the order rating desc produces" | Mimir did not apply `order_by`. Set `pantheon.rating_order_by` in `runtime.json` to a column it does accept; nothing is written until the two orders agree | [PROTOCOL §11.5](PROTOCOL.md) |
+| Two players are tied across the 4\|5 or 8\|9 boundary | Settle it by the league's own rule, fix the standings in Pantheon, then record the rule: `--tiebreak 4 --tiebreak-reason "…"`. The tool never breaks a tie itself | [PROTOCOL §11.5](PROTOCOL.md) |
 | A player cannot sign in | `node tools/check-signin.js --email <theirs>` says which step failed | [§9](../deploy/README.md#9-check-before-you-announce) |
 | Nothing is drawing | The `/admin` row **The draw job has run** says whether the timer is alive | [§15](../deploy/README.md#15-when-something-goes-wrong) |

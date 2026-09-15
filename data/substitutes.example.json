@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Who actually sat in a seat, when it changed hands mid-tournament (PROTOCOL.md §11.6).",
+    "Copy to substitutes.json only if it happens; most events never need this file.",
+    "",
+    "A seat in this event is a local_id, not a person. The template position, the deficient",
+    "wind, the opponents and the Pantheon prescript are all written in local ids. Under the",
+    "frozen policy final_round.substitutes = \"same_registration\", the substitute plays on",
+    "the seat's existing Pantheon registration, so Mimir still reports one row per seat with",
+    "a full eleven games and NOTHING about the final draw changes.",
+    "",
+    "That is why this file is not frozen and may be written late: it cannot move a table.",
+    "It is the honest record that the name on the seat is not the person who played it.",
+    "tools/lock-final.js copies it into events/final/lock.json, so it is covered by the same",
+    "digest and the same timestamp as the standings."
+  ],
+  "substitutions": [
+    {
+      "local_id": 7,
+      "from_round": 8,
+      "outgoing": { "person_id": 1042, "title": "张伟" },
+      "incoming": { "person_id": 1099, "title": "李强" },
+      "reason": "联赛规则 9c：伤病退赛，由候补名单首位递补，成绩计入原席位",
+      "declared_at": "2026-10-04T11:20:00Z"
+    }
+  ]
+}

@@ -148,6 +148,20 @@ The fingerprint copies as the sixteen characters on the screen, not as the full 
 
 Call the file what it is — the ciphertexts people submitted — not "the roll". `snapshot.json` is its name on disk and in the archive; that name does not have to be the words a player reads.
 
+
+### The final round
+
+An event with a twelfth round (PROTOCOL.md §11) puts three things on the result stage, and the first of them appears **weeks before** the round is drawn.
+
+**The lock card**, a sibling of the evidence card and deliberately its twin, class for class. Both make the same ask — here is a short string, compare it with the other eleven while nobody can yet know what it opens — and two cards that looked like different mechanisms would teach the reader that they are. It shows the lock's fingerprint, the drand round that will draw the winds and when it is due, and **the three tables**, which are already decided because the standings decided them. What nobody knows yet is who sits East. The ask to compare fingerprints is shown only while the round is locked and undrawn: afterwards the same digest is a number the organiser is reading out.
+
+**The headline moves.** Round 1 while that is the next thing to walk to; the final round once it exists. A page that still announced round 1 weeks later would have exactly one sentence on it, the largest one, that is about the past.
+
+**A second verification block**, beside the first rather than merged into it. There are now two draws to check, they are checked the same way, and both name a second implementation.
+
+Three sentences in the per-player statistics were true of eleven rounds and false of twelve, and that is the trap this section exists to mark. Winds are counted over **everything played**, because that is the quantity the final round exists to correct. Tables and pairings stay scoped to the **eleven**, because `{4,4,3}` and "11 of the 66 pairs" are properties of the template that `tools/verify_template.py` proves and players are invited to run; a figure that quietly changed meaning would contradict the verifier the page points at.
+
+A player who finishes 4-3-3-2 rather than 3-3-3-3 is told the odds they actually had — 1 in *m*, where *m* is how many at their table needed the same wind — and why the rule is built that way. Not "you were unlucky". The design maximises how many people finish on three of every wind, and the price is that people short of the same wind share one seat. Saying the number is what makes the fairness claim checkable rather than consoling.
 ## 8. Data the client needs
 
 ```
@@ -161,12 +175,25 @@ GET /api/status   → phase, submitted_count, quorum, total_slots, submitted_loc
                     //   mirroring is off, and then the result page names no repository
                     draw{round_due_utc, seconds_late, grace_seconds, overdue},
                     drand{latest_round, healthy, last_seen_utc},
+                    final{state, lock_sha256, anchored, target_round,
+                    //     target_round_utc, standings, round, completed_count},
+                    //   the twelfth round (PROTOCOL.md §11). {state: "none"} until
+                    //   a lock exists; phase stays "done" through all three states,
+                    //   so this is the only thing that moves and the client
+                    //   refetches /api/result when it does
                     server_time_utc
 GET /api/me       → local_id, title, submitted
 GET /api/result   → seating (11 rounds × 3 tables × 4 seats, with names),
                     contributions, r, permutation, drand_signature,
                     excluded_local_ids,
-                    stats: per player {winds, tables, opponents[], perfect_pairs},
+                    stats: per player {winds, tables, opponents[], perfect_pairs,
+                    //     winds_template, deficient_wind, wind_complete,
+                    //     table_split_template} — winds counted over every round
+                    //     played, pair figures over the template rounds only
+                    final,            // final.json, or null. `seating` stays at 11
+                    //   rounds: it names a published file every verifier works on
+                    final_lock,       // events/final/lock.json, or null
+                    final_state,      // "none" | "locked" | "drawn"
                     pantheon_sync
                     // a composed view: results.json + computed stats +
                     // events/sync.json. The files, not this, are what a

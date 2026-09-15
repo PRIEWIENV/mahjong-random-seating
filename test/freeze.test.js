@@ -447,6 +447,39 @@ test('the freeze confirms the final round derives from the template it is taggin
   cleanup(fx.dir);
 });
 
+test('a substitutes.json left over from the last event stops the freeze', () => {
+  // The file is not frozen and cannot be, but at freeze time nobody has played a game, so
+  // a declared substitution can only have come from somewhere else. Left alone it would
+  // attribute the previous event's substitute to a seat in a tournament they never played.
+  const { fx, cfg } = fixture();
+  const seat = cfg.roster.players[0];
+  fs.writeFileSync(path.join(fx.dataDir, 'substitutes.json'), JSON.stringify({
+    substitutions: [{
+      local_id: seat.local_id,
+      from_round: 5,
+      outgoing: { person_id: seat.person_id, title: seat.title },
+      incoming: { title: 'last season' },
+      reason: 'league rule 9c',
+      declared_at: '2026-01-01T00:00:00Z',
+    }],
+  }));
+  const fresh = load({ dataDir: fx.dataDir });
+  const problems = [];
+  finalRoundPreflight(fresh, [], problems);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /before anyone has played a game/);
+  assert.match(problems[0], /end-event/);
+  cleanup(fx.dir);
+});
+
+test('a freeze with no substitutions says so rather than staying silent', () => {
+  const { fx, cfg } = fixture();
+  const lines = [];
+  finalRoundPreflight(cfg, lines, []);
+  assert.match(lines.join('\n'), /no substitutions declared/);
+  cleanup(fx.dir);
+});
+
 test('an event with no final round is frozen without one, and says so', () => {
   const { fx, cfg } = fixture();
   delete cfg.protocol.final_round;

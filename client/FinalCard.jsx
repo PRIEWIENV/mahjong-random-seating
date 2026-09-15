@@ -43,6 +43,9 @@ const TEXT = {
     otsFile: '时间戳存证',
     finalFile: '决赛轮结果',
     waiting: '信标产生之后，风位才会抽出。',
+    subsTitle: '中途更换过的席位',
+    subsNote: '这些席位保留了原来的 Pantheon 注册位，所以名次表仍是一人一行，桌次与没有换人时完全一致，抽签用到的每一个字节也没有变。这份记录写在封存文件里，和名次同一个指纹、同一个时间戳。',
+    subsFrom: (round, from_, to) => `第 ${round} 轮起：${from_} → ${to}`,
   },
   en: {
     titleLocked: 'The final round: tables set, winds not yet drawn',
@@ -64,6 +67,9 @@ const TEXT = {
     otsFile: 'its timestamp proof',
     finalFile: 'the final round',
     waiting: 'The winds are drawn once that beacon lands.',
+    subsTitle: 'Seats that changed hands',
+    subsNote: 'These seats kept their original Pantheon registration, so the standings still hold one row per seat, the tables are exactly what they would have been, and not one byte of the draw changed. This record sits inside the locked file, under the same fingerprint and the same timestamp as the standings.',
+    subsFrom: (round, from_, to) => `from round ${round}: ${from_} to ${to}`,
   },
 };
 
@@ -76,7 +82,7 @@ function tablesOf(standings, size = 4) {
   return out;
 }
 
-export default function FinalCard({ final, result, players }) {
+export default function FinalCard({ final, result, players, substitutes = [] }) {
   const lang = useLang();
   const t = useText(TEXT);
   const [copied, setCopied] = useState(false);
@@ -84,6 +90,14 @@ export default function FinalCard({ final, result, players }) {
 
   const drawn = final.state === 'drawn';
   const titleOf = new Map((players || []).map((p) => [p.local_id, p.title]));
+  // A seat can change hands more than once; the last declaration is who finished in it,
+  // and that is the name to put beside the rank. The whole chain is listed underneath,
+  // because "who played these eleven games" is not answered by the last name alone.
+  const subsBySeat = new Map();
+  for (const sub of substitutes) {
+    if (!subsBySeat.has(sub.local_id)) subsBySeat.set(sub.local_id, []);
+    subsBySeat.get(sub.local_id).push(sub);
+  }
   const due = final.target_round_utc ? formatExact(final.target_round_utc, lang) : null;
 
   const copy = () => {
@@ -134,7 +148,10 @@ export default function FinalCard({ final, result, players }) {
                   {tb.ranks.map((id, i) => (
                     <span key={id} className="ranked">
                       <i>{tb.ranks.length * (tb.table - 1) + i + 1}</i>
-                      {titleOf.get(id) || `#${id}`}
+                      {subsBySeat.has(id)
+                        ? subsBySeat.get(id)[subsBySeat.get(id).length - 1].incoming.title
+                        : (titleOf.get(id) || `#${id}`)}
+                      {subsBySeat.has(id) && <sup className="sub-mark">*</sup>}
                     </span>
                   ))}
                 </span>
@@ -142,6 +159,25 @@ export default function FinalCard({ final, result, players }) {
             ))}
           </ul>
           {!drawn && <p className="note dim">{t.waiting}</p>}
+        </>
+      )}
+
+      {subsBySeat.size > 0 && (
+        <>
+          <h3>{t.subsTitle}</h3>
+          <ul className="final-subs">
+            {[...subsBySeat.entries()].sort((a, b) => a[0] - b[0]).map(([id, subs]) => (
+              <li key={id}>
+                {subs.map((sub, i) => (
+                  <span key={i} className="sub-line">
+                    {t.subsFrom(sub.from_round, sub.outgoing.title || `#${id}`, sub.incoming.title)}
+                    <span className="dim"> {sub.reason}</span>
+                  </span>
+                ))}
+              </li>
+            ))}
+          </ul>
+          <p className="note dim">{t.subsNote}</p>
         </>
       )}
 

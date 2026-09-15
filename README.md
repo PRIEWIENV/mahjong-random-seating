@@ -168,6 +168,8 @@ data/
   protocol.example.json      # FROZEN parameters: chain, target round, quorum, input range
   roster.example.json        # shape reference; the real one is written by tools/freeze.js
   runtime.example.json       # operational settings — not frozen, not tagged, optional
+  substitutes.example.json   # PROTOCOL.md 11.6 — who actually sat in a seat, if it changed
+                             # hands; copy only if it happens, and not frozen (it cannot be)
                              # protocol.json and roster.json are gitignored here: they are
                              # one event's data, frozen in the tree that event is run from
 server/
@@ -196,6 +198,10 @@ tools/
   check-signin.js            # one account's sign-in against Pantheon, step by step
   setup-mirror.js            # the GitHub mirror token: obtain, prove it writes, store
   new-round.js  end-event.js # after a void; after the event
+  lock-final.js              # 11 T1: lock the standings and the beacon, before the beacon
+  draw-final.js              # 11 T2: wait for it, draw the winds, write twelve blocks
+  verify_final.py            # the final round re-derived by a second, independent implementation
+  verify-pantheon-final.js   # ask a LIVE Mimir the questions in PANTHEON-INTEGRATION.md 5.2
   build-client.js  md-to-page.js  verify-template.js  verify_template.py
   verify_contribution.py  decrypt-submissions.js  pantheon-fixture.js
 test/                        # unit tests, and e2e.js against live drand

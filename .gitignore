@@ -28,6 +28,12 @@ admin-credential.json
 data/protocol.json
 data/roster.json
 
+# One event's substitutions (PROTOCOL.md 11.6), for the same reason and one more: unlike
+# the two above it is NOT frozen and must not be, since a player drops out weeks after the
+# tag is made. It is published by being copied into events/final/lock.json, which is
+# mirrored and timestamped, and archived by tools/end-event.js when the event closes.
+data/substitutes.json
+
 # The deliberate opposite: operational settings (PROTOCOL.md §4.2). Nothing in here can
 # change or steer the outcome, and it may need to change mid-window — a dead drand
 # mirror, a moved Pantheon. Keeping it out of the tree keeps the boundary physical, so
