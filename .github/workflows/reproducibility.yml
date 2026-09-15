@@ -48,11 +48,11 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Node 24, not the engines floor: server/db.js requires node:sqlite unflagged,
       # which 22.x does not do.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: npm
