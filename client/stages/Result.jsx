@@ -1,6 +1,7 @@
 import Explorer from '../explorer/Explorer';
 import RollCard from '../RollCard';
 import FinalCard from '../FinalCard';
+import FinalTimeline from '../FinalTimeline';
 import { useLang, useText, WINDS, tableName } from '../i18n';
 import { allRounds, hasFinal } from '../rounds';
 
@@ -87,7 +88,7 @@ const TEXT = {
   },
 };
 
-export default function Result({ status, me, result }) {
+export default function Result({ status, me, result, serverNow }) {
   const lang = useLang();
   const t = useText(TEXT);
 
@@ -227,6 +228,14 @@ export default function Result({ status, me, result }) {
           start being checkable. Offering them only during the wait meant the download
           disappeared at the exact moment someone might want to recompute the result
           from it. Same file, same fingerprint, same timestamp proof. */}
+      {/* The countdown to the second beacon, for the minutes it is running. It is shown
+          only while the round is locked: once the winds are drawn, the round they were
+          drawn for is the headline at the top of this page, and a finished progress bar
+          under it would be the one element still talking about the wait. */}
+      {status?.final?.state === 'locked' && (
+        <FinalTimeline final={status.final} drand={status.drand} serverNow={serverNow} />
+      )}
+
       {/* The final round's commitment, shown from the moment it is locked — which is
           weeks before it is opened, and is the only moment at which comparing its
           digest with eleven other people proves anything (PROTOCOL.md §11). */}

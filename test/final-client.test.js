@@ -307,3 +307,133 @@ test('with no substitutions the card renders nothing about them', () => {
   // would be twelve people wondering what it means.
   assert.match(finalCard, /subsBySeat\.size > 0 &&/);
 });
+
+// ---------------------------------------------------------------------------
+// the column that is held open before there is a round to put in it
+// ---------------------------------------------------------------------------
+
+test('the twelfth column is reserved from the first draw, and says only what is known', async () => {
+  // The seat plan is what a player looks at for the weeks between the two draws, and it
+  // used to stop at eleven with nothing to say a twelfth was coming — so the round
+  // appeared one day looking like something added late.
+  const { pendingFinal, lockedTables } = await import('../client/rounds.js');
+
+  // No final round in this event: no column, and no invitation to wonder about one.
+  assert.equal(pendingFinal({ ...eleven, final_enabled: false, final_state: 'none' }), null);
+
+  // Coming, not locked: the column exists and nothing in it is known.
+  const none = pendingFinal({ ...eleven, final_enabled: true, final_state: 'none' });
+  assert.deepEqual(none, { round: 12, state: 'none' });
+
+  // Locked: the standings are public, so the TABLE is a fact about every player while
+  // the wind is still the beacon's to decide.
+  const lock = { standings: [4, 3, 2, 1, 8, 7, 6, 5, 12, 11, 10, 9] };
+  const locked = { ...eleven, final_enabled: true, final_state: 'locked', final_lock: lock };
+  assert.deepEqual(pendingFinal(locked), { round: 12, state: 'locked' });
+  const tables = lockedTables(locked);
+  assert.deepEqual(tables.get(4), { table: 1, rank: 1 }, 'first in the standings sits at table one');
+  assert.deepEqual(tables.get(5), { table: 2, rank: 8 });
+  assert.deepEqual(tables.get(9), { table: 3, rank: 12 });
+  assert.equal(tables.size, 12);
+
+  // Drawn: it is an ordinary round now, and allRounds() carries it. Two components
+  // drawing the same column would be one of them drawing it wrong.
+  assert.equal(pendingFinal({ ...twelve, final_enabled: true, final_state: 'drawn' }), null);
+
+  // Nothing locked, nothing claimed — rather than a map of guesses.
+  assert.equal(lockedTables({ ...eleven, final_enabled: true, final_state: 'none' }).size, 0);
+  assert.equal(lockedTables(undefined).size, 0);
+  assert.equal(pendingFinal(undefined), null);
+});
+
+test('the block size comes from the rounds, not from a hard-coded four', async () => {
+  // A differently sized event must not get a silently wrong column. Six players at two
+  // tables of three: ranks 1-3 at table one.
+  const { lockedTables } = await import('../client/rounds.js');
+  const six = {
+    seating: { rounds: [{ round: 1, tables: [{ table: 1, seats: {} }, { table: 2, seats: {} }] }] },
+    final_lock: { standings: [6, 5, 4, 3, 2, 1] },
+  };
+  const tables = lockedTables(six);
+  assert.deepEqual(tables.get(6), { table: 1, rank: 1 });
+  assert.deepEqual(tables.get(4), { table: 1, rank: 3 });
+  assert.deepEqual(tables.get(3), { table: 2, rank: 4 });
+});
+
+test('the reserved column is drawn as reserved, not as a dim version of a drawn one', () => {
+  const src = read('client', 'explorer', 'Explorer.jsx');
+  // Held open at all.
+  assert.match(src, /const pending = pendingFinal\(result\);/);
+  assert.match(src, /const booked = useMemo\(\(\) => lockedTables\(result\), \[result\]\);/);
+  // The state is in the class, because the two states mean opposite things and have to
+  // look different: reserved-and-unknown against reserved-and-half-known.
+  assert.ok(src.includes('className={`final fin-pending fin-${pending.state}`}'));
+  // Namespaced, for the reason test/styles.test.js makes the timeline namespace its
+  // own: `pending`, `locked` and above all `none` are words any later rule could claim.
+  // A bare `pending` token in a class list, not the namespaced `fin-pending` one.
+  assert.doesNotMatch(src, /className="(?:[^"]*\s)?(?:pending|locked|none)(?:\s[^"]*)?"/);
+
+  const css = read('client', 'styles.css');
+  // The separator was a 1px dashed hairline in --line, which at 30px cells read as part
+  // of the grid's own ruling rather than as a division between two kinds of round.
+  assert.match(css, /table\.grid th\.final::before[\s\S]{0,200}?border-left: 2px solid var\(--t3\)/);
+  assert.doesNotMatch(css, /th\.final::before[\s\S]{0,200}?border-left: 1px dashed/);
+  // Drawn is the emphatic state; pending is visibly unfilled.
+  assert.match(css, /table\.grid th\.final:not\(\.fin-pending\) \{ background: var\(--t3-soft\)/);
+  assert.match(css, /table\.grid td\.final\.fin-pending \{/);
+  assert.match(css, /border-left-style: dashed/);
+});
+
+// ---------------------------------------------------------------------------
+// the second countdown
+// ---------------------------------------------------------------------------
+
+test('the final round gets a timeline of its own, on the first draw’s track', () => {
+  const src = read('client', 'FinalTimeline.jsx');
+  // Timeline's classes, because it is the same mechanism a second time. A differently
+  // shaped progress bar would read as a different one.
+  for (const cls of ['timeline-card', 'tl-track', 'tl-fill', 'tl-dot', 'tl-rounds', 'tl-labels']) {
+    assert.ok(src.includes(cls), `${cls} is not shared with the first draw's timeline`);
+  }
+  // One segment, not two: nobody submits anything into the final round, so there is no
+  // cutoff in the middle of it.
+  assert.doesNotMatch(src, /tl-stop cutoff/);
+  // Three states, prefixed like the other timeline's (test/styles.test.js).
+  for (const state of ['tl-locked', 'tl-drawing', 'tl-late']) assert.ok(src.includes(state), state);
+  // Server time, never the browser's, exactly as every other countdown here.
+  assert.match(src, /serverNow \? serverNow\(\) : Date\.now\(\)/);
+  // A late draw is named rather than animated forever; the grace is generous on purpose
+  // because this page is not told the scheduler's interval.
+  assert.match(src, /const GRACE_MS = /);
+
+  // §9: the page watches, it never triggers. A progress bar that could start a draw
+  // would be the hole that rule exists to close.
+  assert.doesNotMatch(src, /fetch\(|api\.|POST/);
+
+  const result = read('client', 'stages', 'Result.jsx');
+  assert.ok(result.includes("status?.final?.state === 'locked' && ("),
+    'the timeline belongs to the wait, and the wait is over once the winds are drawn');
+  assert.ok(result.includes('<FinalTimeline final={status.final} drand={status.drand} serverNow={serverNow}'));
+  assert.match(read('client', 'App.jsx'), /<Result [^>]*serverNow=\{serverNow\}/);
+
+  // And it is in the bundle, in both languages.
+  assert.ok(bundle.includes('决赛轮已锁定，等待信标'));
+  assert.ok(bundle.includes('Final round locked, waiting for the beacon'));
+});
+
+test('the lock fingerprint is short enough to read out, like the roll’s', () => {
+  // The one value this card asks twelve people to compare. Sixty-four hex characters
+  // made that harder, not stronger: two digests differing in the middle look identical
+  // at a glance, and a value nobody can compare at a glance is a value nobody compares.
+  const src = read('client', 'FinalCard.jsx');
+  assert.match(src, /const short = \(final\.lock_sha256 \|\| ''\)\.slice\(0, 16\);/);
+  // What is copied is what is on the screen, or the comparison is between two different
+  // things — RollCard's rule, and its reason.
+  assert.match(src, /writeText\(short\)/);
+  // The whole digest is still one hover away, and still in the file itself.
+  assert.ok(src.includes('<code title={final.lock_sha256}>{short}</code>'));
+
+  // The dashboard is the other audience and keeps the full sixty-four: an operator is
+  // recomputing from it, not reading it out.
+  assert.match(read('server', 'admin.js'), /kv\('lock\.json sha256'/);
+});

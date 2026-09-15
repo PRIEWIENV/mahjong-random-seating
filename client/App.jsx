@@ -283,7 +283,7 @@ export default function App() {
       case 'void':
         return <Void status={state.status} />;
       case 'result':
-        return <Result status={state.status} me={state.me} result={result} />;
+        return <Result status={state.status} me={state.me} result={result} serverNow={serverNow} />;
       default:
         return null;
     }

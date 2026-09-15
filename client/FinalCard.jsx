@@ -100,8 +100,26 @@ export default function FinalCard({ final, result, players, substitutes = [] }) 
   }
   const due = final.target_round_utc ? formatExact(final.target_round_utc, lang) : null;
 
+  /**
+   * Sixteen characters, and the copy button copies those sixteen — RollCard's rule, for
+   * RollCard's reason, on the one other value this page asks twelve people to read out
+   * to each other.
+   *
+   * The full sixty-four were printed here and they made the comparison harder rather
+   * than stronger. Two hex digests differing in the middle look identical at a glance,
+   * so a recipient has to scan a wall of hex to find the part that matches their own
+   * screen, and a value nobody can compare at a glance is a value nobody compares. The
+   * whole digest is still one hover away on the code element, it is in the lock file
+   * itself, and the organiser's dashboard prints it in full for anyone recomputing
+   * rather than eyeballing. Sixteen hex characters is 64 bits; forging a second lock
+   * that collides with one over that prefix is not the attack this card defends
+   * against, and the attack it does defend against — a lock swapped after the beacon —
+   * is caught by any one of the twelve noticing a different string.
+   */
+  const short = (final.lock_sha256 || '').slice(0, 16);
+
   const copy = () => {
-    navigator.clipboard?.writeText(final.lock_sha256 || '').then(
+    navigator.clipboard?.writeText(short).then(
       () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
       () => {}
     );
@@ -114,7 +132,7 @@ export default function FinalCard({ final, result, players, substitutes = [] }) 
 
       <p className="fineprint">{t.lockDigest}</p>
       <div className="roll-digest">
-        <code>{final.lock_sha256}</code>
+        <code title={final.lock_sha256}>{short}</code>
         <button
           className={`copy-btn ${copied ? "done" : ""}`}
           onClick={copy}

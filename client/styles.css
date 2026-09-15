@@ -258,14 +258,57 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
 }
 
 /* In the grid, the final round is a column that was not drawn, so it is separated from
-   the eleven that were rather than merely appended to them. */
+   the eleven that were rather than merely appended to them.
+
+   The separator used to be a 1px dashed hairline in --line, which is the colour of a
+   table border: at 30px cells with 3px spacing it read as part of the grid's own ruling
+   and not as a division between two kinds of round. It is now a solid rule in the
+   column's own accent, with the whole column tinted behind it, so the eye finds the
+   boundary before it reads a single cell.
+
+   The column exists in two states and they have to look different at a glance, because
+   they mean opposite things. Drawn: this is where you sit, as settled as the other
+   eleven, so it is the most emphatic column on the grid. Pending: nothing here is
+   decided, so it is visibly held open — desaturated, dashed, a placeholder rather than
+   a value. A greyed column that looked merely dim would read as "drawn, less
+   important", which is exactly backwards. */
 table.grid th.final, table.grid td.final { position: relative; }
 table.grid th.final::before, table.grid td.final::before {
-  content: ''; position: absolute; left: -4px; top: 0; bottom: 0;
-  border-left: 1px dashed var(--line);
+  content: ''; position: absolute; left: -5px; top: 0; bottom: 0;
+  border-left: 2px solid var(--t3);
 }
-table.grid th.final { color: var(--t3); }
+table.grid th.final { color: var(--t3); font-weight: 700; }
+
+/* Drawn: the column carries its own tint the whole way down, so the boundary is a band
+   and not a line, and the header sits above it in full strength. */
+table.grid th.final:not(.fin-pending) { background: var(--t3-soft); border-radius: 6px 6px 0 0; }
+table.grid td.final:not(.fin-pending) { box-shadow: inset 0 0 0 1px var(--t3); }
+
+/* Pending: reserved, not filled. The rule goes dashed and the cells lose their colour
+   even when the table is known, because a cell that looked like the other eleven would
+   be claiming a seat that has not been drawn. */
+table.grid th.final.fin-pending::before, table.grid td.final.fin-pending::before {
+  border-left-style: dashed; border-left-color: var(--muted);
+  opacity: 0.55;
+}
+table.grid th.final.fin-pending { color: var(--muted); font-weight: 600; }
+table.grid td.final.fin-pending {
+  background: var(--bg-tint); color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+  cursor: default;
+}
+table.grid td.final.fin-pending:hover { transform: none; }
+/* Locked, not drawn: the table IS known, so the tint comes back at a fraction of its
+   strength — enough to show which of the three you are booked at, not enough to read as
+   a seat. The wind placeholder stays muted either way. */
+table.grid td.final.fin-pending.fin-locked { opacity: 0.75; }
+table.grid td.final.fin-pending.fin-locked.t1 { background: var(--t1-soft); }
+table.grid td.final.fin-pending.fin-locked.t2 { background: var(--t2-soft); }
+table.grid td.final.fin-pending.fin-locked.t3 { background: var(--t3-soft); }
+table.grid td.final.fin-pending .wind { color: var(--muted); opacity: 0.7; }
+
 .final-note { margin: 6px 0 0; font-size: 0.8rem; color: var(--muted); }
+.final-note.fin-pending { font-style: italic; }
 .round-list li.final { border-top: 1px dashed var(--line); padding-top: 8px; }
 .round-list li.final .r { color: var(--t3); font-weight: 700; }
 
@@ -777,6 +820,27 @@ table.opponents tr.imperfect { color: var(--warn); }
   content: ''; position: absolute; right: -1px; top: 50%; translate: 0 -50%;
   border: 4px solid transparent; border-left-color: var(--line);
 }
+
+/* The final round's timeline: the same track, one segment instead of two.
+
+   It shares every .tl- class with the first draw's timeline on purpose -- the twelfth
+   round is the same mechanism a second time, and a differently shaped progress bar would
+   read as a different one. What it does not share is the accent: the final round's cards
+   are all in --t3, so a player scrolling can tell at a glance which of the two draws a
+   block is about. Its three states are prefixed tl- like the other timeline's, for the
+   reason test/styles.test.js enforces. */
+.final-timeline { border-left-color: var(--t3); }
+/* There is no cutoff label above this track, so it supplies its own gap from the header
+   -- .tl-track deliberately has no top margin because the caption normally provides it. */
+.final-timeline .tl-track { margin-top: 12px; }
+.final-timeline .tl-fill { background: var(--t3); }
+.final-timeline .tl-stop.draw { background: var(--t3); }
+.final-timeline .tl-dot { border-color: var(--t3); }
+.final-timeline .tl-round b.live { color: var(--t3); }
+.timeline-card.tl-locked .tl-left { color: var(--t3); font-weight: 600; }
+.timeline-card.tl-late .tl-head h2 { color: var(--warn); }
+.timeline-card.tl-late .tl-dot { border-color: var(--warn); animation: none; }
+.timeline-card.tl-late .tl-fill { background: var(--warn); }
 
 /* ---- twelve envelopes -------------------------------------------------- */
 /* Below quorum the fill is amber: at this count the draw would be void if the cutoff

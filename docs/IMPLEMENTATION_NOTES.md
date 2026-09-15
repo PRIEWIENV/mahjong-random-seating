@@ -1890,6 +1890,90 @@ and `next_session_index` round-trips because the controller stores `nextSessionI
 and the reader adds one back. Reading only the model layer shows one half of that and looks
 like an off-by-one. Doing it shows neither half matters.
 
+## 6ae. Five complaints about the twelfth round, and what they had in common
+
+The final round worked and nobody could see it working. Five separate pieces of feedback,
+and four of them turn out to be the same mistake made in four places: the twelfth round was
+built as an *outcome* and shipped without the *waiting* that every other part of this
+system treats as first-class.
+
+**The seat plan stopped at eleven.** For the weeks between the two draws the grid had
+eleven columns and no hint of a twelfth, so it quietly disagreed with the schedule
+everybody had been told about, and the final round then appeared one day looking like
+something added late. The column is now held open from the first draw — but only holding
+what is actually known, which turned out to be the interesting part. Before the standings
+are locked that is nothing. *After* they are locked it is the **table**, because the rank
+blocks are the tables and the standings are public: which of the three a player is at is a
+fact about them, and hiding it would be pretending not to know. The wind is still not a
+fact, so the cell must not look like the other eleven — a filled cell claims a seat that
+has not been drawn. Three states, three appearances, and the middle one is the one that
+would have been wrong if the column had simply been greyed until the draw.
+
+The separator between the eleven and the twelfth was a 1px dashed hairline in `--line`,
+which is the colour of a table border: at 30px cells with 3px spacing it read as part of
+the grid's own ruling rather than as a division between two kinds of round. It is now a
+solid rule in the column's accent with the column tinted behind it, so the eye finds the
+boundary before it reads a cell.
+
+**The lock fingerprint was sixty-four characters.** `RollCard` had already worked this out
+and written down why — two hex digests differing in the middle look identical at a glance,
+so what gets compared has to be short enough to compare — and `FinalCard`, its deliberate
+twin class for class, had been given the long form anyway. Sixteen now, and the copy button
+copies the sixteen on the screen rather than the whole digest behind them, because what
+gets pasted has to be what everybody else is looking at. The dashboard keeps all
+sixty-four: an operator is recomputing from it, not reading it out.
+
+**There was no countdown for the second draw.** A player who had watched a three-day
+timeline with a live drand round and a moving marker was handed, for the twelfth round, a
+line of text saying the winds would be drawn once the beacon landed. The gap is five
+minutes rather than three days, which makes that worse rather than better: five minutes is
+exactly the span over which a page that does not visibly move reads as a page that has
+stopped working. `FinalTimeline` is `Timeline`'s sibling on the same track and the same
+classes — the twelfth round is the same mechanism a second time, and a differently shaped
+progress bar would teach the reader otherwise — with the one structural difference the
+round actually has: no cutoff in the middle, because nobody submits anything.
+
+Its third state is the one worth having. Between the beacon landing and the scheduler
+noticing there is up to one interval where the draw has not appeared and nothing is wrong,
+and past that grace there is a job that is not running. Those look identical from a chair
+and mean opposite things, so the card says which, in the same words the waiting stage uses
+for the same fault. It is shown only while the round is locked: afterwards the drawn round
+is the headline at the top of the page, and a finished progress bar under it would be the
+one element still talking about the wait.
+
+**The demo pressed the button itself.** `runFinalRound` invented the standings, then ran
+`lock-final.js --confirm`, and the demo's most important minute was the one minute of it
+that was a lie. At a real event somebody stands at the dashboard, looks at what the checks
+printed, and decides to publish. Automating that hid the only human decision in the whole
+protocol and hid the dashboard that RUNBOOK section F is written around. The demo now sets
+the stage, prints the standings, and stops — it tells you which form, which field, and to
+press 预览 before 锁定并公布 — then watches `status.final.state` for the lock somebody else
+made. The draw afterwards stays automatic, because that part genuinely is.
+
+**And the dashboard refreshed every thirty seconds**, which is far too slow for the minutes
+that matter. The fix could not be a smaller number, and finding out why is the part worth
+recording. `/admin` has no javascript at all — its CSP is `default-src 'none'` with no
+`script-src`, deliberately, because a dashboard that can run code is a dashboard that can
+be made to run somebody else's — so the only refresh available is
+`<meta http-equiv="refresh">`, and that is a full navigation: it empties whatever is
+half-typed into a form on its way past. The page had grown two forms since the interval was
+last thought about.
+
+So the interval follows what is happening. Five seconds when something is in flight and
+nobody is typing — the first draw past its cutoff, or the final round locked with its
+beacon due. Ten as the resting rate. And **none at all** while the forms are usable, which
+is exactly the state where nothing changes on its own: the round-robin is over, the twelfth
+round has not been asked for, and the next event is the operator pressing something. That
+last case also made the forms' own condition honest — they had been rendering from the
+first draw onwards, where the lock button can only fail because `lock-final.js` refuses
+without a `results.json`. They are gated on a finished round-robin now, and the refresh
+policy and the render read the same predicate so the two cannot drift.
+
+The thread through all five: this project is careful about *evidence* and had been casual
+about *the wait for it*. The waiting stage got a timeline, a live beacon round, an honest
+"the job is late" state and a countdown driven by server time, and then the second draw —
+which is the same protocol with the same beacon and the same stakes — got a sentence.
+
 ## 10. What was verified, and how
 
 | Check | Status |

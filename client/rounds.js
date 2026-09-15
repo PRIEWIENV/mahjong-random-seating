@@ -32,6 +32,54 @@ export function isFinal(result, round) {
 export const hasFinal = (result) => Boolean(result?.final);
 
 /**
+ * The twelfth round before it exists: a column to hold open, not a round to draw.
+ *
+ * The seat plan is what a player looks at for weeks between the first draw and the
+ * final one, and for all that time it showed eleven columns and stopped. Nothing on it
+ * said a twelfth was coming, so the page quietly disagreed with the schedule everyone
+ * had been told about, and the round appeared one day as if it had been added late.
+ *
+ * So the column is reserved from the moment the eleven rounds are drawn. What goes in
+ * it depends on how much is actually known, and never more than that:
+ *
+ *   final_state 'none'    the standings are not locked. Nothing is known: no table, no
+ *                         wind. The column is there and empty.
+ *   final_state 'locked'  the standings ARE locked and public, so the TABLE is known
+ *                         for everybody -- it is the rank block -- while the wind is
+ *                         what the beacon has yet to decide. Table shown, wind not.
+ *   final_state 'drawn'   an ordinary round, returned by allRounds() instead.
+ *
+ * @returns {{round: number, state: string}|null}
+ */
+export function pendingFinal(result) {
+  if (!result?.final_enabled || hasFinal(result)) return null;
+  const played = result?.seating?.rounds || [];
+  if (!played.length) return null;
+  return { round: played[played.length - 1].round + 1, state: result.final_state || 'none' };
+}
+
+/**
+ * Which table each local_id is booked at, from the locked standings.
+ *
+ * The rank blocks ARE the tables (PROTOCOL.md 11): ranks 1-4 at table one and so on,
+ * with the block size taken from the rounds actually drawn rather than assumed to be
+ * four, so a differently-sized event does not get a silently wrong column.
+ *
+ * @returns {Map<number, {table: number, rank: number}>} empty when nothing is locked
+ */
+export function lockedTables(result) {
+  const standings = result?.final_lock?.standings;
+  const perTable = result?.seating?.rounds?.[0]?.tables?.length;
+  const out = new Map();
+  if (!Array.isArray(standings) || !perTable) return out;
+  const size = standings.length / perTable;
+  standings.forEach((localId, i) => {
+    out.set(localId, { table: Math.floor(i / size) + 1, rank: i + 1 });
+  });
+  return out;
+}
+
+/**
  * How many people at this player's final table are short of the same wind they are.
  *
  * The number that makes the fairness claim honest instead of comforting. Exactly one

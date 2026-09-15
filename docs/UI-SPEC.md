@@ -127,6 +127,18 @@ One canvas, three lenses, no tabs — the lens follows the selection:
 
 Selections are exclusive and always escapable (click the background, or press Escape). The URL should carry the selection (`?player=…`, `?round=…`) so a player can send someone a link to their own schedule.
 
+**The twelfth column is reserved, not appended.** In an event with a final round the grid has twelve columns from the moment the first eleven are drawn — weeks before the twelfth exists. It stopped at eleven, which meant the seat plan quietly disagreed with the schedule everyone had been told about, and the round then appeared one day looking like something added late. The reserved column says only what is actually known, and never more:
+
+| `final_state` | What the column holds | How it looks |
+|---|---|---|
+| `none` | nothing — neither table nor wind | held open, desaturated, a dashed rule, a placeholder in every cell |
+| `locked` | the **table**, which the published standings decided | the table's colour at reduced strength, still no wind |
+| `drawn` | an ordinary round | the most emphatic column on the grid |
+
+The `locked` row is the interesting one. The standings are public from the moment they are locked, so which of the three tables a player is at is a *fact* about them and withholding it would be pretending not to know. The wind is not a fact yet, so the cell must not look like the other eleven — a filled cell claims a seat that has not been drawn.
+
+The boundary between the drawn rounds and the final one carries the weight here, so it is a rule in the column's own accent with the column tinted behind it, not a hairline in the table's border colour. The two pending states must also look different from each other and from the drawn one: a greyed column that merely looked dim would read as "drawn, less important", which is exactly backwards.
+
 ### Per-player statistics
 
 The detail panel also carries the numbers that make the fairness visible:
@@ -153,9 +165,15 @@ Call the file what it is — the ciphertexts people submitted — not "the roll"
 
 An event with a twelfth round (PROTOCOL.md §11) puts three things on the result stage, and the first of them appears **weeks before** the round is drawn.
 
-**The lock card**, a sibling of the evidence card and deliberately its twin, class for class. Both make the same ask — here is a short string, compare it with the other eleven while nobody can yet know what it opens — and two cards that looked like different mechanisms would teach the reader that they are. It shows the lock's fingerprint, the drand round that will draw the winds and when it is due, and **the three tables**, which are already decided because the standings decided them. What nobody knows yet is who sits East. The ask to compare fingerprints is shown only while the round is locked and undrawn: afterwards the same digest is a number the organiser is reading out.
+**The lock card**, a sibling of the evidence card and deliberately its twin, class for class. Both make the same ask — here is a short string, compare it with the other eleven while nobody can yet know what it opens — and two cards that looked like different mechanisms would teach the reader that they are. It shows the lock's fingerprint — **sixteen characters, and the copy button copies those sixteen**, by the evidence card's rule and for the evidence card's reason — the drand round that will draw the winds and when it is due, and **the three tables**, which are already decided because the standings decided them. The full digest stays one hover away and in the lock file itself; the organiser's dashboard prints all sixty-four, because an operator is recomputing from it rather than reading it out. What nobody knows yet is who sits East. The ask to compare fingerprints is shown only while the round is locked and undrawn: afterwards the same digest is a number the organiser is reading out.
 
 **The headline moves.** Round 1 while that is the next thing to walk to; the final round once it exists. A page that still announced round 1 weeks later would have exactly one sentence on it, the largest one, that is about the past.
+
+**A timeline for the second draw**, on the first draw's track and sharing its classes, because the twelfth round is the same mechanism a second time and a differently shaped progress bar would read as a different one. One structural difference: there is no cutoff in the middle, because nobody submits anything into the final round. Two ends and one segment — locked, then the beacon.
+
+The gap here is five minutes rather than three days, and that makes the timeline more necessary rather than less: five minutes is exactly the span over which a page that does not visibly move reads as a page that has stopped working. Three states, and they are not cosmetic — *waiting for the beacon*; *the beacon landed and the draw has not appeared yet*, which is normal for up to one scheduler interval and must say so rather than animating a result that does not exist; and *past that grace*, which is a job that is not running and gets the same words the waiting stage uses for the same fault. It is shown only while the round is locked: once the winds are drawn, the round they were drawn for is the headline at the top of the page, and a finished progress bar under it would be the one element still talking about the wait.
+
+Nothing on it is a trigger. The draw runs on the server's timer (PROTOCOL.md §9) and this page only watches.
 
 **A second verification block**, beside the first rather than merged into it. There are now two draws to check, they are checked the same way, and both name a second implementation.
 
@@ -206,6 +224,10 @@ GET /api/result   → seating (11 rounds × 3 tables × 4 seats, with names),
                     //   rounds: it names a published file every verifier works on
                     final_lock,       // events/final/lock.json, or null
                     final_state,      // "none" | "locked" | "drawn"
+                    final_enabled,    // whether a twelfth round is coming AT ALL, which
+                    //   final_state cannot say: "none" means both "this event has no
+                    //   final round" and "it has one and it is not locked yet". The
+                    //   seat plan needs the difference to hold its column open
                     pantheon_sync
                     // a composed view: results.json + computed stats +
                     // events/sync.json. The files, not this, are what a

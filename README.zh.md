@@ -40,7 +40,9 @@ npm run demo
 
 登录，选一个数字，看着其他人的信封陆续到达，等信标，看座位表以及怎么复算它——选手能看到的一切，大约六分钟。
 
-紧接着它会跑**第十二轮**：桌次是打出来的而不是抽出来的，只有风位靠抽签。名次是编的，因为十一轮并没有真的打过；在那之后的一切都是真的：第二个信标、在它存在之前就公布并盖了时间戳的锁定文件、以及一次没有任何人触发的抽签——信标落地时服务器用自己的定时器把它抽了。
+紧接着它会把**第十二轮**准备好：桌次是打出来的而不是抽出来的，只有风位靠抽签——然后停下来，因为下一步是你的。它会打印名次，并把你指向组织者面板去锁定它们，跟有人在场地里做的完全一样：先预览，读检查说了什么，再公布。这是整套协议里唯一由人做的决定，而一个替你做掉它的演示，藏起来的恰恰是里面唯一的人工步骤。
+
+你按下按钮之后就没有手工环节了。名次是编的，因为十一轮并没有真的打过；除此之外的一切都是真的：第二个信标、在那个信标存在之前就公布并盖了时间戳的锁定文件、以及一次没有任何人触发的抽签——信标落地时服务器用自己的定时器把它抽了。
 
 看完 Ctrl+C；它跑在一份临时副本里，什么都不留下。只有 Pantheon（俱乐部的账号系统）是模拟的。想多看一会儿：`npm run demo -- --window 600`。
 
@@ -148,12 +150,13 @@ server/
   finalise.js                # 开奖任务和 Pantheon 同步 —— 一个单独的进程
   schedule.js                # 运行 finalise.js 的定时器，于是不需要 cron 或 systemd
   rounds.js                  # 作废的尝试：归档、验证、开启下一次
-  admin.js                   # 组织者的只读面板
+  admin.js                   # 组织者的面板：状态，以及 F 节需要的那两个操作
   pantheon.js                # Pantheon 边界：Twirp 客户端 + 进程内替身
   config.js  runtime.js      # 配置的冻结一半与运营一半
   ciphertext.js  drand.js  ots.js  tlock.js  db.js  events.js  mirror.js  stats.js
 client/
   App.jsx  stages/  waiting/  explorer/  seal.js     # 选手的页面；seal.js 是封存数字的地方
+  RollCard.jsx  FinalCard.jsx  FinalTimeline.jsx     # 两次承诺，以及等待第二次的那段时间
 public/
   app.js  app.css            # 构建出的 bundle —— 已提交，属于冻结范围
 docs/                        # 每一份文档，旁边都有一份 .zh.md

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import PlayerDetail from './PlayerDetail';
 import RoundTables from './RoundTables';
 import { useLang, useText, WINDS, roundName, tableName } from '../i18n';
-import { allRounds, isFinal } from '../rounds';
+import { allRounds, isFinal, lockedTables, pendingFinal } from '../rounds';
 
 /**
  * The seat plan explorer (UI-SPEC.md §7).
@@ -46,6 +46,10 @@ const TEXT = {
     finalCol: '决赛轮',
     finalCellTitle: (round, table, wind, rank) => `${round}（决赛）· ${table} · ${wind}家 · 第 ${rank} 名`,
     finalNote: '最后一列是决赛轮：桌次由前面的名次决定，只有风位是抽的。',
+    pendingNone: '决赛轮还没有锁定：桌次要等前十一轮的名次出来，风位要等那之后的一次抽签。这一列先留在这里。',
+    pendingLocked: '决赛轮的桌次已经锁定并公开（见下方封存记录），风位还没抽。所以这一列现在只填得出桌子，填不出风位。',
+    pendingCellNone: (round) => `${round}（决赛）· 桌次与风位都还没定`,
+    pendingCellLocked: (round, table, rank) => `${round}（决赛）· ${table} · 第 ${rank} 名 · 风位未抽`,
   },
   en: {
     title: 'Seat plan',
@@ -58,6 +62,10 @@ const TEXT = {
     finalCol: 'Final',
     finalCellTitle: (round, table, wind, rank) => `${round} (final) · ${table} · ${wind} · ranked ${rank}`,
     finalNote: 'The last column is the final round: its tables come from the standings, and only the winds are drawn.',
+    pendingNone: 'The final round is not locked yet: its tables wait on the eleven-round standings and its winds on a draw after that. The column is held open until then.',
+    pendingLocked: 'The final round’s tables are locked and public (see the sealed record below); the winds are not drawn yet. So this column can be filled in as far as the table and no further.',
+    pendingCellNone: (round) => `${round} (final) · neither table nor wind decided yet`,
+    pendingCellLocked: (round, table, rank) => `${round} (final) · ${table} · ranked ${rank} · wind not drawn`,
   },
 };
 
@@ -71,6 +79,11 @@ export default function Explorer({ result, me }) {
   const rounds = allRounds(result);
   const finalOf = (n) => isFinal(result, n);
   const winds = WINDS[lang];
+  // The twelfth column before there is a twelfth round to put in it. Held open rather
+  // than appearing later, and filled in only as far as what is actually known: nothing
+  // before the standings are locked, the table once they are (client/rounds.js).
+  const pending = pendingFinal(result);
+  const booked = useMemo(() => lockedTables(result), [result]);
 
   useEffect(() => { writeSelectionToUrl(sel); }, [sel]);
 
@@ -122,6 +135,11 @@ export default function Explorer({ result, me }) {
                     R{r.round}
                   </th>
                 ))}
+                {pending && (
+                  <th scope="col" className={`final fin-pending fin-${pending.state}`} title={t.finalCol}>
+                    R{pending.round}
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -151,6 +169,26 @@ export default function Explorer({ result, me }) {
                         </td>
                       );
                     })}
+                    {pending && (() => {
+                      // A locked table is a fact about this player, so it is shown; the
+                      // wind is not a fact yet, so the cell says so with a placeholder
+                      // instead of guessing or leaving the reader to wonder.
+                      const b = booked.get(id);
+                      // Selecting a round dims every other column, and this one is not
+                      // an exception: left bright it would draw the eye away from the
+                      // column the reader actually asked for.
+                      const dim = sel.kind === 'round';
+                      return (
+                        <td
+                          className={`final fin-pending fin-${pending.state}${b ? ` t${b.table}` : ''}${dim ? ' dim' : ''}`}
+                          title={b
+                            ? t.pendingCellLocked(roundName(lang, pending.round), tableName(lang, b.table), b.rank)
+                            : t.pendingCellNone(roundName(lang, pending.round))}
+                        >
+                          <span className="wind">·</span>
+                        </td>
+                      );
+                    })()}
                   </tr>
                 );
               })}
@@ -163,6 +201,11 @@ export default function Explorer({ result, me }) {
             <span className="legend-note">{t.legendNote}</span>
           </p>
           {rounds.some((r) => finalOf(r.round)) && <p className="legend-note final-note">{t.finalNote}</p>}
+          {pending && (
+            <p className="legend-note final-note fin-pending">
+              {pending.state === 'locked' ? t.pendingLocked : t.pendingNone}
+            </p>
+          )}
         </div>
 
         {sel.kind === 'player' && (

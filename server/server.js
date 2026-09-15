@@ -775,6 +775,11 @@ function createServer(opts = {}) {
       pantheon_sync: syncOutcome(),
       // 'none' | 'locked' | 'drawn'. The client watches this to know when to refetch.
       final_state: f.state,
+      // Whether a twelfth round is coming at all, which 'none' cannot say on its own:
+      // it means both "this event has no final round" and "it has one and it is not
+      // locked yet". The seat plan needs the difference, because it holds the column
+      // open from the moment the eleven rounds are drawn (UI-SPEC.md 7).
+      final_enabled: cfg.protocol.final_round?.enabled === true,
       // The published files themselves, whole: both are small, both are already public,
       // and handing over a subset would mean the page shows figures a reader cannot
       // trace back to a file they can hash.

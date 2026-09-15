@@ -46,11 +46,17 @@ submission window, a real timelock, a real beacon — and prints where to look:
 Sign in, pick a number, watch the other envelopes arrive, wait for the beacon, see the
 seat plan and how to recompute it — everything a player sees, in about six minutes.
 
-It then runs the **twelfth round**, where the tables are earned rather than drawn and only
-the winds are drawn. The standings are invented, because eleven rounds were not really
-played; everything after that is real, including a second beacon, the timestamped lock
-published before it exists, and a draw that nobody triggers — the server does it on its
-own timer when the beacon lands.
+It then sets up the **twelfth round**, where the tables are earned rather than drawn and
+only the winds are drawn — and stops, because the next step is yours. It prints the
+standings and sends you to the organiser's dashboard to lock them, exactly as somebody
+does at the venue: preview first, read what the checks say, then publish. That is the one
+decision a person makes in this entire protocol, and a demo that made it for you would be
+hiding the only human step in it.
+
+After you press the button nothing else is manual. The standings are invented, because
+eleven rounds were not really played; everything else is real, including a second beacon,
+the timestamped lock published before that beacon exists, and a draw that nobody
+triggers — the server does it on its own timer when the beacon lands.
 
 Ctrl+C when you are done; it runs in a throwaway copy and leaves nothing behind. Only
 Pantheon, the club's account system, is simulated. `npm run demo -- --window 600` for a
@@ -184,12 +190,13 @@ server/
   finalise.js                # the draw job and the Pantheon sync — a separate process
   schedule.js                # the timer that runs finalise.js, so no cron or systemd is needed
   rounds.js                  # voided attempts: archive, verify, and open the next one
-  admin.js                   # the organiser's read-only dashboard
+  admin.js                   # the organiser's dashboard: status, and the two things F needs
   pantheon.js                # the Pantheon boundary: Twirp client + in-process stub
   config.js  runtime.js      # the frozen half and the operational half of the configuration
   ciphertext.js  drand.js  ots.js  tlock.js  db.js  events.js  mirror.js  stats.js
 client/
   App.jsx  stages/  waiting/  explorer/  seal.js     # the player's page; seal.js is where a number is sealed
+  RollCard.jsx  FinalCard.jsx  FinalTimeline.jsx     # the two commitments, and the wait for the second
 public/
   app.js  app.css            # the built bundle — committed, part of the freeze
 docs/                        # every document, with a .zh.md beside it

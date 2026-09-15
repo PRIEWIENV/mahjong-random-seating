@@ -478,3 +478,69 @@ test('what the last action said is shown, exit code and all', () => {
   assert.match(html, /ranks 4 and 5 are tied on rating/);
   assert.match(html, /action-result fail/);
 });
+
+// ---------------------------------------------------------------------------
+// how often the page reloads itself, and the one time it must not
+// ---------------------------------------------------------------------------
+
+const refreshOf = (html) => {
+  const m = html.match(/<meta http-equiv="refresh" content="(\d+)">/);
+  return m ? Number(m[1]) : null;
+};
+
+test('the dashboard reloads quickly while something is actually in flight', () => {
+  // Thirty seconds was the whole of the old policy and it was wrong at both ends. The
+  // beacon lands and the twelfth round appears inside one minute; an organiser watching
+  // a page that updates twice in that minute is watching a page they cannot trust.
+  const locked = pageWith({
+    status: { phase: 'done', submitted_count: 12, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'locked', lock_sha256: 'a'.repeat(64), target_round: 7, anchored: true } },
+  }).html;
+  assert.equal(refreshOf(locked), 5, 'waiting for the final beacon is the fastest case there is');
+
+  for (const phase of ['awaiting_round', 'revealing']) {
+    const html = pageWith({
+      status: { phase, submitted_count: 12, drand: { healthy: true, latest_round: 1 },
+                final: { state: 'none' } },
+    }).html;
+    assert.equal(refreshOf(html), 5, `${phase} is the first draw happening`);
+  }
+
+  // Submissions arriving, and an event whose final round is over: still three times
+  // quicker than it was, without pretending either is urgent.
+  const open = pageWith({
+    status: { phase: 'open', submitted_count: 3, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'none' } },
+  }).html;
+  assert.equal(refreshOf(open), 10);
+});
+
+test('the page stops reloading while a form is on screen, and says so', () => {
+  // There is no javascript on /admin -- the CSP has no script-src at all -- so the only
+  // refresh available is a meta tag, and that is a full navigation: it empties whatever
+  // is half-typed into the substitute form on its way past. The states where a form is
+  // usable are exactly the states where nothing changes on its own, so not reloading
+  // there costs nothing and saves the operator's work.
+  const { html } = pageWith();  // done + none + csrf: both forms live
+  assert.equal(refreshOf(html), null);
+  assert.match(html, /<form /);
+  assert.match(html, /本页暂不自动刷新/, 'an operator must be told the stillness is deliberate');
+
+  // No token, no forms, so the reason is gone and the refresh comes back.
+  const noForms = pageWith({ csrf: null }).html;
+  assert.doesNotMatch(noForms, /<form /);
+  assert.equal(refreshOf(noForms), 10);
+});
+
+test('the two actions are offered only once the round-robin is actually over', () => {
+  // Before that the lock button can only fail -- lock-final.js refuses without
+  // results.json -- and a substitute is something that happens partway through an event
+  // that has started. Offering either earlier is offering a button that cannot work.
+  for (const phase of ['open', 'awaiting_round', 'revealing', 'void']) {
+    const html = pageWith({
+      status: { phase, submitted_count: 12, drand: { healthy: true, latest_round: 1 },
+                final: { state: 'none' } },
+    }).html;
+    assert.doesNotMatch(html, /<form /, `a form was offered in phase ${phase}`);
+  }
+});

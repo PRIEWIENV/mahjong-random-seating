@@ -69,11 +69,21 @@ const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', m
  *
  * Two things are simulated and nothing else is. Eleven rounds were not played, so the
  * standings are invented here and handed to the stub. Everything after that is real: a
- * real second drand round, the real lock with its real OpenTimestamps anchor, and a draw
- * that nobody triggers -- the server does it on its own timer when the beacon lands,
- * exactly as it would at a tournament.
+ * real second drand round, a real lock with a real OpenTimestamps anchor, and a draw that
+ * nobody triggers -- the server does it on its own timer when the beacon lands, exactly
+ * as it would at a tournament.
+ *
+ * What this function does NOT do any more is press the button. It used to run
+ * lock-final.js itself, which made the demo's most important minute the one minute of it
+ * that was a lie: at a real event somebody stands at the dashboard, looks at the
+ * standings the tool fetched, and decides to publish them. Automating that hid the only
+ * human decision in the whole protocol, and hid the dashboard that RUNBOOK section F is
+ * written around. So this sets the stage and then stops, and the demo waits for the
+ * person running it to lock the round the way an organiser would.
+ *
+ * The draw afterwards stays automatic, because that part genuinely is.
  */
-async function runFinalRound({ dir, run, base, cfg, playedFile, leadSec }) {
+async function runFinalRound({ dir, base, cfg, playedFile, leadSec, adminUrl }) {
   const results = JSON.parse(fs.readFileSync(path.join(dir, 'results.json'), 'utf8'));
 
   // Standings that differ every run, derived from the draw's own R so they are at least
@@ -97,17 +107,29 @@ async function runFinalRound({ dir, run, base, cfg, playedFile, leadSec }) {
     console.log(`    table ${i / 4 + 1}  ${ranked.slice(i, i + 4).map((pl) => pl.title).join('  ')}`);
   }
 
-  // T1. The tool fetches those standings through the stub, runs every check, writes the
-  // lock, mirrors it and anchors it -- then reports how much room it actually had.
-  const out = run(['tools/lock-final.js', '--in', `${leadSec}s`, '--confirm']);
-  const digest = (out.match(/sha256 ([0-9a-f]{64})/) || [])[1];
-  const round = (out.match(/final beacon +round ([0-9]+)/) || [])[1];
-  const spare = (out.match(/published with ([^ ]+) to spare/) || [])[1];
-  console.log(`  ${green('OK')}    locked: standings + drand round ${round || '?'}`);
-  if (digest) console.log(`        lock.json sha256 ${digest}`);
-  if (spare) console.log(`        published with ${spare} to spare -- measured, not assumed`);
+  // T1 is YOURS. Open the dashboard and do what the organiser does at the venue.
+  console.log(`${LF}  ${bold('Your turn.')} Nothing else happens until you lock the round.`);
+  console.log(`  Open the organiser's dashboard:  ${adminUrl}`);
+  console.log('');
+  console.log('    1. the 决赛轮 card now offers 锁定决赛轮 -- it did not a minute ago, because');
+  console.log('       the round-robin was not finished');
+  console.log(`    2. put ${bold(`${leadSec}s`)} in 信标提前量 (a real event uses the 5m default; this is a demo)`);
+  console.log('    3. press 预览（不写入） first. It fetches the standings above, runs every');
+  console.log('       check, and writes nothing -- read what it says');
+  console.log('    4. then 锁定并公布');
+  console.log('');
+  console.log(dim('  That is the one decision a person makes in this entire protocol. After it,'));
+  console.log(dim('  nobody runs the draw: the server does it when the beacon lands.'));
+}
+
+/** What the lock turned out to be, once the organiser has pressed the button. */
+function reportLock(final, base) {
+  console.log(`${LF}  ${green('OK')}    locked: standings + drand round ${final.target_round ?? '?'}`);
+  if (final.lock_sha256) console.log(`        lock.json sha256 ${final.lock_sha256}`);
+  console.log(`        anchored into Bitcoin: ${final.anchored ? 'yes' : 'not this time'}`);
   console.log(dim('        Nobody runs the draw. The server does it when that round lands.'));
-  console.log(`${LF}  Open ${base} again: the page now shows the locked tables and a countdown.`);
+  console.log(`${LF}  Open ${base} again: the page now shows the locked tables, a countdown to`);
+  console.log('  the beacon, and the twelfth column of the seat plan held open but empty.');
   console.log('  The winds are the only thing still unknown, to anyone.');
 }
 
@@ -288,9 +310,12 @@ async function main(argv) {
             // round's card appears underneath it.
             await sleep(8000);
             try {
-              await runFinalRound({ dir, run, base, cfg, playedFile, leadSec: 90 });
+              await runFinalRound({
+                dir, base, cfg, playedFile, leadSec: 90,
+                adminUrl: `${base}/admin?token=${adminToken}`,
+              });
             } catch (err) {
-              console.log(`  the final round could not be locked: ${err.message}`);
+              console.log(`  the final round could not be set up: ${err.message}`);
             }
           } else {
             console.log('  Ctrl+C to finish.');
@@ -301,6 +326,9 @@ async function main(argv) {
       const state = now.final?.state || 'none';
       if (doFinal && state !== lastFinal) {
         lastFinal = state;
+        // Locked by a person, at the dashboard, which is why this is watched for rather
+        // than printed after a call: the demo does not know when it will happen.
+        if (state === 'locked') reportLock(now.final, base);
         if (state === 'drawn') {
           console.log(`${LF}  ${green(bold('The twelfth round is drawn.'))} Nobody ran it: the server saw the beacon`);
           console.log('  land and drew the winds on its own timer. The page has the seats, the lock');

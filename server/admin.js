@@ -72,6 +72,47 @@ function bundleDigest(publicDir) {
  * Separated from the rendering so it can be asserted on directly, and so the same
  * model can be served as JSON to anyone who would rather script against it.
  */
+/**
+ * How often this page reloads itself, and when it must not.
+ *
+ * There is no javascript here -- the Content-Security-Policy on /admin is
+ * `default-src 'none'` with no script-src at all, deliberately, because a dashboard that
+ * can run code is a dashboard that can be made to run somebody else's. So the only
+ * refresh available is <meta http-equiv="refresh">, and that is a full navigation: it
+ * throws away anything typed into a form on the way past.
+ *
+ * A single interval therefore cannot be right. It was thirty seconds, which is far too
+ * slow for the minutes that matter -- the beacon lands and the twelfth round appears
+ * inside one of them -- and, at any value short enough to fix that, fast enough to wipe a
+ * half-written substitute declaration out from under the person writing it.
+ *
+ * So the interval follows what is actually happening:
+ *
+ *   FAST   something is in flight and nobody is typing: the first draw is past its
+ *          cutoff, or the final round is locked and its beacon is due. Both resolve
+ *          without anyone acting, and both are exactly what the organiser is standing
+ *          there watching.
+ *   STEADY the ordinary case -- submissions arriving, an event at rest. Still three
+ *          times quicker than before, and no form is live in these states.
+ *   NEVER  a form is on screen and can be used. The lock and substitute forms render
+ *          only in `done` + `none`, which is precisely the state where nothing changes
+ *          on its own: the round-robin is over, the twelfth round has not been asked
+ *          for, and the next event is the operator pressing something. Reloading under
+ *          their hands would destroy the only thing on this page that is theirs.
+ */
+const REFRESH_FAST = 5;
+const REFRESH_STEADY = 10;
+
+function refreshPolicy({ phase, final, csrf }) {
+  const formsLive = Boolean(csrf) && phase === 'done' && final.state === 'none';
+  if (formsLive) return { forms_live: true, refresh_seconds: null, refresh_why: 'forms' };
+  if (final.state === 'locked') return { forms_live: false, refresh_seconds: REFRESH_FAST, refresh_why: 'final' };
+  if (phase === 'awaiting_round' || phase === 'revealing') {
+    return { forms_live: false, refresh_seconds: REFRESH_FAST, refresh_why: 'draw' };
+  }
+  return { forms_live: false, refresh_seconds: REFRESH_STEADY, refresh_why: 'steady' };
+}
+
 function collect(ctx) {
   const { cfg, store, status, syncOutcome, isStub, mirror, publicDir, now } = ctx;
   // Passed in rather than read from the environment here, so the two states that matter
@@ -298,6 +339,7 @@ function collect(ctx) {
     // operator arrived, and whatever the last action said.
     csrf: ctx.csrf || null,
     token_query: ctx.tokenQuery || null,
+    ...refreshPolicy({ phase: status.phase, final: status.final || { state: 'none' }, csrf: ctx.csrf || null }),
     last_action: ctx.lastAction || null,
     // Everyone has played every game, so the standings can be locked. Read here rather
     // than in the template so the button's condition is one expression with a name.
@@ -447,7 +489,7 @@ function render(m) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<meta http-equiv="refresh" content="30">
+${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}">` : '<!-- no auto-refresh: a form is on screen and a reload would empty it -->'}
 <title>抽签管理台 · 事件 ${esc(m.event_id)}</title>
 <link rel="stylesheet" href="/admin.css">
 </head><body><main>
@@ -570,7 +612,7 @@ function render(m) {
       <pre>${esc(m.last_action.out || '')}</pre>
     </div>` : ''}
 
-    ${m.final.state === 'none' && m.csrf ? `
+    ${m.forms_live ? `
     <h3>锁定决赛轮</h3>
     <p class="detail dim flush">
       先按「预览」：它会拉回名次并把所有检查跑一遍，<strong>什么也不写</strong>。
@@ -596,7 +638,7 @@ function render(m) {
       </p>
     </form>` : ''}
 
-    ${m.csrf && m.final.state === 'none' ? `
+    ${m.forms_live ? `
     <h3>声明替补</h3>
     <p class="detail dim flush">
       替补沿用该席位原有的 Pantheon 注册位，所以这不影响抽签，只是一份公开记录。
@@ -659,7 +701,11 @@ function render(m) {
 </div>
 
 <footer>
-  ${esc(m.generated_at)} · 每 30 秒自动刷新 · 只读页面：开奖、重置、同步都只能在机器上用命令执行
+  ${esc(m.generated_at)} · ${
+    m.refresh_seconds
+      ? `每 ${m.refresh_seconds} 秒自动刷新${m.refresh_why === 'final' ? '（等信标落地）' : m.refresh_why === 'draw' ? '（开奖进行中）' : ''}`
+      : '本页暂不自动刷新：表单在屏幕上，刷新会把填到一半的内容清空。要看最新状态请按 F5'
+  } · 开奖与重置仍然只能在机器上用命令执行
 </footer>
 </main></body></html>`;
 }
