@@ -113,6 +113,25 @@ function refreshPolicy({ phase, final, csrf }) {
   return { forms_live: false, refresh_seconds: REFRESH_STEADY, refresh_why: 'steady' };
 }
 
+/**
+ * The drawn final round's tables, or null.
+ *
+ * Read here rather than taken from the status payload: `finalSummary()` is sized for
+ * twelve polling browsers and stops at the lock. Never fatal — a half-written final.json
+ * must not take the dashboard down with it, since the dashboard is where you would go to
+ * find out why.
+ */
+function readFinalSeating(root) {
+  try {
+    const f = JSON.parse(fs.readFileSync(path.join(root, 'final.json'), 'utf8'));
+    const round = f.seating?.rounds?.[0];
+    if (!round) return null;
+    return { round: round.round, tables: round.tables };
+  } catch {
+    return null;
+  }
+}
+
 function collect(ctx) {
   const { cfg, store, status, syncOutcome, isStub, mirror, publicDir, now } = ctx;
   // Passed in rather than read from the environment here, so the two states that matter
@@ -330,6 +349,10 @@ function collect(ctx) {
     final_round_enabled: Boolean(cfg.protocol.final_round?.enabled),
     final: status.final || { state: 'none' },
     final_digest: digestOf(path.join(cfg.root, 'final.json')),
+    // The twelfth round's actual seats. The player-facing summary deliberately carries
+    // only the lock, because twelve browsers poll it; the operator is the one person who
+    // has to read the round out to a room, so the dashboard reads the file.
+    final_seating: readFinalSeating(cfg.root),
     // Seats that changed hands (PROTOCOL.md 11.6). The organiser is the one person who
     // can still correct this before it is locked, so it belongs on their page while it
     // is still correctable rather than only on the player-facing result afterwards.
@@ -461,9 +484,86 @@ form button.danger:hover{background:var(--fail);color:#fff}
 .action-result pre{margin:.3rem 0 0;white-space:pre-wrap;word-break:break-word;
   font-size:.8rem;line-height:1.45;color:var(--ink)}
 
+/* ---- the layout the operator arranges --------------------------------------
+   Each card has a head with its own controls, and the head is the drag handle. The
+   controls are quiet until the card is hovered or something inside it has focus: this
+   page is read far more often than it is rearranged, and four buttons on every card at
+   full strength would be four buttons competing with the numbers they sit above. */
+.card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;cursor:grab}
+.card-head h2{margin:0}
+.card-tools{display:flex;gap:2px;opacity:0;transition:opacity 120ms}
+.card:hover .card-tools,.card:focus-within .card-tools{opacity:1}
+@media (hover:none){.card-tools{opacity:.6}}
+.card-btn{font:inherit;font-size:12px;line-height:1;padding:3px 7px;cursor:pointer;
+  border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--dim)}
+.card-btn:hover{border-color:var(--accent);color:var(--accent)}
+.card-body{margin-top:10px}
+.card.dragging{opacity:.5;outline:2px dashed var(--accent)}
+.bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+/* Removed cards are listed by name, not by an icon: "+ 服务器日志" is the only label
+   that tells an operator what pressing it brings back. */
+.bar [data-palette]{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ---- the log ---------------------------------------------------------------
+   A terminal, on a page that is not one: monospace, fixed height so the card does not
+   grow without bound, and its own scroller so following the tail does not drag the whole
+   dashboard down with it. */
+.log-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 8px}
+.log-controls label.check{display:flex;align-items:center;gap:5px;margin:0;color:var(--ink)}
+.log-controls input[data-log-filter]{font:inherit;font-size:.85rem;padding:.2rem .4rem;
+  border:1px solid var(--line);border-radius:4px;background:var(--card);color:var(--ink)}
+.logview{margin:0;height:300px;overflow:auto;overscroll-behavior:contain;
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;
+  font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;
+  word-break:break-word}
+.logline{display:block}
+.logline.err{color:var(--fail)}
+.logtime{color:var(--dim);margin-right:10px}
+
+/* The final round's seats, once they are drawn: the one table on this page that gets
+   read out loud to a room, so the table numbers keep the colours the seat plan uses. */
+table.seating td .tbl{border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}
+table.seating td .tbl.t1{background:#2f6f8f22;color:#2f6f8f}
+table.seating td .tbl.t2{background:#8a5a1222;color:#8a5a12}
+table.seating td .tbl.t3{background:#6a4b8a22;color:#6a4b8a}
+@media (prefers-color-scheme:dark){
+  table.seating td .tbl.t1{background:#7fb6d422;color:#7fb6d4}
+  table.seating td .tbl.t2{background:#d8a75a22;color:#d8a75a}
+  table.seating td .tbl.t3{background:#b49ad422;color:#b49ad4}
+}
+
 `;
 
-function render(m) {
+/**
+ * The dashboard, as a set of cards that refresh independently.
+ *
+ * It used to be one template and one `<meta http-equiv="refresh">`, and the whole page
+ * blinked on a single interval — which is why the interval could never be right. Ten
+ * seconds is too slow for the minute the beacon lands in and too fast for a page with a
+ * half-typed form on it, and no single number fixes both.
+ *
+ * So each card declares its own cadence, and the client fetches only the cards that are
+ * due. `every: null` means "never on a timer": the final-round card while its forms are
+ * usable, and the log, which streams its own way. The rest sit between five seconds and
+ * a minute depending on how fast what they show can actually change — the roster moves
+ * every time somebody submits, the frozen artefact digests cannot move at all while the
+ * process is up.
+ *
+ * Every card is addressable (`id`), so the same registry serves three things that would
+ * otherwise be three implementations: the first full-page render, the partial refresh,
+ * and the palette of cards an operator can remove and put back.
+ */
+/**
+ * The dashboard's client, served verbatim at /admin.js.
+ *
+ * A file rather than a string in this one, so it is real javascript: node --check
+ * parses it, an editor highlights it, and a syntax error is caught at require time
+ * instead of arriving at a browser as a blank dashboard. Read once at startup, because
+ * it cannot change while the process is up.
+ */
+const SCRIPT = fs.readFileSync(path.join(__dirname, 'admin-client.js'), 'utf8');
+
+function cardRegistry(m) {
   const pct = m.total_slots ? (m.submitted_count / m.total_slots) * 100 : 0;
   const quorumPct = m.total_slots ? (m.quorum / m.total_slots) * 100 : 0;
   const missing = m.roster.filter((r) => !r.submitted);
@@ -484,25 +584,12 @@ function render(m) {
 
   const kv = (k, v) => `<div class="kv"><dt>${esc(k)}</dt><dd>${v}</dd></div>`;
 
-  return `<!doctype html>
-<html lang="zh"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}">` : '<!-- no auto-refresh: a form is on screen and a reload would empty it -->'}
-<title>抽签管理台 · 事件 ${esc(m.event_id)}</title>
-<link rel="stylesheet" href="/admin.css">
-</head><body><main>
-
-<h1>抽签管理台</h1>
-<p class="sub">Pantheon 事件 ${esc(m.event_id)} · 第 ${m.attempt} 次开奖 ·
-  <span class="badge b-${esc(m.phase)}">${esc(m.phase)}</span> ·
-  ${esc(m.node_env)} / pantheon:${esc(m.pantheon_mode)}</p>
-
-<div class="grid">
-
-  <div class="card">
-    <h2>提交进度（RUNBOOK 13）</h2>
+  return [
+    {
+      id: 'submissions',
+      title: '提交进度（RUNBOOK 13）',
+      every: 5,
+      body: () => `
     <div class="big">${m.submitted_count} / ${m.total_slots}</div>
     <div class="track">
       <div class="fill w-${Math.round(pct)}"></div>
@@ -511,45 +598,85 @@ ${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}"
     <p class="detail dim flush">
       门槛 ${m.quorum} 位${m.submitted_count >= m.quorum ? '，已达到' : `，还差 ${m.quorum - m.submitted_count} 位`}
     </p>
-    ${missing.length ? `<p class="chase">待催办：<strong>${missing.map((r) => esc(r.title)).join('、')}</strong></p>` : ''}
-  </div>
+    ${missing.length ? `<p class="chase">待催办：<strong>${missing.map((r) => esc(r.title)).join('、')}</strong></p>` : ''}`,
+    },
 
-  <div class="card">
-    <h2>开奖</h2>
+    {
+      id: 'draw',
+      title: '开奖',
+      every: 5,
+      body: () => `
     <dl>
       ${kv('target_round', `<span class="mono">${m.target_round}</span>`)}
       ${kv('截止', `<span class="mono">${esc(m.cutoff_utc)}</span>`)}
       ${kv(m.cutoff_in_ms >= 0 ? '距截止' : '已过截止', duration(m.cutoff_in_ms))}
       ${kv('drand 最新轮次', `<span class="mono">${m.drand?.latest_round ?? '—'}</span>`)}
       ${kv('drand 状态', m.drand?.healthy ? '可达' : '<span class="fail">无应答</span>')}
-    </dl>
-  </div>
+    </dl>`,
+    },
 
-  <div class="card wide">
-    <h2>上线前检查</h2>
-    ${m.checks.map(checkRow).join('')}
-  </div>
+    {
+      id: 'log',
+      title: '服务器日志',
+      wide: true,
+      // Not on the card timer: it appends new lines from its own endpoint rather than
+      // re-rendering, so a screenful of scrollback survives and the view does not jump.
+      every: null,
+      body: () => `
+    <p class="detail dim flush">
+      这台服务器自己打印的东西，最近 ${m.log_capacity} 行。开奖任务和决赛抽签任务的输出也在里面——
+      它们由 server/schedule.js 转回主进程。日志只在内存里，重启就没了。
+    </p>
+    <div class="log-controls">
+      <label class="check"><input type="checkbox" data-log-follow checked> 跟随最新</label>
+      <input data-log-filter placeholder="过滤，如 finalise" size="18">
+      <span class="dim" data-log-state>连接中…</span>
+    </div>
+    <pre class="logview" data-logview aria-live="polite"></pre>`,
+    },
 
-  <div class="card wide">
-    <h2>名册（只显示是否提交与时间，绝不显示内容）</h2>
+    {
+      id: 'checks',
+      title: '上线前检查',
+      wide: true,
+      every: 30,
+      body: () => m.checks.map(checkRow).join(''),
+    },
+
+    {
+      id: 'roster',
+      title: '名册（只显示是否提交与时间，绝不显示内容）',
+      wide: true,
+      every: 5,
+      body: () => `
     <table>
       <tr><th>local_id</th><th>玩家</th><th>状态</th><th>收到时间</th></tr>
       ${[...m.roster].sort((a, b) => (a.submitted === b.submitted ? a.local_id - b.local_id : a.submitted ? 1 : -1)).map(rosterRow).join('')}
-    </table>
-  </div>
+    </table>`,
+    },
 
-  <div class="card wide">
-    <h2>冻结物件指纹</h2>
+    {
+      id: 'artefacts',
+      title: '冻结物件指纹',
+      wide: true,
+      // Frozen means frozen: these cannot change while the process is up, and a card
+      // that re-fetches what cannot change is a card teaching you to ignore the page.
+      every: null,
+      body: () => `
     <dl>
       ${Object.entries(m.artefacts).map(([k, v]) => kv(k, `<span class="mono">${v ? esc(v) : '缺失'}</span>`)).join('')}
       ${kv('schedule_template_ref', `<span class="mono">${esc(m.tag_refs.schedule_template_ref || '—')}</span>`)}
       ${kv('generate_script_ref', `<span class="mono">${esc(m.tag_refs.generate_script_ref || '—')}</span>`)}
-    </dl>
-  </div>
+    </dl>`,
+    },
 
-  ${m.result ? `
-  <div class="card wide">
-    <h2>结果（RUNBOOK 14）</h2>
+    {
+      id: 'result',
+      title: '结果（RUNBOOK 14）',
+      wide: true,
+      every: 15,
+      when: () => Boolean(m.result),
+      body: () => `
     <dl>
       ${kv('round_used', `<span class="mono">${m.result.round_used}</span>`)}
       ${kv('参与 / 排除', `${m.result.participating} / ${m.result.excluded.length}`)}
@@ -562,22 +689,33 @@ ${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}"
     <p class="detail dim">
       复算：<code>node generate.js --verify results.json</code>，
       点名核对会自动读取 <code>events/snapshot.json</code>。
-    </p>
-  </div>` : ''}
+    </p>`,
+    },
 
-  ${m.final_round_enabled ? `
-  <div class="card wide">
-    <h2>决赛轮（PROTOCOL §11）</h2>
+    {
+      id: 'final',
+      title: '决赛轮（PROTOCOL §11）',
+      wide: true,
+      // The forms are the exception the whole refresh policy is built around: a partial
+      // refresh replaces this card's markup, and a form inside it would lose whatever is
+      // half-typed. While they are usable the card holds still.
+      every: m.forms_live ? null : 5,
+      when: () => m.final_round_enabled,
+      body: () => `
     <p class="detail dim flush">
       桌次由前 ${m.final.round ? m.final.round - 1 : 11} 轮名次决定，风位由一次新的 drand 抽签决定。
       名次与信标轮次都在信标出块<strong>之前</strong>锁定并公开。
     </p>
-    ${m.final.state === 'none' ? `
-    <p class="chase">还没有锁定。循环赛打完之后，用下面的表单；也可以在服务器上跑 <code>node tools/lock-final.js --in 5m --confirm</code>。</p>` : `
+    ${m.final.state === 'none' ? (m.forms_live ? `
+    <p class="chase">还没有锁定。用下面的表单；也可以在服务器上跑 <code>node tools/lock-final.js --in 5m --confirm</code>。</p>` : `
+    <p class="chase">还没有锁定，现在也还不能锁定：循环赛还没打完（当前阶段
+      <span class="badge b-${esc(m.phase)}">${esc(m.phase)}</span>）。等结果出来、阶段变成
+      <span class="badge b-done">done</span> 之后，这里会出现锁定与替补两个表单。
+      在那之前 <code>node tools/lock-final.js</code> 也会因为没有 <code>results.json</code> 而拒绝。</p>`) : `
     <dl>
       ${kv('状态', m.final.state === 'drawn'
         ? '<span class="ok">已抽签</span>'
-        : '<span class="mono">已锁定，等待信标</span>')}
+        : '<span class="badge b-awaiting_round">已锁定，等信标</span>')}
       ${kv('锁定时间', `<span class="mono">${esc(m.final.locked_at || '')}</span>`)}
       ${kv('lock.json sha256', `<span class="mono">${esc(m.final.lock_sha256 || '')}</span>`)}
       ${kv('时间戳存证', m.final.anchored
@@ -599,6 +737,21 @@ ${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}"
       这些席位保留了原有的 Pantheon 注册位，所以名次表仍是一人一行，桌次与没有换人时完全一致。
       记录会被抄进 lock.json，与名次同一个指纹、同一个时间戳。
     </p>` : ''}
+
+    ${m.final_seating ? `
+    <h3>第 ${m.final_seating.round} 轮座位</h3>
+    <p class="detail dim flush">抽签已完成。这就是要念给场地的那张表。</p>
+    <table class="seating">
+      <tr><th>桌</th><th>东</th><th>南</th><th>西</th><th>北</th></tr>
+      ${m.final_seating.tables.map((tb) => `
+      <tr>
+        <td><span class="tbl t${tb.table}">第 ${tb.table} 桌</span></td>
+        ${['E', 'S', 'W', 'N'].map((w) => {
+          const st = tb.seats[w];
+          return `<td>${esc(st.title || '')}<span class="dim mono"> #${st.local_id}</span></td>`;
+        }).join('')}
+      </tr>`).join('')}
+    </table>` : ''}
 
     <p class="detail dim">
       ${m.final.state === 'drawn'
@@ -636,9 +789,8 @@ ${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}"
         <button name="mode" value="preview" type="submit">预览（不写入）</button>
         <button name="mode" value="confirm" type="submit" class="danger">锁定并公布</button>
       </p>
-    </form>` : ''}
+    </form>
 
-    ${m.forms_live ? `
     <h3>声明替补</h3>
     <p class="detail dim flush">
       替补沿用该席位原有的 Pantheon 注册位，所以这不影响抽签，只是一份公开记录。
@@ -664,12 +816,16 @@ ${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}"
         <input name="reason" size="48" required placeholder="联赛规则 9c：伤病退赛，由候补名单首位递补">
       </label>
       <p><button type="submit">记录</button></p>
-    </form>` : ''}
-  </div>` : ''}
+    </form>` : ''}`,
+    },
 
-  ${m.pantheon_sync ? `
-  <div class="card wide">
-    <h2>Pantheon 同步（RUNBOOK 15）</h2>
+    {
+      id: 'sync',
+      title: 'Pantheon 同步（RUNBOOK 15）',
+      wide: true,
+      every: 15,
+      when: () => Boolean(m.pantheon_sync),
+      body: () => `
     <dl>
       ${kv('状态', m.pantheon_sync.status === 'ok'
         ? '<span class="ok">ok</span>'
@@ -677,37 +833,103 @@ ${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}"
       ${kv('时间', `<span class="mono">${esc(m.pantheon_sync.at || '')}</span>`)}
       ${kv('尝试次数', esc(m.pantheon_sync.attempts ?? ''))}
     </dl>
-    ${m.pantheon_sync.remedy ? `<p class="fail">${esc(m.pantheon_sync.remedy)}</p>` : ''}
-  </div>` : ''}
+    ${m.pantheon_sync.remedy ? `<p class="fail">${esc(m.pantheon_sync.remedy)}</p>` : ''}`,
+    },
 
-  ${m.attempts.length ? `
-  <div class="card wide">
-    <h2>历次尝试</h2>
+    {
+      id: 'attempts',
+      title: '历次尝试',
+      wide: true,
+      every: 60,
+      when: () => m.attempts.length > 0,
+      body: () => `
     <table>
       <tr><th>#</th><th>target_round</th><th>结果</th><th>提交数</th><th>存证</th></tr>
       ${m.attempts.map((a) => `<tr>
         <td>${a.attempt}</td>
         <td class="mono">${a.target_round}</td>
-        <td>${esc(a.status)}</td>
+        <td>${esc(a.outcome)}</td>
         <td>${a.submitted_count} / ${a.quorum}</td>
         <td><a href="/${esc(a.archive)}/manifest.json">manifest</a></td>
       </tr>`).join('')}
     </table>
     <p class="detail dim">
       作废轮次的密文、名册和当时的参数都已存档，任何人都能自行核对。
-    </p>
-  </div>` : ''}
+    </p>`,
+    },
+  ].filter((c) => (c.when ? c.when() : true));
+}
 
+/** One card's shell. The body is separate so a refresh can replace only that. */
+function cardHtml(card) {
+  return `<section class="card${card.wide ? ' wide' : ''}" data-card="${card.id}"` +
+    `${card.every ? ` data-every="${card.every}"` : ''}>` +
+    `<div class="card-head">` +
+    `<h2>${esc(card.title)}</h2>` +
+    `<div class="card-tools">` +
+    `<button type="button" class="card-btn" data-move="up" title="上移" aria-label="上移">&uarr;</button>` +
+    `<button type="button" class="card-btn" data-move="down" title="下移" aria-label="下移">&darr;</button>` +
+    `<button type="button" class="card-btn" data-wide title="宽窄" aria-label="宽窄">&harr;</button>` +
+    `<button type="button" class="card-btn" data-hide title="移除" aria-label="移除">&times;</button>` +
+    `</div></div>` +
+    `<div class="card-body">${card.body()}</div>` +
+    `</section>`;
+}
+
+/** The bodies alone, for a partial refresh. */
+function renderCardBodies(m, only) {
+  const wanted = only && only.length ? new Set(only) : null;
+  const out = {};
+  for (const card of cardRegistry(m)) {
+    if (wanted && !wanted.has(card.id)) continue;
+    out[card.id] = card.body();
+  }
+  return out;
+}
+
+function render(m) {
+  const cards = cardRegistry(m);
+  return `<!doctype html>
+<html lang="zh"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+${/* The no-javascript fallback, and only that. With the script running, each card
+      refreshes on its own cadence and a whole-page reload would throw away the layout
+      the operator arranged and the log they had scrolled back through. Without it, this
+      is the page exactly as it behaved before. */''}
+<noscript>${m.refresh_seconds ? `<meta http-equiv="refresh" content="${m.refresh_seconds}">` : '<!-- no auto-refresh: a form is on screen and a reload would empty it -->'}</noscript>
+<title>抽签管理台 · 事件 ${esc(m.event_id)}</title>
+<link rel="stylesheet" href="/admin.css">
+<script src="/admin.js" defer></script>
+</head><body><main>
+
+<h1>抽签管理台</h1>
+<p class="sub">Pantheon 事件 ${esc(m.event_id)} · 第 ${m.attempt} 次开奖 ·
+  <span class="badge b-${esc(m.phase)}">${esc(m.phase)}</span> ·
+  ${esc(m.node_env)} / pantheon:${esc(m.pantheon_mode)}</p>
+
+<div class="bar" data-bar hidden>
+  <span class="dim">已移除：</span>
+  <span data-palette></span>
+  <button type="button" class="card-btn" data-reset>恢复默认布局</button>
+</div>
+
+<div class="grid" data-grid>
+${cards.map(cardHtml).join('\n')}
 </div>
 
 <footer>
-  ${esc(m.generated_at)} · ${
+  ${esc(m.generated_at)} · <span data-refresh-note>${
     m.refresh_seconds
-      ? `每 ${m.refresh_seconds} 秒自动刷新${m.refresh_why === 'final' ? '（等信标落地）' : m.refresh_why === 'draw' ? '（开奖进行中）' : ''}`
-      : '本页暂不自动刷新：表单在屏幕上，刷新会把填到一半的内容清空。要看最新状态请按 F5'
-  } · 开奖与重置仍然只能在机器上用命令执行
+      ? `每张卡片按自己的节奏刷新${m.refresh_why === 'final' ? '（等信标落地）' : m.refresh_why === 'draw' ? '（开奖进行中）' : ''}`
+      : '决赛轮的表单在屏幕上，那张卡片会停住不刷新，以免把填到一半的内容清空'
+  }</span> · 开奖与重置仍然只能在机器上用命令执行
 </footer>
 </main></body></html>`;
 }
 
-module.exports = { collect, render, bundleDigest, ADMIN_STYLE: STYLE };
+module.exports = {
+  collect, render, renderCardBodies, cardRegistry, bundleDigest,
+  ADMIN_STYLE: STYLE, ADMIN_SCRIPT: SCRIPT,
+};

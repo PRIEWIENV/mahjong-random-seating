@@ -146,7 +146,7 @@ export default function Result({ status, me, result, serverNow }) {
 
   return (
     <div className="stage result">
-      <section className="card next-up">
+      <section className={`card next-up${isFinalHeadline ? ' final-accent' : ''}`}>
         <p className="eyebrow">{t.eyebrow}</p>
         {mine ? (
           <h1>
@@ -190,14 +190,16 @@ export default function Result({ status, me, result, serverNow }) {
             </li>
           </ol>
         </details>
-      </section>
 
-      {result.final && (() => {
-        const [fa, fsha, fb] = t.f1files(result.final.lock_sha256 || '');
-        const [f2a, f2round, f2b] = t.f2(result.final.round_used);
-        return (
-          <section className="card next-up final-verify">
-            <details className="verify">
+        {/* The second draw's checks, in the same card and directly under the first
+            draw's. They were a card of their own, which put a whole panel's worth of
+            weight on what is a second half of one procedure: two draws, checked the same
+            way, one place to go and check them. */}
+        {result.final && (() => {
+          const [fa, fsha, fb] = t.f1files(result.final.lock_sha256 || '');
+          const [f2a, f2round, f2b] = t.f2(result.final.round_used);
+          return (
+            <details className="verify final-verify">
               <summary>{t.finalVerify}</summary>
               <ol>
                 <li>
@@ -218,9 +220,29 @@ export default function Result({ status, me, result, serverNow }) {
                 </li>
               </ol>
             </details>
-          </section>
-        );
-      })()}
+          );
+        })()}
+      </section>
+
+      {/* The countdown to the second beacon, ABOVE the seat plan rather than below it.
+          It is the only thing on this page that is still happening; the seat plan is
+          eleven rounds that already have. Putting the live thing under three screens of
+          settled data is telling somebody to scroll for the news. Shown only while the
+          round is locked: once the winds are drawn, the round they were drawn for is the
+          headline at the top of this page, and a finished progress bar would be the one
+          element still talking about the wait. */}
+      {status?.final?.state === 'locked' && (
+        <FinalTimeline final={status.final} drand={status.drand} serverNow={serverNow} />
+      )}
+
+      {/* The final round's commitment, shown from the moment it is locked — which is
+          weeks before it is opened, and is the only moment at which comparing its
+          digest with eleven other people proves anything (PROTOCOL.md §11). It stays
+          beside the timeline rather than below the grid for the same reason. */}
+      {status?.final && status.final.state !== 'none' && (
+        <FinalCard final={status.final} result={result} players={status.players}
+          substitutes={result?.substitutes || []} />
+      )}
 
       <Explorer result={result} me={me} />
 
@@ -228,21 +250,6 @@ export default function Result({ status, me, result, serverNow }) {
           start being checkable. Offering them only during the wait meant the download
           disappeared at the exact moment someone might want to recompute the result
           from it. Same file, same fingerprint, same timestamp proof. */}
-      {/* The countdown to the second beacon, for the minutes it is running. It is shown
-          only while the round is locked: once the winds are drawn, the round they were
-          drawn for is the headline at the top of this page, and a finished progress bar
-          under it would be the one element still talking about the wait. */}
-      {status?.final?.state === 'locked' && (
-        <FinalTimeline final={status.final} drand={status.drand} serverNow={serverNow} />
-      )}
-
-      {/* The final round's commitment, shown from the moment it is locked — which is
-          weeks before it is opened, and is the only moment at which comparing its
-          digest with eleven other people proves anything (PROTOCOL.md §11). */}
-      {status?.final && status.final.state !== 'none' && (
-        <FinalCard final={status.final} result={result} players={status.players}
-          substitutes={result?.substitutes || []} />
-      )}
 
       {status?.roll && <RollCard roll={status.roll} sealed={false} />}
     </div>

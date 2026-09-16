@@ -55,7 +55,8 @@ const { freyPublicUrl, freyPublicUrlIsLocal } = require('./runtime');
 /** How long before the cutoff the page switches to its lively cadence. */
 const LIVELY_BEFORE_CUTOFF_MS = 3 * 60_000;
 const { computeStats } = require('./stats');
-const { collect, render, ADMIN_STYLE } = require('./admin');
+const { collect, render, renderCardBodies, cardRegistry, ADMIN_STYLE, ADMIN_SCRIPT } = require('./admin');
+const logbuf = require('./logbuf');
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'mjs_session';
@@ -167,6 +168,12 @@ function createServer(opts = {}) {
   // there at all, rather than there and asking for a password: an organiser who never
   // set one has not accidentally published a roster and a submission timeline.
   const adminToken = opts.adminToken ?? process.env.ADMIN_TOKEN ?? null;
+  // The dashboard can now show this process's own log, so anything that would hand
+  // somebody the keys must not be in it. The token is the only such string the server
+  // holds; registering it here means a line that happens to carry it — a request log
+  // somebody adds later, a stack trace with a URL in it — is scrubbed before it is
+  // stored rather than after somebody notices.
+  logbuf.redact(adminToken);
   const isStub = pantheon.constructor?.name === 'StubPantheon';
 
   // ---- the event's name, fetched once ------------------------------------
@@ -998,6 +1005,49 @@ function createServer(opts = {}) {
     return send(res, 303, '', { location: back, 'content-type': 'text/plain; charset=utf-8' });
   }
 
+  /**
+   * The dashboard's own client, and the two endpoints it talks to.
+   *
+   * All three are behind `adminAuthorised`, the same gate as the page: a partial refresh
+   * carries exactly what the page carries, so serving it more cheaply must not serve it
+   * more widely. The log is the one that would be a new disclosure if it were not — it
+   * holds what this process prints to its terminal — so it is gated, capped, and scrubbed
+   * of the admin token before a line ever reaches the buffer (server/logbuf.js).
+   */
+  function adminCards(req, res, url) {
+    if (!adminAuthorised(req, url)) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+    const model = adminModel(req, url);
+    const only = (url.searchParams.get('only') || '').split(',').map((s) => s.trim()).filter(Boolean);
+    return sendJson(res, 200, {
+      generated_at: model.generated_at,
+      cards: renderCardBodies(model, only),
+      // Which cards apply at all right now. A card that has appeared or gone (the first
+      // result, a final round that has just been enabled) is a change of page shape, not
+      // of contents, and the client reloads rather than trying to build a shell.
+      cards_present: cardRegistry(model).map((c) => c.id),
+    });
+  }
+
+  function adminLog(req, res, url) {
+    if (!adminAuthorised(req, url)) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+    const since = Number(url.searchParams.get('since') || 0);
+    const out = logbuf.since(Number.isFinite(since) ? since : 0);
+    return sendJson(res, 200, { ...out, capacity: logbuf.MAX_LINES });
+  }
+
+  function adminModel(req, url) {
+    return collect({
+      cfg, store, status: status(), syncOutcome: syncOutcome(),
+      isStub, mirror, publicDir, now: nowFn(),
+      production: secureCookie,
+      overTls: overTls(req),
+      adminCredential: adminCredentialStatus(),
+      csrf: csrfFor(req, url),
+      tokenQuery: url.searchParams.get('token') || null,
+      lastAction: lastAdminAction,
+    });
+  }
+
   function admin(req, res, url) {
     if (!adminAuthorised(req, url)) {
       // 404, not 401: an unauthenticated probe learns nothing, not even that the page
@@ -1030,8 +1080,16 @@ function createServer(opts = {}) {
       // form-action is listed explicitly because it does NOT fall back to default-src:
       // leaving it out would let the dashboard's own POSTs be aimed anywhere by injected
       // markup, and 'none' above would not have stopped it.
+      // script-src and connect-src are the two the dashboard's own client needs, and
+      // both are 'self' with no 'unsafe-inline' and no 'unsafe-eval': the script is a
+      // file from this origin (/admin.js), there is not one inline handler on the page,
+      // and nothing is evaluated. Whatever the proxy's header also says, the deployed
+      // page is held to both — deploy/nginx.conf and deploy/Caddyfile already allow
+      // exactly these two, and form-action there had to be widened to 'self' to match
+      // the forms this page grew.
       'content-security-policy':
-        "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; " +
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       'referrer-policy': 'no-referrer',
       'x-robots-tag': 'noindex, nofollow',
     };
@@ -1124,6 +1182,15 @@ function createServer(opts = {}) {
       // behind the cookie would not work anyway — `Path=/admin` does not match
       // `/admin.css`, so the browser would never send it and the page would arrive
       // unstyled for exactly the reason this change exists to fix.
+      if (req.method === 'GET' && p === '/admin.js') {
+        return send(res, 200, ADMIN_SCRIPT, {
+          'content-type': 'text/javascript; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        });
+      }
+      if (req.method === 'GET' && p === '/admin/cards.json') return adminCards(req, res, url);
+      if (req.method === 'GET' && p === '/admin/log.json') return adminLog(req, res, url);
       if (req.method === 'GET' && p === '/admin.css') {
         return send(res, 200, ADMIN_STYLE, {
           'content-type': 'text/css; charset=utf-8',
@@ -1379,6 +1446,10 @@ if (require.main === module) {
   // the operator put the deployment's whole configuration in .env, and until now only
   // the systemd unit was reading it.
   const envFile = loadEnvFile();
+  // Tee stdout and stderr into the ring the dashboard reads. Started before anything
+  // prints, so the log card opens with the startup banner that says which event, which
+  // Pantheon and which port — which is most of what you go to a log for.
+  logbuf.attach();
   let port;
   let host;
   try {

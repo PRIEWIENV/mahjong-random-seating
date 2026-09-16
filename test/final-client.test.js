@@ -381,7 +381,10 @@ test('the reserved column is drawn as reserved, not as a dim version of a drawn 
   // Drawn is the emphatic state; pending is visibly unfilled.
   assert.match(css, /table\.grid th\.final:not\(\.fin-pending\) \{ background: var\(--t3-soft\)/);
   assert.match(css, /table\.grid td\.final\.fin-pending \{/);
-  assert.match(css, /border-left-style: dashed/);
+  // And the pending column carries no rule down its side at all: a dashed hairline
+  // beside a column of empty cells was furniture, not signal.
+  assert.match(css, /th\.final\.fin-pending::before[\s\S]{0,120}?content: none;/);
+  assert.doesNotMatch(css, /border-left-style: dashed/);
 });
 
 // ---------------------------------------------------------------------------

@@ -1974,6 +1974,78 @@ about *the wait for it*. The waiting stage got a timeline, a live beacon round, 
 "the job is late" state and a countdown driven by server time, and then the second draw —
 which is the same protocol with the same beacon and the same stakes — got a sentence.
 
+## 6af. The dashboard gets a script, and what that cost
+
+Twelve pieces of feedback on the twelfth round. Eight were the page not looking like what
+it is — a green card for a purple round, a circular table inside a square of chairs, a
+countdown three screens below the thing it counts down to. Those are worth one paragraph
+between them, and the paragraph is that **colour is a claim**: the final round's cards were
+built as the roll card's twins, class for class, and inherited its green, so a player
+scrolling past read "this is the same block again" at the exact point where the point is
+that it is a second draw, weeks later, on a different beacon. Rebinding `--accent` inside
+those subtrees fixes every element at once — border, digest, copy button, note, proof
+panel, timeline fill, live round — and fixes the ones added next year too. Restating a
+colour per rule would have been the same work, done worse, forever. The same trick gives
+each round-lens table figure its own table's colour, which is what the reader clicked on to
+get there.
+
+The other four were one decision: **the dashboard needed javascript, and it had none on
+purpose.**
+
+The comment in `server/server.js` had been explicit that `/admin`'s CSP was
+`default-src 'none'` with no `script-src` at all, because a dashboard that can run code is
+a dashboard that can be made to run somebody else's. Three of the twelve requests — refresh
+each card on its own clock, show the server log, let the operator arrange the page — cannot
+be done without one. So the rule changes, and it changes to the narrowest thing that works:
+`script-src 'self'; connect-src 'self'`, one file from this origin, no `unsafe-inline`, no
+`unsafe-eval`, not one inline handler on the page. What was bought with it is worth stating,
+because the security argument for the old position was real:
+
+- **One interval for the whole page could never be right.** Ten seconds is too slow for the
+  minute the beacon lands in and fast enough to wipe a half-typed substitute declaration,
+  and no number fixes both. Each card now declares its own cadence and the client fetches
+  only the cards that are due; the card holding the forms declares `null` while they are
+  usable, and the client additionally refuses to replace any card holding a focused or
+  dirty field. Belt and braces, because the two failure modes are silent.
+- **The log.** The operator's machine is a VPS they reached once with ssh and would rather
+  not reach again mid-event, and the log is precisely what separates "the beacon is late"
+  from "the job is dead". It is captured by teeing `process.stdout.write` and
+  `process.stderr.write` rather than by wrapping the logger, which is the one interception
+  point that also catches the finalise and draw jobs — `server/schedule.js` pipes their
+  output back through `log.info`, and a future call site that uses neither would still pass
+  through the streams. Bounded ring, ANSI stripped, and the admin token registered for
+  redaction **on the way in**, so it is never in memory to leak through a later bug.
+- **The layout** lives in `localStorage`, which is the right store for exactly this: a
+  preference of one person at one screen, which must survive a refresh and must never be
+  something a second operator inherits or the server has an opinion about. Unknown ids are
+  ignored and missing ones fall in at the end, so a release that adds a card does not
+  strand somebody with a stale arrangement.
+
+The whole-page `<meta http-equiv="refresh">` is now inside `<noscript>`, so a browser with
+scripting off gets exactly the page it got before.
+
+Two things fell out of doing this that were not asked for and were worse than anything that
+was.
+
+**`form-action 'none'` in the deployed CSP.** The header the application sends is not the
+header the browser enforces: nginx and Caddy add their own, and a response carrying two is
+held to both. `deploy/nginx.conf` and `deploy/Caddyfile` both said `form-action 'none'` —
+correct when they were written, because the dashboard was read-only — and the two forms
+added since would have been **blocked in the browser on every deployed instance**, with the
+application's own `form-action 'self'` making no difference at all. It works in every test
+and every rehearsal here, because nothing in this repository sends the proxy's header. The
+comment in `server.js` explaining the intersection rule was already there; it was written
+about `style-src` and not re-read when the forms arrived.
+
+**A third untracked-file failure in one day.** `server/logbuf.js`, `server/admin-client.js`
+and the new test were invisible to `tools/rehearse.js`, which builds its sandbox from
+`git ls-files` — the same shape as the morning's `client/app.jsx` case-mismatch and the
+afternoon's `client/FinalTimeline.jsx`. Three times in one session is not a coincidence, it
+is a property of the workflow: work is written in the tree, and every gate that matters
+(rehearsal, CI, freeze) reads the index. The guard added in `test/checkout.test.js` catches
+a tracked file spelt differently; it cannot catch a file that was never added, because from
+the index's point of view there is nothing there to compare.
+
 ## 10. What was verified, and how
 
 | Check | Status |

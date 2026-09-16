@@ -40,7 +40,12 @@ example.com {
 		# browser enforces both at once, so what applies is the intersection. Removing a
 		# source here removes it from the dashboard too, however the app is configured.
 		# Keep 'self' on script-src and style-src.
-		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.drand.sh https://api2.drand.sh https://api3.drand.sh https://drand.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		#
+		# form-action MUST be 'self', not 'none'. The organiser's dashboard posts two
+		# forms to this same origin (RUNBOOK section F), and a response carrying two CSP
+		# headers is held to BOTH — 'none' here blocks them in the browser whatever the
+		# application sends, and the buttons silently do nothing.
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.drand.sh https://api2.drand.sh https://api3.drand.sh https://drand.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		Strict-Transport-Security "max-age=31536000"

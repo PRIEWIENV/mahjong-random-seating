@@ -260,6 +260,46 @@ test('the dashboard opens for an admin session and 404s for a player — with no
   await s.close();
 });
 
+test('the dashboard’s own endpoints are behind the same gate as the dashboard', async () => {
+  // A partial refresh carries exactly what the page carries and the log carries what
+  // this process prints, so serving them more cheaply must not serve them more widely.
+  const s = await boot({ adminPersonIds: [1001] });
+  try {
+    const player = await s.signIn(1003);
+    const admin = await s.signIn(1001);
+    for (const route of ['/admin/cards.json', '/admin/log.json']) {
+      assert.equal((await s.get(route)).status, 404, `${route} is open to anonymous`);
+      assert.equal((await s.get(route, player.cookie)).status, 404, `${route} is open to a player`);
+      assert.equal((await s.get(route, admin.cookie)).status, 200, `${route} is shut to an admin`);
+    }
+    // The script itself is static and carries nothing, so it is served like the
+    // stylesheet: no gate, because there is nothing behind it to gate.
+    const js = await s.get('/admin.js');
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get('content-type'), /javascript/);
+    assert.equal(js.headers.get('x-content-type-options'), 'nosniff');
+  } finally {
+    await s.close();
+  }
+});
+
+test('the dashboard’s CSP admits its own script and nothing inline', async () => {
+  const s = await boot({ adminPersonIds: [1001] });
+  try {
+    const admin = await s.signIn(1001);
+    const csp = (await s.get('/admin', admin.cookie)).headers.get('content-security-policy');
+    assert.match(csp, /script-src 'self'/);
+    assert.match(csp, /connect-src 'self'/);
+    // The two that would make a dashboard able to run somebody else's code.
+    assert.doesNotMatch(csp, /unsafe-inline/);
+    assert.doesNotMatch(csp, /unsafe-eval/);
+    // form-action does not fall back to default-src, and the page posts two forms.
+    assert.match(csp, /form-action 'self'/);
+  } finally {
+    await s.close();
+  }
+});
+
 test('the admin adapter reports where the sync credential came from, never the token', async () => {
   const s = await boot({ adminPersonIds: [1001] });
   const admin = await s.signIn(1001);

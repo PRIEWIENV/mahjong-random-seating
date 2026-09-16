@@ -58,18 +58,27 @@ The whole of this section is one rule: the standings and the beacon are publishe
 
 **This whole section is done from `/admin` in a venue, not from a terminal.** The twelfth round starts minutes after the eleventh, and nobody is at a server then. Only one step needs a person at all.
 
-**While those forms are on screen the dashboard stops reloading itself**, and says so at the
-foot of the page. It has no javascript by design, so its only refresh is a full navigation,
-and that would empty a half-typed substitute declaration. Nothing changes on its own in
-this state anyway — the round-robin is over and the next event is you pressing something.
-Press F5 if you want to be sure. The moment the round is locked it goes back to reloading,
-every five seconds, because then something *is* on its way.
+**The dashboard refreshes one card at a time**, each on its own cadence — five seconds for
+the ones that move, not at all for frozen digests that cannot. The card holding these two
+forms is the one that holds still while they are usable, because a refresh replaces a
+card's markup and would empty a half-typed substitute declaration; it starts again the
+moment the round is locked, which is when there is something to watch. Nothing changes on
+its own in this state anyway.
+
+**You can rearrange it.** Each card has ↑ ↓ to move it, ↔ to make it full width or half,
+and × to remove it; removed cards come back from the strip at the top, and the head of a
+card is a drag handle. The arrangement is remembered in that browser and nowhere else — it
+is a preference of one person at one screen, not a setting the event carries.
+
+**There is a log card.** It is this server's own output, the last 500 lines, including
+everything the draw and final-round jobs print. It is what tells "the beacon is late" from
+"the job is dead" without an ssh session. It lives in memory: a restart empties it.
 
 17. [ ] All eleven rounds played and entered in Pantheon. On **/admin** → 锁定决赛轮, press **预览（不写入）**. It fetches the standings and runs every check, and writes nothing. Read what it prints: twelve players, eleven games each, and the order confirmed against the key it was sorted on
 17a. [ ] If it says the standings are **empty**, the event hides its results while it is played. Tick 赛事隐藏成绩 and preview again — then read the warning it prints, because that mode also counts games that are *started but unfinished*. Make sure no table is still playing
 17b. [ ] If it refuses over a **tie across a table boundary**, settle it by the league's own rule, make Pantheon reflect that, then put the rank and the rule in 并列名次 / 并列裁决依据. The tool never breaks a tie itself
 18. [ ] Press **锁定并公布**. It writes `events/final/lock.json`, mirrors it, timestamps it, and reports **how much room it actually had**. The default gap is five minutes; the whole publish takes under ten seconds, so that is a wide margin and not a wait. **Announce the sha256 now**, with the drand round and the time it is due — after that round lands the digest proves nothing
-19. [ ] Nothing. The server draws it by itself when the beacon lands, on the same timer that ran the first draw. Watch `/admin` — it now reloads every five seconds — as 状态 goes 已锁定 → 已抽签. The players are watching the same thing on the result page, where a countdown to the beacon has appeared and the twelfth column of the seat plan is being held open
+19. [ ] Nothing. The server draws it by itself when the beacon lands, on the same timer that ran the first draw. Watch `/admin` — the final-round card refreshes every five seconds now that its forms are gone — as 状态 goes 已锁定 → 已抽签 and the twelve seats appear on it, which is the table to read out to the room. The players are watching the same thing on the result page, where a countdown to the beacon has appeared and the twelfth column of the seat plan is being held open
 20. [ ] 决赛轮同步 says ok. If not, paste **all twelve** blocks of `pantheon_prescript` in by hand with `next_session_index = 12` and `WIND_SHUFFLE_MODE_PRESCRIPTED` — never re-run the draw
 
 > If the server is not running, or you would rather do it from a terminal, every step above

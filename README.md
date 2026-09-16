@@ -190,7 +190,8 @@ server/
   finalise.js                # the draw job and the Pantheon sync — a separate process
   schedule.js                # the timer that runs finalise.js, so no cron or systemd is needed
   rounds.js                  # voided attempts: archive, verify, and open the next one
-  admin.js                   # the organiser's dashboard: status, and the two things F needs
+  admin.js  admin-client.js  # the organiser's dashboard, and its one script
+  logbuf.js                  # the last 500 lines this process printed, for that dashboard
   pantheon.js                # the Pantheon boundary: Twirp client + in-process stub
   config.js  runtime.js      # the frozen half and the operational half of the configuration
   ciphertext.js  drand.js  ots.js  tlock.js  db.js  events.js  mirror.js  stats.js

@@ -25,7 +25,6 @@
   --warn-soft: #faf1de;
   --bad: #9b2c2c;
   --bad-soft: #fbeaea;
-  --felt: #2f6f5c;
   --t1: #2f6f8f;
   --t2: #8a5a12;
   --t3: #6a4b8a;
@@ -55,7 +54,6 @@
     --warn-soft: #2c2416;
     --bad: #e07a7a;
     --bad-soft: #2e1c1c;
-    --felt: #2a5f50;
     --t1: #7fb6d4; --t2: #d8a75a; --t3: #b49ad4;
     --t1-soft: #1e2c34; --t2-soft: #2c2416; --t3-soft: #272033;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -230,7 +228,30 @@ header.site .who-name { overflow: hidden; text-overflow: ellipsis; white-space: 
    different mechanisms. What changes is the accent, because they commit to different
    things at different moments, and a player scrolling past should be able to tell which
    one they have already checked. */
+/* Everything about the final round is purple, and it is done ONCE, here, by moving the
+   accent rather than by restating a colour on each element.
+
+   These blocks are deliberately the roll card's markup class for class, and the roll
+   card is green throughout — its border, its digest, its copy button, its "synced ok"
+   note, its proof panel, the timeline's live round and its drawing state all read
+   var(--accent). So the twelfth round's cards came out green with a purple stripe down
+   the side, which is worse than either colour on its own: it says "this is the same
+   thing as the block above" in the one place where the whole point is that it is a
+   different draw, weeks later, on a different beacon.
+
+   Rebinding --accent inside these subtrees fixes every one of them at once, including
+   any element added later that follows the house style. --accent-soft moves with it or
+   the pairs come apart: a purple foreground on a green tint is not a colour scheme. */
+.final-card, .final-timeline, .final-verify, .card.next-up.final-accent {
+  --accent: var(--t3);
+  --accent-soft: var(--t3-soft);
+  --accent-deep: var(--t3);
+}
 .final-card { border-left-color: var(--t3); }
+/* The headline card carries the whole card's accent only when the headline IS the final
+   round — "you are at table two, seated East" for the twelfth round, in the twelfth
+   round's colour. Before that the card is about the eleven and stays green. */
+.card.next-up.final-accent { border-left: 3px solid var(--t3); }
 .final-beacon {
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
   margin: 14px 0 0;
@@ -284,12 +305,14 @@ table.grid th.final { color: var(--t3); font-weight: 700; }
 table.grid th.final:not(.fin-pending) { background: var(--t3-soft); border-radius: 6px 6px 0 0; }
 table.grid td.final:not(.fin-pending) { box-shadow: inset 0 0 0 1px var(--t3); }
 
-/* Pending: reserved, not filled. The rule goes dashed and the cells lose their colour
-   even when the table is known, because a cell that looked like the other eleven would
-   be claiming a seat that has not been drawn. */
+/* Pending: reserved, not filled — and with no rule down its side at all. A dashed
+   hairline beside a column of empty cells was more furniture than signal; the emptiness
+   already says "nothing here yet", and the drawn column keeps the solid rule for the
+   case where there IS something to divide off. The cells lose their colour even when the
+   table is known, because a cell that looked like the other eleven would be claiming a
+   seat that has not been drawn. */
 table.grid th.final.fin-pending::before, table.grid td.final.fin-pending::before {
-  border-left-style: dashed; border-left-color: var(--muted);
-  opacity: 0.55;
+  content: none;
 }
 table.grid th.final.fin-pending { color: var(--muted); font-weight: 600; }
 table.grid td.final.fin-pending {
@@ -553,30 +576,72 @@ table.grid td.dim { opacity: 0.22; }
 .stat-note { display: block; font-size: 0.78rem; color: var(--muted); margin-top: 3px; }
 
 .panel h4 { font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 18px 0 8px; }
+
+/* ---- the two per-player tables, and the width they must not take -------
+   These sit in .detail-rest, which spans the whole page from 1000px up, and both were
+   laid out to fill whatever they were given. The round list pushed its three opponents
+   to the far right with margin-left:auto, so on a wide monitor "R1 · table 2 · East" sat
+   alone at one edge and three names sat alone at the other with a hand's width of nothing
+   between them — the reader has to traverse it twelve times. The opponents table was
+   width:100% over six columns of one- and two-character numbers, so the numbers ended up
+   a finger apart and the eye loses the row it is on.
+
+   Both are now measured by their own content instead: a max-width in ch, which is the
+   width of the text and not the width of the window, and a grid whose columns are sized
+   to what goes in them. Nothing changes on a phone, where the constraint was never the
+   problem — the widths below are all ceilings. */
+.detail-rest .round-list, .detail-rest .table-scroll { max-width: 78ch; }
+
 ol.round-list { list-style: none; padding: 0; margin: 0; font-size: 0.85rem; }
-ol.round-list li { display: flex; gap: 8px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
-ol.round-list .r { color: var(--muted); font-family: var(--mono); width: 2.4em; }
-ol.round-list .tbl { border-radius: 5px; padding: 1px 7px; font-size: 0.78rem; }
+/* auto columns for the three fixed facts, then the opponents take the rest and wrap
+   within it. On a narrow screen the whole row wraps and the opponents drop below. */
+ol.round-list li {
+  display: grid; grid-template-columns: auto auto auto minmax(0, 1fr);
+  gap: 6px 10px; align-items: baseline;
+  padding: 6px 0; border-bottom: 1px solid var(--line-soft);
+}
+@media (max-width: 559px) {
+  ol.round-list li { grid-template-columns: auto auto auto; }
+  ol.round-list .others { grid-column: 1 / -1; }
+}
+ol.round-list .r { color: var(--muted); font-family: var(--mono); }
+ol.round-list .tbl { border-radius: 5px; padding: 1px 7px; font-size: 0.78rem; justify-self: start; }
 ol.round-list .tbl.t1 { background: var(--t1-soft); color: var(--t1); }
 ol.round-list .tbl.t2 { background: var(--t2-soft); color: var(--t2); }
 ol.round-list .tbl.t3 { background: var(--t3-soft); color: var(--t3); }
 ol.round-list .wind { font-weight: 600; }
-ol.round-list .others { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+ol.round-list .others { display: flex; gap: 6px 14px; flex-wrap: wrap; }
 ol.round-list .others i { font-style: normal; color: var(--muted); font-size: 0.9em; }
 
 /* Wide tables get their own scroller rather than pushing the page sideways. */
 .table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
 table.opponents { width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 340px; }
-table.opponents th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-table.opponents td { padding: 6px; border-bottom: 1px solid var(--line-soft); }
+table.opponents th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.opponents td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); }
+/* The name column absorbs the slack; the five columns after it are numbers and a short
+   verdict, and are given the width of their own content and no more. Centring the counts
+   under their headings is what makes a column of digits scannable as a column. */
+table.opponents th:first-child, table.opponents td:first-child { width: 100%; }
+table.opponents th:not(:first-child), table.opponents td:not(:first-child) { white-space: nowrap; }
+table.opponents th:nth-child(n+2):nth-child(-n+5),
+table.opponents td:nth-child(n+2):nth-child(-n+5) { text-align: center; font-variant-numeric: tabular-nums; }
+table.opponents tbody tr:hover { background: var(--bg); }
 table.opponents tr.imperfect { color: var(--warn); }
 
 /* ---- round lens: seats laid out where people actually sit ------------- */
 .tables { display: grid; gap: 16px; }
 /* Three tables side by side when the lens has the width for it. */
 @media (min-width: 620px) and (max-width: 999px) { .tables { grid-template-columns: repeat(3, 1fr); } }
+/* Each figure takes its own table's colour, the same way the grid cell and the legend
+   swatch do. The lens is reached by clicking a coloured column, so arriving at three
+   identically green tables loses the one thing the reader was holding on to — which of
+   the three they were looking at. Rebinding --accent inside the figure moves the wind
+   letters, the hover and the "you" seat with it, because all three already read it. */
 .table-fig { border: 1px solid var(--line); border-radius: var(--r); padding: 12px; background: var(--bg); }
-.table-label { font-size: 0.78rem; color: var(--muted); margin-bottom: 8px; }
+.table-fig.t1 { --accent: var(--t1); --accent-soft: var(--t1-soft); border-color: color-mix(in srgb, var(--t1) 35%, var(--line)); }
+.table-fig.t2 { --accent: var(--t2); --accent-soft: var(--t2-soft); border-color: color-mix(in srgb, var(--t2) 35%, var(--line)); }
+.table-fig.t3 { --accent: var(--t3); --accent-soft: var(--t3-soft); border-color: color-mix(in srgb, var(--t3) 35%, var(--line)); }
+.table-label { font-size: 0.78rem; color: var(--accent); font-weight: 600; margin-bottom: 8px; }
 .seats {
   position: relative; display: grid;
   grid-template-columns: 1fr auto 1fr; grid-template-rows: auto auto auto;
@@ -600,10 +665,16 @@ table.opponents tr.imperfect { color: var(--warn); }
 .seat-W { grid-area: 1 / 2; }
 .seat-N { grid-area: 2 / 1; }
 
+/* A mahjong table is square, and the four seats around it are already laid out on the
+   square grid this sits in the middle of. Drawing the top as a circle put a round table
+   inside a square arrangement of chairs, which is a picture of a room nobody plays in —
+   and it fought the grid, because the corners the circle gave away are exactly where the
+   four seats' boxes line up. Same radius as the seats around it, so the figure reads as
+   one object. */
 .table-top {
-  grid-area: 2 / 2; width: 62px; height: 62px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--felt) 82%, #fff), var(--felt));
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 3px 10px -4px rgba(0,0,0,.5);
+  grid-area: 2 / 2; width: 64px; height: 64px; border-radius: 10px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 78%, #fff 22%), var(--accent));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.16), 0 3px 10px -4px rgba(0,0,0,.45);
   display: grid; place-items: center;
 }
 /* The direction of play, drawn once rather than only described in the caption. */
@@ -833,11 +904,9 @@ table.opponents tr.imperfect { color: var(--warn); }
 /* There is no cutoff label above this track, so it supplies its own gap from the header
    -- .tl-track deliberately has no top margin because the caption normally provides it. */
 .final-timeline .tl-track { margin-top: 12px; }
-.final-timeline .tl-fill { background: var(--t3); }
-.final-timeline .tl-stop.draw { background: var(--t3); }
-.final-timeline .tl-dot { border-color: var(--t3); }
-.final-timeline .tl-round b.live { color: var(--t3); }
-.timeline-card.tl-locked .tl-left { color: var(--t3); font-weight: 600; }
+/* The fill, the stop, the dot, the live round and the drawing state all take var(--accent)
+   from the first draw's timeline, and --accent is purple in here. Nothing to restate. */
+.timeline-card.tl-locked .tl-left { color: var(--accent); font-weight: 600; }
 .timeline-card.tl-late .tl-head h2 { color: var(--warn); }
 .timeline-card.tl-late .tl-dot { border-color: var(--warn); animation: none; }
 .timeline-card.tl-late .tl-fill { background: var(--warn); }

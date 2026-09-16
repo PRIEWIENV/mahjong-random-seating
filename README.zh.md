@@ -150,7 +150,8 @@ server/
   finalise.js                # 开奖任务和 Pantheon 同步 —— 一个单独的进程
   schedule.js                # 运行 finalise.js 的定时器，于是不需要 cron 或 systemd
   rounds.js                  # 作废的尝试：归档、验证、开启下一次
-  admin.js                   # 组织者的面板：状态，以及 F 节需要的那两个操作
+  admin.js  admin-client.js  # 组织者的面板，以及它唯一那个脚本
+  logbuf.js                  # 这个进程最近打印的 500 行，给那个面板看的
   pantheon.js                # Pantheon 边界：Twirp 客户端 + 进程内替身
   config.js  runtime.js      # 配置的冻结一半与运营一半
   ciphertext.js  drand.js  ots.js  tlock.js  db.js  events.js  mirror.js  stats.js

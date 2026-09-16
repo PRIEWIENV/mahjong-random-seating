@@ -516,20 +516,74 @@ test('the dashboard reloads quickly while something is actually in flight', () =
 });
 
 test('the page stops reloading while a form is on screen, and says so', () => {
-  // There is no javascript on /admin -- the CSP has no script-src at all -- so the only
-  // refresh available is a meta tag, and that is a full navigation: it empties whatever
-  // is half-typed into the substitute form on its way past. The states where a form is
-  // usable are exactly the states where nothing changes on its own, so not reloading
-  // there costs nothing and saves the operator's work.
+  // The whole-page reload is now only the no-javascript fallback, but the rule it
+  // encodes is unchanged: a full navigation empties whatever is half-typed into the
+  // substitute form on its way past. The states where a form is usable are exactly the
+  // states where nothing changes on its own, so not reloading there costs nothing.
   const { html } = pageWith();  // done + none + csrf: both forms live
   assert.equal(refreshOf(html), null);
   assert.match(html, /<form /);
-  assert.match(html, /本页暂不自动刷新/, 'an operator must be told the stillness is deliberate');
+  assert.match(html, /那张卡片会停住不刷新/, 'an operator must be told the stillness is deliberate');
 
   // No token, no forms, so the reason is gone and the refresh comes back.
   const noForms = pageWith({ csrf: null }).html;
   assert.doesNotMatch(noForms, /<form /);
   assert.equal(refreshOf(noForms), 10);
+});
+
+test('the whole-page reload is the no-javascript fallback, not the mechanism', () => {
+  // With the script running, a page-wide reload would throw away the layout the operator
+  // arranged and the log they had scrolled back through, so the meta tag is inside
+  // <noscript> and each card refreshes itself instead.
+  const { html } = pageWith({
+    status: { phase: 'open', submitted_count: 3, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'none' } },
+  });
+  assert.match(html, /<noscript><meta http-equiv="refresh" content="10"><\/noscript>/);
+  assert.match(html, /<script src="\/admin.js" defer><\/script>/);
+});
+
+test('every card is addressable, and carries its own cadence', () => {
+  // One interval for the whole page could never be right: too slow for the minute the
+  // beacon lands in, too fast for a page with a form on it.
+  const { html } = pageWith({
+    status: { phase: 'open', submitted_count: 3, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'none' } },
+  });
+  for (const id of ['submissions', 'draw', 'roster', 'checks', 'artefacts', 'log']) {
+    assert.match(html, new RegExp(`data-card="${id}"`), `${id} is not on the page`);
+  }
+  // Fast where things move, absent where they cannot.
+  assert.match(html, /data-card="submissions" data-every="5"/);
+  assert.match(html, /data-card="artefacts"(?! data-every)/, 'frozen digests cannot change while the process is up');
+  assert.match(html, /data-card="log"(?! data-every)/, 'the log appends rather than re-rendering');
+});
+
+test('a partial refresh serves exactly what the page serves, and only what was asked', async () => {
+  const { model } = pageWith();
+  const { renderCardBodies, cardRegistry } = require('../server/admin');
+  const only = renderCardBodies(model, ['draw']);
+  assert.deepEqual(Object.keys(only), ['draw']);
+  assert.match(only.draw, /target_round/);
+  // And the registry is the one list: what the page renders, what a refresh can return,
+  // and what the palette offers are the same set by construction.
+  const ids = cardRegistry(model).map((c) => c.id);
+  assert.ok(ids.includes('final'), 'the final round card is registered when it is enabled');
+  assert.deepEqual([...new Set(ids)], ids, 'a duplicate id would make two cards one target');
+});
+
+test('the card with the live forms is the one card that never refreshes itself', () => {
+  // A partial refresh replaces the card's markup. The forms live in the final-round
+  // card, so that card holds still while they are usable and resumes the moment the
+  // round is locked, which is when there is something to watch.
+  const live = pageWith().html;
+  assert.match(live, /data-card="final"(?! data-every)/);
+
+  const locked = pageWith({
+    status: { phase: 'done', submitted_count: 12, drand: { healthy: true, latest_round: 1 },
+              final: { state: 'locked', lock_sha256: 'a'.repeat(64), target_round: 7, anchored: true } },
+  }).html;
+  assert.match(locked, /data-card="final" data-every="5"/);
 });
 
 test('the two actions are offered only once the round-robin is actually over', () => {
